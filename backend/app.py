@@ -4,9 +4,15 @@ import database_init as database
 import re
 import os
 from mcp.merchant_normalizer import detect_account_pattern
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend communication
+
+# Get frontend URL from environment, default to localhost:5173
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 
 
 @app.route('/api/health')
@@ -1278,7 +1284,7 @@ def truelayer_callback():
         state = request.args.get('state')
 
         if not code or not state:
-            return redirect('http://localhost:5174/auth/callback?error=Missing+code+or+state')
+            return redirect(f'{FRONTEND_URL}/auth/callback?error=Missing+code+or+state')
 
         # Try to get code_verifier from query params (frontend sessionStorage)
         code_verifier = request.args.get('code_verifier')
@@ -1287,14 +1293,14 @@ def truelayer_callback():
         if not code_verifier:
             oauth_state = database.get_oauth_state(state)
             if not oauth_state:
-                return redirect('http://localhost:5174/auth/callback?error=Invalid+state+parameter')
+                return redirect(f'{FRONTEND_URL}/auth/callback?error=Invalid+state+parameter')
             code_verifier = oauth_state.get('code_verifier')
             user_id = int(oauth_state.get('user_id'))
         else:
             user_id = int(request.args.get('user_id', 1))
 
         if not code_verifier:
-            return redirect('http://localhost:5174/auth/callback?error=Missing+code_verifier')
+            return redirect(f'{FRONTEND_URL}/auth/callback?error=Missing+code_verifier')
 
         print(f"🔐 TrueLayer OAuth Callback:")
         print(f"   User ID: {user_id}")
@@ -1323,7 +1329,7 @@ def truelayer_callback():
         database.delete_oauth_state(state)
 
         # Redirect to frontend success page with connection info
-        return redirect(f'http://localhost:5174/auth/callback?status=authorized&connection_id={connection_info.get("connection_id")}')
+        return redirect(f'{FRONTEND_URL}/auth/callback?status=authorized&connection_id={connection_info.get("connection_id")}')
 
     except Exception as e:
         print(f"❌ OAuth callback error: {e}")
@@ -1331,7 +1337,7 @@ def truelayer_callback():
         traceback.print_exc()
         # Sanitize error message for URL (remove newlines and special chars)
         error_msg = str(e).split('\n')[0].replace(' ', '+').replace('\n', '')
-        return redirect(f'http://localhost:5174/auth/callback?error={error_msg}')
+        return redirect(f'{FRONTEND_URL}/auth/callback?error={error_msg}')
 
 
 @app.route('/api/truelayer/accounts', methods=['GET'])
