@@ -1329,7 +1329,8 @@ def truelayer_callback():
         print(f"❌ OAuth callback error: {e}")
         import traceback
         traceback.print_exc()
-        error_msg = str(e).replace(' ', '+')
+        # Sanitize error message for URL (remove newlines and special chars)
+        error_msg = str(e).split('\n')[0].replace(' ', '+').replace('\n', '')
         return redirect(f'http://localhost:5174/auth/callback?error={error_msg}')
 
 
