@@ -14,8 +14,8 @@ from contextlib import contextmanager
 import os
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (override=True to prefer .env file over shell env)
+load_dotenv(override=True)
 
 # Database connection configuration
 DB_CONFIG = {

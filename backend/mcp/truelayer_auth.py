@@ -10,12 +10,13 @@ import secrets
 import base64
 import requests
 from datetime import datetime, timedelta
+from pathlib import Path
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 import database_init as database
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (override=True to prefer .env file over shell env)
+load_dotenv(override=True)
 
 # TrueLayer Configuration
 TRUELAYER_CLIENT_ID = os.getenv('TRUELAYER_CLIENT_ID')

@@ -9,10 +9,11 @@ import os
 import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (override=True to prefer .env file over shell env)
+load_dotenv(override=True)
 
 TRUELAYER_ENV = os.getenv('TRUELAYER_ENVIRONMENT', 'sandbox')
 
