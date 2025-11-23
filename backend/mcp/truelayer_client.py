@@ -72,7 +72,7 @@ class TrueLayerClient:
 
     def get_me(self) -> Dict:
         """Get authenticated user information."""
-        return self._make_request('GET', '/data/v1/me')
+        return self._make_request('GET', '/data/v3/me')
 
     def get_accounts(self) -> List[Dict]:
         """
@@ -81,7 +81,7 @@ class TrueLayerClient:
         Returns:
             List of account dictionaries
         """
-        response = self._make_request('GET', '/data/v1/accounts')
+        response = self._make_request('GET', '/data/v3/accounts')
         return response.get('results', [])
 
     def get_account(self, account_id: str) -> Dict:
@@ -94,7 +94,7 @@ class TrueLayerClient:
         Returns:
             Account details dictionary
         """
-        return self._make_request('GET', f'/data/v1/accounts/{account_id}')
+        return self._make_request('GET', f'/data/v3/accounts/{account_id}')
 
     def get_account_balance(self, account_id: str) -> Dict:
         """
@@ -106,7 +106,7 @@ class TrueLayerClient:
         Returns:
             Balance information
         """
-        response = self._make_request('GET', f'/data/v1/accounts/{account_id}/balance')
+        response = self._make_request('GET', f'/data/v3/accounts/{account_id}/balance')
         results = response.get('results', [])
         return results[0] if results else {}
 
@@ -138,7 +138,7 @@ class TrueLayerClient:
 
         response = self._make_request(
             'GET',
-            f'/data/v1/accounts/{account_id}/transactions',
+            f'/data/v3/accounts/{account_id}/transactions',
             params=params
         )
         return response.get('results', [])
@@ -155,7 +155,7 @@ class TrueLayerClient:
         """
         response = self._make_request(
             'GET',
-            f'/data/v1/accounts/{account_id}/pending_transactions'
+            f'/data/v3/accounts/{account_id}/pending_transactions'
         )
         return response.get('results', [])
 
