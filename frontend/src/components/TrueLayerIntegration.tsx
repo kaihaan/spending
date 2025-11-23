@@ -9,7 +9,6 @@ interface TrueLayerAccount {
   display_name: string;
   account_type: string;
   currency: string;
-  last_synced_at?: string | null;
 }
 
 interface TrueLayerConnection {
@@ -246,22 +245,17 @@ export default function TrueLayerIntegration() {
                       {connection.accounts.map((account) => (
                         <div
                           key={account.id}
-                          className="text-sm p-2 bg-base-200 rounded"
+                          className="flex justify-between items-center text-sm p-2 bg-base-200 rounded"
                         >
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <span className="font-medium">{account.display_name}</span>
-                              <span className="text-base-content/60 ml-2">
-                                ({account.account_type})
-                              </span>
-                            </div>
-                            <span className="text-base-content/70 font-mono">
-                              {account.currency}
+                          <div>
+                            <span className="font-medium">{account.display_name}</span>
+                            <span className="text-base-content/60 ml-2">
+                              ({account.account_type})
                             </span>
                           </div>
-                          <div className="text-xs text-base-content/60 mt-1">
-                            Last synced: {formatDate(account.last_synced_at)}
-                          </div>
+                          <span className="text-base-content/70 font-mono">
+                            {account.currency}
+                          </span>
                         </div>
                       ))}
                     </div>

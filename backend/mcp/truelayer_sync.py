@@ -100,7 +100,12 @@ def sync_account_transactions(
             print(f"⚠️  No transactions found for account {truelayer_account_id}")
 
         # Update account-level sync timestamp (independent of connection status)
-        database.update_account_last_synced(db_account_id, datetime.utcnow().isoformat())
+        # This function will be available after database migration
+        try:
+            database.update_account_last_synced(db_account_id, datetime.utcnow().isoformat())
+        except AttributeError:
+            # Function not available yet - database migration hasn't been applied
+            pass
 
         # Also update connection-level timestamp to track overall sync status
         database.update_connection_last_synced(connection_id, datetime.utcnow().isoformat())

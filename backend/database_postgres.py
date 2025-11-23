@@ -1021,7 +1021,7 @@ def get_connection_accounts(connection_id):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute('''
                 SELECT id, connection_id, account_id, display_name, account_type,
-                       currency, last_synced_at, created_at
+                       currency, created_at
                 FROM truelayer_accounts
                 WHERE connection_id = %s
                 ORDER BY display_name
