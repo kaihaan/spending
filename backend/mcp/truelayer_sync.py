@@ -12,7 +12,8 @@ from datetime import datetime
 
 def sync_account_transactions(
     connection_id: int,
-    account_id: str,
+    truelayer_account_id: str,
+    db_account_id: int,
     access_token: str,
     days_back: int = 90,
     use_incremental: bool = True
@@ -22,7 +23,8 @@ def sync_account_transactions(
 
     Args:
         connection_id: Database connection ID
-        account_id: TrueLayer account ID
+        truelayer_account_id: TrueLayer account ID (string)
+        db_account_id: Database account ID (foreign key to truelayer_accounts.id)
         access_token: Valid OAuth access token
         days_back: Number of days to fetch (fallback if no last_synced_at)
         use_incremental: Use incremental sync based on last_synced_at
@@ -31,7 +33,7 @@ def sync_account_transactions(
         Dictionary with sync results
     """
     try:
-        print(f"🔄 Syncing account {account_id}...")
+        print(f"🔄 Syncing account {truelayer_account_id}...")
 
         client = TrueLayerClient(access_token)
 
@@ -51,12 +53,12 @@ def sync_account_transactions(
                 print(f"   📅 No previous sync found, fetching full {days_back} days")
 
         # Fetch transactions from TrueLayer
-        transactions = client.fetch_all_transactions(account_id, sync_days)
+        transactions = client.fetch_all_transactions(truelayer_account_id, sync_days)
 
         if not transactions:
-            print(f"⚠️  No transactions found for account {account_id}")
+            print(f"⚠️  No transactions found for account {truelayer_account_id}")
             return {
-                'account_id': account_id,
+                'account_id': truelayer_account_id,
                 'synced': 0,
                 'duplicates': 0,
                 'errors': 0,
@@ -80,7 +82,7 @@ def sync_account_transactions(
 
                 # Insert new transaction
                 txn_id = database.insert_truelayer_transaction(
-                    account_id=account_id,
+                    account_id=db_account_id,
                     transaction_id=txn.get('transaction_id'),
                     normalised_provider_id=txn.get('normalised_provider_id'),
                     timestamp=txn.get('date'),
@@ -107,7 +109,7 @@ def sync_account_transactions(
         database.update_connection_last_synced(connection_id, datetime.utcnow().isoformat())
 
         result = {
-            'account_id': account_id,
+            'account_id': truelayer_account_id,
             'synced': synced_count,
             'duplicates': duplicate_count,
             'errors': error_count,
@@ -118,9 +120,11 @@ def sync_account_transactions(
         return result
 
     except Exception as e:
-        print(f"❌ Sync failed for account {account_id}: {e}")
+        print(f"❌ Sync failed for account {truelayer_account_id}: {e}")
+        import traceback
+        traceback.print_exc()
         return {
-            'account_id': account_id,
+            'account_id': truelayer_account_id,
             'synced': 0,
             'duplicates': 0,
             'errors': 1,
@@ -162,12 +166,14 @@ def sync_all_accounts(user_id: int) -> dict:
         accounts = database.get_connection_accounts(connection_id)
 
         for account in accounts:
-            account_id = account.get('account_id')
+            truelayer_account_id = account.get('account_id')
+            db_account_id = account.get('id')  # Database ID
             access_token = decrypt_token(connection.get('access_token'))
 
             result = sync_account_transactions(
                 connection_id=connection_id,
-                account_id=account_id,
+                truelayer_account_id=truelayer_account_id,
+                db_account_id=db_account_id,
                 access_token=access_token,
             )
             account_results.append(result)
@@ -216,15 +222,28 @@ def handle_webhook_event(event_payload: dict) -> dict:
         if event_type == 'transactions_available':
             # Trigger sync for affected account
             connection_id = event_payload.get('connection_id')
-            account_id = event_payload.get('account_id')
+            truelayer_account_id = event_payload.get('account_id')
 
             # Fetch and sync transactions
             connection = database.get_connection(connection_id)
             access_token = decrypt_token(connection.get('access_token'))
 
+            # Look up database account ID
+            account = database.get_account_by_truelayer_id(truelayer_account_id)
+            if not account:
+                print(f"❌ Account not found: {truelayer_account_id}")
+                return {
+                    'event_id': event_id,
+                    'status': 'failed',
+                    'error': 'Account not found'
+                }
+
+            db_account_id = account.get('id')
+
             result = sync_account_transactions(
                 connection_id=connection_id,
-                account_id=account_id,
+                truelayer_account_id=truelayer_account_id,
+                db_account_id=db_account_id,
                 access_token=access_token,
             )
 

@@ -1029,6 +1029,19 @@ def get_connection_accounts(connection_id):
             return cursor.fetchall()
 
 
+def get_account_by_truelayer_id(truelayer_account_id):
+    """Get account from database by TrueLayer account ID."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, connection_id, account_id, display_name, account_type,
+                       currency, created_at
+                FROM truelayer_accounts
+                WHERE account_id = %s
+            ''', (truelayer_account_id,))
+            return cursor.fetchone()
+
+
 def save_bank_connection(user_id, provider_id, access_token, refresh_token, expires_at):
     """Save a new TrueLayer bank connection."""
     with get_db() as conn:
