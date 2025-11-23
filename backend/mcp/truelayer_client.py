@@ -81,12 +81,6 @@ class TrueLayerClient:
         Returns:
             List of account dictionaries
         """
-        # Check if mock mode is enabled
-        if os.getenv('TRUELAYER_MOCK_MODE') == 'true':
-            from .truelayer_mock import mock_get_accounts
-            print("🧪 Using mock TrueLayer accounts")
-            return mock_get_accounts(self.access_token)
-
         response = self._make_request('GET', '/data/v1/accounts')
         return response.get('results', [])
 
@@ -215,15 +209,6 @@ class TrueLayerClient:
         Returns:
             List of normalized transactions
         """
-        # Check if mock mode is enabled
-        if os.getenv('TRUELAYER_MOCK_MODE') == 'true':
-            from .truelayer_mock import mock_get_transactions
-            print("🧪 Using mock TrueLayer transactions")
-            raw_transactions = mock_get_transactions(account_id, days_back)
-            normalized = [self.normalize_transaction(txn) for txn in raw_transactions]
-            print(f"✅ Fetched {len(normalized)} mock transactions for account {account_id}")
-            return normalized
-
         from_date = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y-%m-%d')
         to_date = datetime.utcnow().strftime('%Y-%m-%d')
 

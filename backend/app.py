@@ -1251,10 +1251,17 @@ def truelayer_authorize():
 
         auth_data = get_authorization_url(user_id)
 
+        # Store PKCE values in database temporarily for callback verification
+        database.store_oauth_state(
+            user_id=user_id,
+            state=auth_data['state'],
+            code_verifier=auth_data['code_verifier']
+        )
+
         return jsonify({
             'auth_url': auth_data['auth_url'],
             'state': auth_data['state'],
-            'code_verifier': auth_data['code_verifier']
+            'code_verifier': auth_data['code_verifier']  # Still return to frontend for sessionStorage
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1264,64 +1271,154 @@ def truelayer_authorize():
 def truelayer_callback():
     """Handle TrueLayer OAuth callback."""
     try:
-        from mcp.truelayer_auth import exchange_code_for_token, save_bank_connection, validate_authorization_state
+        from mcp.truelayer_auth import exchange_code_for_token, save_bank_connection, discover_and_save_accounts
+        from flask import redirect
 
         code = request.args.get('code')
         state = request.args.get('state')
-        code_verifier = request.args.get('code_verifier')  # Passed from frontend
-        user_id = request.args.get('user_id', 1)
 
-        if not code or not state or not code_verifier:
-            return jsonify({'error': 'Missing required parameters'}), 400
+        if not code or not state:
+            return redirect('http://localhost:5174/auth/callback?error=Missing+code+or+state')
 
-        # TODO: Validate state against stored value
-        # if not validate_authorization_state(state, stored_state):
-        #     return jsonify({'error': 'Invalid state parameter'}), 400
+        # Try to get code_verifier from query params (frontend sessionStorage)
+        code_verifier = request.args.get('code_verifier')
+
+        # If not in query params, retrieve from database
+        if not code_verifier:
+            oauth_state = database.get_oauth_state(state)
+            if not oauth_state:
+                return redirect('http://localhost:5174/auth/callback?error=Invalid+state+parameter')
+            code_verifier = oauth_state.get('code_verifier')
+            user_id = int(oauth_state.get('user_id'))
+        else:
+            user_id = int(request.args.get('user_id', 1))
+
+        if not code_verifier:
+            return redirect('http://localhost:5174/auth/callback?error=Missing+code_verifier')
+
+        print(f"🔐 TrueLayer OAuth Callback:")
+        print(f"   User ID: {user_id}")
+        print(f"   State: {state[:20]}...")
+        print(f"   Code: {code[:20]}...")
 
         # Exchange code for token
         token_data = exchange_code_for_token(code, code_verifier)
+        print(f"   ✅ Token exchanged: {token_data.get('access_token', 'N/A')[:20]}...")
 
         # Save connection to database
         connection_info = save_bank_connection(user_id, token_data)
+        print(f"   ✅ Connection saved: ID={connection_info.get('connection_id')}")
 
-        # Redirect to frontend success page
-        return jsonify({
-            'status': 'authorized',
-            'connection_id': connection_info.get('connection_id'),
-            'message': 'Successfully connected to TrueLayer'
-        })
+        # Discover and save accounts from TrueLayer
+        try:
+            account_discovery = discover_and_save_accounts(
+                connection_info['connection_id'],
+                token_data['access_token']
+            )
+            print(f"   ✅ Accounts discovered: {account_discovery['accounts_discovered']} found, {account_discovery['accounts_saved']} saved")
+        except Exception as acc_error:
+            print(f"   ⚠️  Account discovery failed (non-fatal): {acc_error}")
+
+        # Clean up stored OAuth state
+        database.delete_oauth_state(state)
+
+        # Redirect to frontend success page with connection info
+        return redirect(f'http://localhost:5174/auth/callback?status=authorized&connection_id={connection_info.get("connection_id")}')
 
     except Exception as e:
-        return jsonify({'error': f'Authorization failed: {str(e)}'}), 500
+        print(f"❌ OAuth callback error: {e}")
+        import traceback
+        traceback.print_exc()
+        error_msg = str(e).replace(' ', '+')
+        return redirect(f'http://localhost:5174/auth/callback?error={error_msg}')
 
 
 @app.route('/api/truelayer/accounts', methods=['GET'])
 def get_truelayer_accounts():
     """Get list of connected TrueLayer accounts."""
     try:
-        user_id = request.args.get('user_id', 1)
+        user_id = int(request.args.get('user_id', 1))
 
         # Get all connections for user
+        import sys
         connections = database.get_user_connections(user_id)
+        sys.stderr.write(f"📊 TrueLayer accounts query for user {user_id}: {len(connections) if connections else 0} connections\n")
+        sys.stderr.flush()
 
-        accounts = []
+        # Format connections with their accounts
+        formatted_connections = []
         for connection in connections:
             connection_id = connection.get('id')
+            sys.stderr.write(f"   Connection ID: {connection_id}, Status: {connection.get('connection_status')}\n")
+            sys.stderr.flush()
             conn_accounts = database.get_connection_accounts(connection_id)
+            sys.stderr.write(f"   Found {len(conn_accounts) if conn_accounts else 0} accounts\n")
+            sys.stderr.flush()
 
+            accounts = []
             for account in conn_accounts:
                 accounts.append({
+                    'id': account.get('id'),
                     'account_id': account.get('account_id'),
                     'display_name': account.get('display_name'),
                     'account_type': account.get('account_type'),
                     'currency': account.get('currency'),
-                    'connection_id': connection_id,
-                    'connection_status': connection.get('connection_status'),
                 })
 
-        return jsonify({'accounts': accounts})
+            formatted_connections.append({
+                'id': connection_id,
+                'provider_id': connection.get('provider_id'),
+                'connection_status': connection.get('connection_status'),
+                'last_synced_at': connection.get('last_synced_at'),
+                'accounts': accounts,
+            })
+
+        return jsonify({'connections': formatted_connections})
 
     except Exception as e:
+        print(f"❌ Error in get_truelayer_accounts: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/discover-accounts', methods=['POST'])
+def discover_truelayer_accounts():
+    """Discover and sync accounts for a specific connection."""
+    try:
+        from mcp.truelayer_auth import discover_and_save_accounts
+        from mcp.truelayer_auth import decrypt_token
+
+        data = request.json
+        connection_id = data.get('connection_id')
+
+        if not connection_id:
+            return jsonify({'error': 'connection_id required'}), 400
+
+        # Get connection from database
+        connection = database.get_connection(connection_id)
+        if not connection:
+            return jsonify({'error': 'Connection not found'}), 404
+
+        # Decrypt access token
+        access_token = decrypt_token(connection.get('access_token'))
+
+        # Discover and save accounts
+        result = discover_and_save_accounts(connection_id, access_token)
+
+        print(f"✅ Account discovery complete: {result['accounts_discovered']} discovered, {result['accounts_saved']} saved")
+
+        return jsonify({
+            'status': 'success',
+            'accounts_discovered': result['accounts_discovered'],
+            'accounts_saved': result['accounts_saved'],
+            'accounts': result['accounts']
+        })
+
+    except Exception as e:
+        print(f"❌ Error in discover_truelayer_accounts: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 

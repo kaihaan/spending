@@ -1,8 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import axios from 'axios';
-
-const API_URL = 'http://localhost:5000/api';
 
 export default function TrueLayerCallbackHandler() {
   const [searchParams] = useSearchParams();
@@ -13,53 +10,24 @@ export default function TrueLayerCallbackHandler() {
   useEffect(() => {
     const handleCallback = async () => {
       try {
-        const code = searchParams.get('code');
-        const state = searchParams.get('state');
+        // Backend has already processed the OAuth callback and redirected here with results
+        const statusParam = searchParams.get('status');
         const error = searchParams.get('error');
-        const error_description = searchParams.get('error_description');
+        const connectionId = searchParams.get('connection_id');
 
         if (error) {
           setStatus('error');
-          setMessage(`Authorization failed: ${error_description || error}`);
+          setMessage(`Authorization failed: ${error}`);
           return;
         }
 
-        if (!code || !state) {
-          setStatus('error');
-          setMessage('Invalid callback parameters');
-          return;
-        }
-
-        // Retrieve stored state and code_verifier from sessionStorage
-        const storedState = sessionStorage.getItem('truelayer_state');
-        const codeVerifier = sessionStorage.getItem('truelayer_code_verifier');
-
-        if (state !== storedState) {
-          setStatus('error');
-          setMessage('State mismatch - authorization failed');
-          sessionStorage.removeItem('truelayer_state');
-          sessionStorage.removeItem('truelayer_code_verifier');
-          return;
-        }
-
-        if (!codeVerifier) {
-          setStatus('error');
-          setMessage('Missing code verifier - authorization failed');
-          return;
-        }
-
-        // Exchange code for token
-        const response = await axios.get(`${API_URL}/truelayer/callback`, {
-          params: { code, state, code_verifier: codeVerifier }
-        });
-
-        // Clear stored values
-        sessionStorage.removeItem('truelayer_state');
-        sessionStorage.removeItem('truelayer_code_verifier');
-
-        if (response.data.status === 'authorized') {
+        if (statusParam === 'authorized' && connectionId) {
           setStatus('success');
           setMessage('Bank account connected successfully! Redirecting...');
+
+          // Clear stored sessionStorage values
+          sessionStorage.removeItem('truelayer_state');
+          sessionStorage.removeItem('truelayer_code_verifier');
 
           // Redirect to settings after 2 seconds
           setTimeout(() => {
@@ -73,7 +41,7 @@ export default function TrueLayerCallbackHandler() {
       } catch (err: any) {
         setStatus('error');
         setMessage(
-          err.response?.data?.error ||
+          err.message ||
           'An error occurred during authorization'
         );
         console.error('OAuth callback error:', err);

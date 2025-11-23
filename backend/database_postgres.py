@@ -41,9 +41,34 @@ def init_pool():
         )
         if connection_pool:
             print("✓ PostgreSQL connection pool created successfully")
+            # Create oauth_state table if it doesn't exist
+            _create_oauth_state_table()
     except (Exception, psycopg2.Error) as error:
         print(f"✗ Error creating connection pool: {error}")
         raise
+
+
+def _create_oauth_state_table():
+    """Create oauth_state table if it doesn't exist."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS oauth_state (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        state VARCHAR(255) UNIQUE NOT NULL,
+                        code_verifier TEXT NOT NULL,
+                        expires_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                ''')
+                # Create index for faster state lookups
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_oauth_state_state ON oauth_state(state)')
+                conn.commit()
+    except Exception as e:
+        print(f"⚠️  Warning: Could not create oauth_state table: {e}")
 
 
 @contextmanager
@@ -970,7 +995,7 @@ def get_user_connections(user_id):
             cursor.execute('''
                 SELECT id, user_id, provider_id, access_token, refresh_token,
                        token_expires_at, connection_status, last_synced_at, created_at
-                FROM truelayer_connections
+                FROM bank_connections
                 WHERE user_id = %s AND connection_status = 'active'
                 ORDER BY created_at DESC
             ''', (user_id,))
@@ -984,7 +1009,7 @@ def get_connection(connection_id):
             cursor.execute('''
                 SELECT id, user_id, provider_id, access_token, refresh_token,
                        token_expires_at, connection_status, last_synced_at, created_at
-                FROM truelayer_connections
+                FROM bank_connections
                 WHERE id = %s
             ''', (connection_id,))
             return cursor.fetchone()
@@ -996,7 +1021,7 @@ def get_connection_accounts(connection_id):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute('''
                 SELECT id, connection_id, account_id, display_name, account_type,
-                       account_subtype, currency, created_at
+                       currency, created_at
                 FROM truelayer_accounts
                 WHERE connection_id = %s
                 ORDER BY display_name
@@ -1009,11 +1034,11 @@ def save_bank_connection(user_id, provider_id, access_token, refresh_token, expi
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute('''
-                INSERT INTO truelayer_connections
-                (user_id, provider_id, access_token, refresh_token, token_expires_at, connection_status)
-                VALUES (%s, %s, %s, %s, %s, 'active')
+                INSERT INTO bank_connections
+                (user_id, provider_id, provider_name, access_token, refresh_token, token_expires_at, connection_status)
+                VALUES (%s, %s, %s, %s, %s, %s, 'active')
                 RETURNING id
-            ''', (user_id, provider_id, access_token, refresh_token, expires_at))
+            ''', (user_id, provider_id, 'TrueLayer', access_token, refresh_token, expires_at))
             connection_id = cursor.fetchone()[0]
             conn.commit()
             return connection_id
@@ -1024,7 +1049,7 @@ def update_connection_status(connection_id, status):
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute('''
-                UPDATE truelayer_connections
+                UPDATE bank_connections
                 SET connection_status = %s
                 WHERE id = %s
             ''', (status, connection_id))
@@ -1037,7 +1062,7 @@ def update_connection_last_synced(connection_id, timestamp):
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute('''
-                UPDATE truelayer_connections
+                UPDATE bank_connections
                 SET last_synced_at = %s
                 WHERE id = %s
             ''', (timestamp, connection_id))
@@ -1050,7 +1075,7 @@ def update_connection_tokens(connection_id, access_token, refresh_token, expires
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute('''
-                UPDATE truelayer_connections
+                UPDATE bank_connections
                 SET access_token = %s, refresh_token = %s, token_expires_at = %s
                 WHERE id = %s
             ''', (access_token, refresh_token, expires_at, connection_id))
@@ -1058,18 +1083,18 @@ def update_connection_tokens(connection_id, access_token, refresh_token, expires
             return cursor.rowcount > 0
 
 
-def save_connection_account(connection_id, account_id, display_name, account_type, account_subtype, currency):
+def save_connection_account(connection_id, account_id, display_name, account_type, account_subtype=None, currency=None):
     """Save an account linked to a TrueLayer bank connection."""
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute('''
                 INSERT INTO truelayer_accounts
-                (connection_id, account_id, display_name, account_type, account_subtype, currency)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (connection_id, account_id) DO UPDATE
-                SET display_name = EXCLUDED.display_name
+                (connection_id, account_id, display_name, account_type, currency)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (account_id) DO UPDATE
+                SET display_name = EXCLUDED.display_name, account_type = EXCLUDED.account_type
                 RETURNING id
-            ''', (connection_id, account_id, display_name, account_type, account_subtype, currency))
+            ''', (connection_id, account_id, display_name, account_type, currency))
             account_db_id = cursor.fetchone()[0]
             conn.commit()
             return account_db_id
@@ -1225,6 +1250,40 @@ def get_latest_balance_snapshots(account_id=None, limit=10):
                     LIMIT %s
                 ''', (limit,))
             return cursor.fetchall()
+
+
+def store_oauth_state(user_id, state, code_verifier):
+    """Store OAuth state and code_verifier temporarily for callback verification."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO oauth_state (user_id, state, code_verifier, expires_at)
+                VALUES (%s, %s, %s, NOW() + INTERVAL '10 minutes')
+                ON CONFLICT (state) DO UPDATE SET
+                  code_verifier = EXCLUDED.code_verifier,
+                  expires_at = EXCLUDED.expires_at
+            ''', (user_id, state, code_verifier))
+            conn.commit()
+
+
+def get_oauth_state(state):
+    """Retrieve stored OAuth state and code_verifier."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT user_id, state, code_verifier
+                FROM oauth_state
+                WHERE state = %s AND expires_at > NOW()
+            ''', (state,))
+            return cursor.fetchone()
+
+
+def delete_oauth_state(state):
+    """Delete OAuth state after use."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('DELETE FROM oauth_state WHERE state = %s', (state,))
+            conn.commit()
 
 
 # Initialize connection pool on import

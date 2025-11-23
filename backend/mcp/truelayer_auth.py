@@ -26,12 +26,13 @@ TRUELAYER_ENV = os.getenv('TRUELAYER_ENVIRONMENT', 'sandbox')
 
 # API URLs
 if TRUELAYER_ENV == 'production':
-    TRUELAYER_AUTH_URL = 'https://auth.truelayer.com/authorize'
+    TRUELAYER_AUTH_URL = 'https://auth.truelayer.com/'
     TRUELAYER_TOKEN_URL = 'https://auth.truelayer.com/connect/token'
     TRUELAYER_API_URL = 'https://api.truelayer.com'
 else:
-    TRUELAYER_AUTH_URL = 'https://auth.sandbox.truelayer.com/authorize'
-    TRUELAYER_TOKEN_URL = 'https://auth.sandbox.truelayer.com/connect/token'
+    # Sandbox environment uses sandbox-specific domains
+    TRUELAYER_AUTH_URL = 'https://auth.truelayer-sandbox.com/'
+    TRUELAYER_TOKEN_URL = 'https://auth.truelayer-sandbox.com/connect/token'
     TRUELAYER_API_URL = 'https://api.sandbox.truelayer.com'
 
 # Encryption key for storing tokens
@@ -71,10 +72,11 @@ def get_authorization_url(user_id: int) -> dict:
         'client_id': TRUELAYER_CLIENT_ID,
         'redirect_uri': TRUELAYER_REDIRECT_URI,
         'response_type': 'code',
-        'scope': 'accounts transactions balance',
+        'scope': 'info accounts balance cards transactions direct_debits standing_orders offline_access',
         'state': state,
         'code_challenge': code_challenge,
         'code_challenge_method': 'S256',
+        'providers': 'uk-cs-mock uk-ob-all uk-oauth-all',
     }
 
     from urllib.parse import urlencode
@@ -98,12 +100,6 @@ def exchange_code_for_token(authorization_code: str, code_verifier: str) -> dict
     Returns:
         Dictionary with 'access_token', 'refresh_token', 'expires_at', etc.
     """
-    # Check if mock mode is enabled
-    if os.getenv('TRUELAYER_MOCK_MODE') == 'true':
-        from .truelayer_mock import mock_exchange_code_for_token
-        print("🧪 Using mock TrueLayer token exchange")
-        return mock_exchange_code_for_token(authorization_code, code_verifier)
-
     data = {
         'grant_type': 'authorization_code',
         'client_id': TRUELAYER_CLIENT_ID,
@@ -133,6 +129,7 @@ def exchange_code_for_token(authorization_code: str, code_verifier: str) -> dict
             'expires_at': expires_at.isoformat(),
             'token_type': token_data.get('token_type', 'Bearer'),
             'scope': token_data.get('scope', 'accounts transactions balance'),
+            'provider_id': 'truelayer',  # Default provider ID
         }
     except requests.RequestException as e:
         print(f"❌ Token exchange failed: {e}")
@@ -213,20 +210,16 @@ def save_bank_connection(user_id: int, connection_data: dict) -> dict:
         encrypted_refresh = encrypt_token(connection_data['refresh_token']) if connection_data.get('refresh_token') else None
 
         # Insert into database
-        connection = {
-            'user_id': user_id,
-            'provider_id': connection_data.get('provider_id'),
-            'access_token': encrypted_access,
-            'refresh_token': encrypted_refresh,
-            'token_expires_at': connection_data.get('expires_at'),
-            'connection_status': 'active',
-            'last_synced_at': None,
-        }
+        connection_id = database.save_bank_connection(
+            user_id=user_id,
+            provider_id=connection_data.get('provider_id'),
+            access_token=encrypted_access,
+            refresh_token=encrypted_refresh,
+            expires_at=connection_data.get('expires_at')
+        )
 
-        # In a real implementation, you'd insert this into the database
-        # For now, return a mock response
         return {
-            'connection_id': 1,
+            'connection_id': connection_id,
             'status': 'connected',
             'provider_id': connection_data.get('provider_id'),
             'expires_at': connection_data.get('expires_at'),
@@ -249,3 +242,56 @@ def get_connection_status(connection_id: int) -> dict:
         'status': 'active',  # or 'expired', 'authorization_required'
         'last_synced_at': None,
     }
+
+
+def discover_and_save_accounts(connection_id: int, access_token: str) -> dict:
+    """
+    Fetch accounts from TrueLayer API and save them to database.
+
+    Args:
+        connection_id: Database connection ID
+        access_token: Valid access token for TrueLayer API
+
+    Returns:
+        Dictionary with discovered accounts count and details
+    """
+    try:
+        from .truelayer_client import TrueLayerClient
+
+        # Initialize client and fetch accounts
+        client = TrueLayerClient(access_token)
+        accounts = client.get_accounts()
+
+        # Save each account to database
+        saved_accounts = []
+        for account in accounts:
+            account_id = account.get('account_id')
+            display_name = account.get('display_name', 'Unknown Account')
+            account_type = account.get('account_type', 'TRANSACTION')
+            currency = account.get('currency', 'GBP')
+
+            # Save to database
+            db_account_id = database.save_connection_account(
+                connection_id=connection_id,
+                account_id=account_id,
+                display_name=display_name,
+                account_type=account_type,
+                currency=currency
+            )
+
+            saved_accounts.append({
+                'account_id': account_id,
+                'display_name': display_name,
+                'account_type': account_type,
+                'currency': currency,
+                'db_id': db_account_id
+            })
+
+        return {
+            'accounts_discovered': len(accounts),
+            'accounts_saved': len(saved_accounts),
+            'accounts': saved_accounts
+        }
+    except Exception as e:
+        print(f"❌ Error discovering accounts: {e}")
+        raise

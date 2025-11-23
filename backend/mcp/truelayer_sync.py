@@ -14,7 +14,8 @@ def sync_account_transactions(
     connection_id: int,
     account_id: str,
     access_token: str,
-    days_back: int = 90
+    days_back: int = 90,
+    use_incremental: bool = True
 ) -> dict:
     """
     Sync transactions from TrueLayer for a specific account.
@@ -23,7 +24,8 @@ def sync_account_transactions(
         connection_id: Database connection ID
         account_id: TrueLayer account ID
         access_token: Valid OAuth access token
-        days_back: Number of days to fetch
+        days_back: Number of days to fetch (fallback if no last_synced_at)
+        use_incremental: Use incremental sync based on last_synced_at
 
     Returns:
         Dictionary with sync results
@@ -33,8 +35,23 @@ def sync_account_transactions(
 
         client = TrueLayerClient(access_token)
 
+        # Determine the sync window
+        sync_days = days_back
+        if use_incremental:
+            # Get the connection's last sync timestamp
+            connection = database.get_connection(connection_id)
+            if connection and connection.get('last_synced_at'):
+                last_sync = datetime.fromisoformat(connection['last_synced_at'])
+                # Calculate days since last sync
+                days_since_sync = (datetime.utcnow() - last_sync).days
+                # Only sync new data since last sync (add buffer of 1 day for safety)
+                sync_days = max(1, days_since_sync + 1)
+                print(f"   📅 Incremental sync: last synced {days_since_sync} days ago, fetching {sync_days} days")
+            else:
+                print(f"   📅 No previous sync found, fetching full {days_back} days")
+
         # Fetch transactions from TrueLayer
-        transactions = client.fetch_all_transactions(account_id, days_back)
+        transactions = client.fetch_all_transactions(account_id, sync_days)
 
         if not transactions:
             print(f"⚠️  No transactions found for account {account_id}")
