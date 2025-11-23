@@ -6,6 +6,7 @@ import Huququllah from './pages/Huququllah';
 import Import from './pages/Import';
 import Rules from './pages/Rules';
 import Settings from './pages/Settings';
+import TrueLayerCallbackHandler from './components/TrueLayerCallbackHandler';
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
           <Route path="/import" element={<Import />} />
           <Route path="/rules" element={<Rules />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/auth/callback" element={<TrueLayerCallbackHandler />} />
         </Routes>
       </div>
     </Router>

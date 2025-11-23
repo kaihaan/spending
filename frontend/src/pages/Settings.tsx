@@ -3,6 +3,7 @@ import axios from 'axios';
 import AmazonOrderHistory from '../components/AmazonOrderHistory';
 import AmazonReturns from '../components/AmazonReturns';
 import AppleTransactions from '../components/AppleTransactions';
+import TrueLayerIntegration from '../components/TrueLayerIntegration';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -463,6 +464,9 @@ export default function Settings() {
 
       {/* Apple Transactions Section */}
       <AppleTransactions />
+
+      {/* TrueLayer Bank Integration Section */}
+      <TrueLayerIntegration />
 
       {/* Add Mapping Dialog */}
       {showAddDialog && (
