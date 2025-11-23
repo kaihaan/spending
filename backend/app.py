@@ -1363,6 +1363,7 @@ def get_truelayer_accounts():
                     'display_name': account.get('display_name'),
                     'account_type': account.get('account_type'),
                     'currency': account.get('currency'),
+                    'last_synced_at': account.get('last_synced_at'),
                 })
 
             formatted_connections.append({
