@@ -1429,7 +1429,20 @@ def sync_truelayer_transactions():
         from mcp.truelayer_sync import sync_all_accounts
 
         data = request.json
-        user_id = data.get('user_id', 1)
+
+        # Support both user_id and connection_id
+        user_id = data.get('user_id')
+        connection_id = data.get('connection_id')
+
+        # If connection_id provided, get user_id from connection
+        if connection_id and not user_id:
+            connection = database.get_connection(connection_id)
+            if connection:
+                user_id = connection.get('user_id')
+
+        # Default to user 1 if still not found
+        if not user_id:
+            user_id = 1
 
         # Sync all accounts for user
         result = sync_all_accounts(user_id)
@@ -1440,6 +1453,9 @@ def sync_truelayer_transactions():
         })
 
     except Exception as e:
+        print(f"❌ Sync error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 

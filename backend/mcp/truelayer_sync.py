@@ -55,57 +55,51 @@ def sync_account_transactions(
         # Fetch transactions from TrueLayer
         transactions = client.fetch_all_transactions(truelayer_account_id, sync_days)
 
-        if not transactions:
-            print(f"⚠️  No transactions found for account {truelayer_account_id}")
-            return {
-                'account_id': truelayer_account_id,
-                'synced': 0,
-                'duplicates': 0,
-                'errors': 0,
-            }
-
-        # Insert/update transactions in database
         synced_count = 0
         duplicate_count = 0
         error_count = 0
 
-        for txn in transactions:
-            try:
-                # Check if transaction already exists (using normalised_provider_id)
-                existing = database.get_truelayer_transaction_by_id(
-                    txn.get('normalised_provider_id')
-                )
+        if transactions:
+            # Insert/update transactions in database
+            for txn in transactions:
+                try:
+                    # Check if transaction already exists (using normalised_provider_id)
+                    existing = database.get_truelayer_transaction_by_id(
+                        txn.get('normalised_provider_id')
+                    )
 
-                if existing:
-                    duplicate_count += 1
-                    continue
+                    if existing:
+                        duplicate_count += 1
+                        continue
 
-                # Insert new transaction
-                txn_id = database.insert_truelayer_transaction(
-                    account_id=db_account_id,
-                    transaction_id=txn.get('transaction_id'),
-                    normalised_provider_id=txn.get('normalised_provider_id'),
-                    timestamp=txn.get('date'),
-                    description=txn.get('description'),
-                    amount=txn.get('amount'),
-                    currency=txn.get('currency', 'GBP'),
-                    transaction_type=txn.get('transaction_type'),
-                    transaction_category=txn.get('category'),
-                    merchant_name=txn.get('merchant_name'),
-                    running_balance=txn.get('running_balance'),
-                    metadata=txn.get('metadata', {})
-                )
+                    # Insert new transaction
+                    txn_id = database.insert_truelayer_transaction(
+                        account_id=db_account_id,
+                        transaction_id=txn.get('transaction_id'),
+                        normalised_provider_id=txn.get('normalised_provider_id'),
+                        timestamp=txn.get('date'),
+                        description=txn.get('description'),
+                        amount=txn.get('amount'),
+                        currency=txn.get('currency', 'GBP'),
+                        transaction_type=txn.get('transaction_type'),
+                        transaction_category=txn.get('category'),
+                        merchant_name=txn.get('merchant_name'),
+                        running_balance=txn.get('running_balance'),
+                        metadata=txn.get('metadata', {})
+                    )
 
-                if txn_id:
-                    synced_count += 1
-                else:
+                    if txn_id:
+                        synced_count += 1
+                    else:
+                        error_count += 1
+
+                except Exception as e:
+                    print(f"❌ Error inserting transaction: {e}")
                     error_count += 1
+        else:
+            print(f"⚠️  No transactions found for account {truelayer_account_id}")
 
-            except Exception as e:
-                print(f"❌ Error inserting transaction: {e}")
-                error_count += 1
-
-        # Update last_synced_at timestamp
+        # Always update last_synced_at timestamp when sync completes
         database.update_connection_last_synced(connection_id, datetime.utcnow().isoformat())
 
         result = {
