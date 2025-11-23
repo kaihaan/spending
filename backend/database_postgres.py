@@ -1021,7 +1021,7 @@ def get_connection_accounts(connection_id):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute('''
                 SELECT id, connection_id, account_id, display_name, account_type,
-                       currency, created_at
+                       currency, last_synced_at, created_at
                 FROM truelayer_accounts
                 WHERE connection_id = %s
                 ORDER BY display_name
@@ -1096,6 +1096,19 @@ def update_connection_tokens(connection_id, access_token, refresh_token, expires
             return cursor.rowcount > 0
 
 
+def update_account_last_synced(account_id, timestamp):
+    """Update the last sync timestamp for a specific TrueLayer account."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                UPDATE truelayer_accounts
+                SET last_synced_at = %s, updated_at = NOW()
+                WHERE id = %s
+            ''', (timestamp, account_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+
 def save_connection_account(connection_id, account_id, display_name, account_type, account_subtype=None, currency=None):
     """Save an account linked to a TrueLayer bank connection."""
     with get_db() as conn:
@@ -1104,8 +1117,8 @@ def save_connection_account(connection_id, account_id, display_name, account_typ
                 INSERT INTO truelayer_accounts
                 (connection_id, account_id, display_name, account_type, currency)
                 VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (account_id) DO UPDATE
-                SET display_name = EXCLUDED.display_name, account_type = EXCLUDED.account_type
+                ON CONFLICT (connection_id, account_id) DO UPDATE
+                SET display_name = EXCLUDED.display_name, account_type = EXCLUDED.account_type, updated_at = NOW()
                 RETURNING id
             ''', (connection_id, account_id, display_name, account_type, currency))
             account_db_id = cursor.fetchone()[0]

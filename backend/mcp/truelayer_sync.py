@@ -99,7 +99,10 @@ def sync_account_transactions(
         else:
             print(f"⚠️  No transactions found for account {truelayer_account_id}")
 
-        # Always update last_synced_at timestamp when sync completes
+        # Update account-level sync timestamp (independent of connection status)
+        database.update_account_last_synced(db_account_id, datetime.utcnow().isoformat())
+
+        # Also update connection-level timestamp to track overall sync status
         database.update_connection_last_synced(connection_id, datetime.utcnow().isoformat())
 
         result = {

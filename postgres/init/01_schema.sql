@@ -148,14 +148,16 @@ CREATE TABLE IF NOT EXISTS bank_connections (
 CREATE TABLE IF NOT EXISTS truelayer_accounts (
     id SERIAL PRIMARY KEY,
     connection_id INTEGER NOT NULL REFERENCES bank_connections(id) ON DELETE CASCADE,
-    account_id VARCHAR(255) UNIQUE NOT NULL,  -- TrueLayer's account_id
+    account_id VARCHAR(255) NOT NULL,  -- TrueLayer's account_id
     account_type VARCHAR(50) NOT NULL,  -- TRANSACTION, SAVINGS, BUSINESS_TRANSACTION, BUSINESS_SAVINGS
     display_name VARCHAR(255) NOT NULL,
     currency VARCHAR(3) NOT NULL,
     account_number_json JSONB,  -- Stores IBAN, sort_code, number, SWIFT BIC, etc.
     provider_data JSONB,  -- Additional provider-specific metadata
+    last_synced_at TIMESTAMPTZ,  -- Per-account sync timestamp (independent of connection)
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(connection_id, account_id)  -- Allow same account_id across different connections
 );
 
 -- TrueLayer Transactions Table
