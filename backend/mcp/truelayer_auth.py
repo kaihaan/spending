@@ -98,6 +98,12 @@ def exchange_code_for_token(authorization_code: str, code_verifier: str) -> dict
     Returns:
         Dictionary with 'access_token', 'refresh_token', 'expires_at', etc.
     """
+    # Check if mock mode is enabled
+    if os.getenv('TRUELAYER_MOCK_MODE') == 'true':
+        from .truelayer_mock import mock_exchange_code_for_token
+        print("🧪 Using mock TrueLayer token exchange")
+        return mock_exchange_code_for_token(authorization_code, code_verifier)
+
     data = {
         'grant_type': 'authorization_code',
         'client_id': TRUELAYER_CLIENT_ID,
