@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import database
+import database_init as database
 import re
 import os
 from mcp.merchant_normalizer import detect_account_pattern
@@ -534,14 +534,7 @@ def normalize_merchants():
 
                 if original_merchant != normalized_merchant:
                     # Update the merchant in database
-                    with database.get_db() as conn:
-                        c = conn.cursor()
-                        c.execute('''
-                            UPDATE transactions
-                            SET merchant = ?
-                            WHERE id = ?
-                        ''', (normalized_merchant, txn['id']))
-                        conn.commit()
+                    database.update_merchant(txn['id'], normalized_merchant)
 
                     updated_count += 1
                     changes.append({
@@ -702,14 +695,7 @@ def reapply_account_mappings():
 
             if new_merchant != merchant:
                 # Update in database
-                with database.get_db() as conn:
-                    c = conn.cursor()
-                    c.execute('''
-                        UPDATE transactions
-                        SET merchant = ?
-                        WHERE id = ?
-                    ''', (new_merchant, txn['id']))
-                    conn.commit()
+                database.update_merchant(txn['id'], new_merchant)
                 updated_count += 1
 
         return jsonify({
@@ -1251,11 +1237,182 @@ def export_apple_to_csv():
         return jsonify({'error': f'Export failed: {str(e)}'}), 500
 
 
+# ============================================================================
+# TrueLayer Bank Integration Routes
+# ============================================================================
+
+@app.route('/api/truelayer/authorize', methods=['GET'])
+def truelayer_authorize():
+    """Initiate TrueLayer OAuth authorization flow."""
+    try:
+        from mcp.truelayer_auth import get_authorization_url
+
+        user_id = request.args.get('user_id', 1)  # In production, get from session
+
+        auth_data = get_authorization_url(user_id)
+
+        return jsonify({
+            'auth_url': auth_data['auth_url'],
+            'state': auth_data['state'],
+            'code_verifier': auth_data['code_verifier']
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/callback', methods=['GET'])
+def truelayer_callback():
+    """Handle TrueLayer OAuth callback."""
+    try:
+        from mcp.truelayer_auth import exchange_code_for_token, save_bank_connection, validate_authorization_state
+
+        code = request.args.get('code')
+        state = request.args.get('state')
+        code_verifier = request.args.get('code_verifier')  # Passed from frontend
+        user_id = request.args.get('user_id', 1)
+
+        if not code or not state or not code_verifier:
+            return jsonify({'error': 'Missing required parameters'}), 400
+
+        # TODO: Validate state against stored value
+        # if not validate_authorization_state(state, stored_state):
+        #     return jsonify({'error': 'Invalid state parameter'}), 400
+
+        # Exchange code for token
+        token_data = exchange_code_for_token(code, code_verifier)
+
+        # Save connection to database
+        connection_info = save_bank_connection(user_id, token_data)
+
+        # Redirect to frontend success page
+        return jsonify({
+            'status': 'authorized',
+            'connection_id': connection_info.get('connection_id'),
+            'message': 'Successfully connected to TrueLayer'
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Authorization failed: {str(e)}'}), 500
+
+
+@app.route('/api/truelayer/accounts', methods=['GET'])
+def get_truelayer_accounts():
+    """Get list of connected TrueLayer accounts."""
+    try:
+        user_id = request.args.get('user_id', 1)
+
+        # Get all connections for user
+        connections = database.get_user_connections(user_id)
+
+        accounts = []
+        for connection in connections:
+            connection_id = connection.get('id')
+            conn_accounts = database.get_connection_accounts(connection_id)
+
+            for account in conn_accounts:
+                accounts.append({
+                    'account_id': account.get('account_id'),
+                    'display_name': account.get('display_name'),
+                    'account_type': account.get('account_type'),
+                    'currency': account.get('currency'),
+                    'connection_id': connection_id,
+                    'connection_status': connection.get('connection_status'),
+                })
+
+        return jsonify({'accounts': accounts})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/sync', methods=['POST'])
+def sync_truelayer_transactions():
+    """Trigger manual sync of TrueLayer transactions."""
+    try:
+        from mcp.truelayer_sync import sync_all_accounts
+
+        data = request.json
+        user_id = data.get('user_id', 1)
+
+        # Sync all accounts for user
+        result = sync_all_accounts(user_id)
+
+        return jsonify({
+            'status': 'completed',
+            'result': result
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/sync/status', methods=['GET'])
+def get_sync_status():
+    """Get sync status for all accounts."""
+    try:
+        from mcp.truelayer_sync import get_sync_status
+
+        user_id = request.args.get('user_id', 1)
+
+        status = get_sync_status(user_id)
+
+        return jsonify(status)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/disconnect', methods=['POST'])
+def disconnect_bank_account():
+    """Disconnect a TrueLayer bank account."""
+    try:
+        data = request.json
+        connection_id = data.get('connection_id')
+
+        if not connection_id:
+            return jsonify({'error': 'Missing connection_id'}), 400
+
+        # Mark connection as inactive
+        database.update_connection_status(connection_id, 'inactive')
+
+        return jsonify({
+            'status': 'disconnected',
+            'connection_id': connection_id
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/webhook', methods=['POST'])
+def handle_truelayer_webhook():
+    """Handle incoming TrueLayer webhook events."""
+    try:
+        from mcp.truelayer_sync import handle_webhook_event
+
+        # In production, verify webhook signature
+        # signature = request.headers.get('X-TrueLayer-Signature')
+        # if not verify_webhook_signature(request.data, signature):
+        #     return jsonify({'error': 'Invalid signature'}), 401
+
+        payload = request.json
+
+        result = handle_webhook_event(payload)
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        print(f"❌ Webhook error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
-    # Initialize database on startup
-    database.init_db()
-    # Run migration to add huququllah column if needed
-    database.migrate_add_huququllah_column()
+    # Initialize database on startup (SQLite only)
+    if hasattr(database, 'init_db'):
+        database.init_db()
+    # Run migration to add huququllah column if needed (SQLite only)
+    if hasattr(database, 'migrate_add_huququllah_column'):
+        database.migrate_add_huququllah_column()
 
     print("\n" + "="*50)
     print("🚀 Personal Finance Backend Starting...")

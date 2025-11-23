@@ -3,6 +3,7 @@ backend/venv/
 backend/__pycache__/
 backend/*.pyc
 backend/*.db
+backend/*.db.backup
 backend/.env
 
 # Node
@@ -13,6 +14,13 @@ frontend/.env
 # Data files (never commit bank statements!)
 data/
 FinanceData/
+
+# Docker & PostgreSQL
+.env
+docker-compose.override.yml
+postgres/data/
+*.sql.backup
+backup_*.sql
 
 # OS
 .DS_Store
