@@ -5,7 +5,7 @@ Uses exact amount matching, date proximity (±3 days), and merchant name detecti
 """
 
 from datetime import datetime, timedelta
-import database
+import database_postgres as database
 
 
 def match_all_amazon_transactions():

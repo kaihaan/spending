@@ -5,6 +5,7 @@ import AmazonReturns from '../components/AmazonReturns';
 import AppleTransactions from '../components/AppleTransactions';
 import LookupDescriptionRefresh from '../components/LookupDescriptionRefresh';
 import LLMEnrichmentSettings from '../components/LLMEnrichmentSettings';
+import TrueLayerIntegration from '../components/TrueLayerIntegration';
 
 const API_URL = 'http://localhost:5000/api';
 

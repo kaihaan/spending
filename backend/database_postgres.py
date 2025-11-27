@@ -46,6 +46,8 @@ def init_pool():
             _create_oauth_state_table()
             # Create TrueLayer card tables if they don't exist
             _create_truelayer_card_tables()
+            # Create LLM enrichment tables if they don't exist
+            _create_enrichment_tables()
     except (Exception, psycopg2.Error) as error:
         print(f"✗ Error creating connection pool: {error}")
         raise
@@ -144,6 +146,83 @@ def _create_truelayer_card_tables():
         print(f"⚠️  Warning: Could not create TrueLayer card tables: {e}")
 
 
+def _create_enrichment_tables():
+    """Create LLM enrichment-related tables if they don't exist."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                # Create transaction_enrichments table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS transaction_enrichments (
+                        id SERIAL PRIMARY KEY,
+                        transaction_id INTEGER NOT NULL,
+                        primary_category VARCHAR(255),
+                        subcategory VARCHAR(255),
+                        merchant_clean_name VARCHAR(255),
+                        merchant_type VARCHAR(255),
+                        essential_discretionary VARCHAR(50),
+                        payment_method VARCHAR(255),
+                        payment_method_subtype VARCHAR(255),
+                        purchase_date DATE,
+                        confidence_score NUMERIC(3,2),
+                        raw_response TEXT,
+                        llm_provider VARCHAR(50),
+                        llm_model VARCHAR(255),
+                        enriched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+                    )
+                ''')
+
+                # Create llm_enrichment_cache table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS llm_enrichment_cache (
+                        id SERIAL PRIMARY KEY,
+                        transaction_description TEXT NOT NULL,
+                        transaction_direction VARCHAR(10),
+                        enrichment_data TEXT,
+                        cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(transaction_description, transaction_direction)
+                    )
+                ''')
+
+                # Create llm_enrichment_failures table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS llm_enrichment_failures (
+                        id SERIAL PRIMARY KEY,
+                        transaction_id INTEGER,
+                        error_message TEXT,
+                        failed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        retry_count INTEGER DEFAULT 0,
+                        FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+                    )
+                ''')
+
+                # Create llm_models table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS llm_models (
+                        id SERIAL PRIMARY KEY,
+                        provider VARCHAR(50) NOT NULL,
+                        model_name VARCHAR(255) NOT NULL,
+                        display_name VARCHAR(255),
+                        is_builtin BOOLEAN DEFAULT true,
+                        is_active BOOLEAN DEFAULT false,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(provider, model_name)
+                    )
+                ''')
+
+                # Create indexes for better query performance
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_enrichments_transaction ON transaction_enrichments(transaction_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_enrichments_provider ON transaction_enrichments(llm_provider)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_cache_description ON llm_enrichment_cache(transaction_description)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_failures_transaction ON llm_enrichment_failures(transaction_id)')
+
+                conn.commit()
+                print("✓ LLM enrichment tables created successfully")
+    except Exception as e:
+        print(f"⚠️  Warning: Could not create enrichment tables: {e}")
+
+
 @contextmanager
 def get_db():
     """Context manager for database connections from pool."""
@@ -230,6 +309,233 @@ def update_transaction_category(transaction_id, category):
             ''', (category, transaction_id))
             conn.commit()
             return cursor.rowcount > 0
+
+
+def update_transaction_with_enrichment(transaction_id, enrichment_data, enrichment_source='llm'):
+    """
+    Update transaction with LLM enrichment data.
+
+    Args:
+        transaction_id: ID of transaction to update
+        enrichment_data: Dict or object with enrichment fields
+        enrichment_source: 'llm' or 'cache'
+    """
+    # Convert object to dict if needed
+    if not isinstance(enrichment_data, dict):
+        enrichment_data = {
+            'primary_category': getattr(enrichment_data, 'primary_category', 'Other'),
+            'subcategory': getattr(enrichment_data, 'subcategory', None),
+            'merchant_clean_name': getattr(enrichment_data, 'merchant_clean_name', None),
+            'merchant_type': getattr(enrichment_data, 'merchant_type', None),
+            'essential_discretionary': getattr(enrichment_data, 'essential_discretionary', None),
+            'payment_method': getattr(enrichment_data, 'payment_method', None),
+            'payment_method_subtype': getattr(enrichment_data, 'payment_method_subtype', None),
+            'confidence_score': getattr(enrichment_data, 'confidence_score', None),
+            'llm_model': getattr(enrichment_data, 'llm_model', 'unknown'),
+        }
+
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            # Extract category from enrichment
+            primary_category = enrichment_data.get('primary_category', 'Other')
+
+            # Update main transaction category
+            cursor.execute('''
+                UPDATE transactions
+                SET category = %s
+                WHERE id = %s
+            ''', (primary_category, transaction_id))
+
+            # Check if enrichment already exists
+            cursor.execute('''
+                SELECT id FROM transaction_enrichments
+                WHERE transaction_id = %s
+                LIMIT 1
+            ''', (transaction_id,))
+
+            existing_enrichment = cursor.fetchone()
+
+            # Store or update full enrichment data
+            if existing_enrichment:
+                # Update existing enrichment
+                cursor.execute('''
+                    UPDATE transaction_enrichments
+                    SET primary_category = %s,
+                        subcategory = %s,
+                        merchant_clean_name = %s,
+                        merchant_type = %s,
+                        essential_discretionary = %s,
+                        payment_method = %s,
+                        payment_method_subtype = %s,
+                        confidence_score = %s,
+                        raw_response = %s,
+                        llm_provider = %s,
+                        llm_model = %s,
+                        enriched_at = CURRENT_TIMESTAMP
+                    WHERE transaction_id = %s
+                ''', (
+                    enrichment_data.get('primary_category', 'Other'),
+                    enrichment_data.get('subcategory'),
+                    enrichment_data.get('merchant_clean_name'),
+                    enrichment_data.get('merchant_type'),
+                    enrichment_data.get('essential_discretionary'),
+                    enrichment_data.get('payment_method'),
+                    enrichment_data.get('payment_method_subtype'),
+                    enrichment_data.get('confidence_score'),
+                    str(enrichment_data),  # Store full response as JSON string
+                    enrichment_source,
+                    enrichment_data.get('llm_model', 'unknown'),
+                    transaction_id
+                ))
+            else:
+                # Insert new enrichment
+                cursor.execute('''
+                    INSERT INTO transaction_enrichments
+                    (transaction_id, primary_category, subcategory, merchant_clean_name,
+                     merchant_type, essential_discretionary, payment_method,
+                     payment_method_subtype, confidence_score, raw_response,
+                     llm_provider, llm_model)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ''', (
+                    transaction_id,
+                    enrichment_data.get('primary_category', 'Other'),
+                    enrichment_data.get('subcategory'),
+                    enrichment_data.get('merchant_clean_name'),
+                    enrichment_data.get('merchant_type'),
+                    enrichment_data.get('essential_discretionary'),
+                    enrichment_data.get('payment_method'),
+                    enrichment_data.get('payment_method_subtype'),
+                    enrichment_data.get('confidence_score'),
+                    str(enrichment_data),  # Store full response as JSON string
+                    enrichment_source,
+                    enrichment_data.get('llm_model', 'unknown')
+                ))
+
+            conn.commit()
+            return cursor.rowcount > 0
+
+
+def is_transaction_enriched(transaction_id):
+    """
+    Check if a transaction has enrichment data.
+
+    Args:
+        transaction_id: ID of the transaction
+
+    Returns:
+        bool: True if transaction has enrichment data
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT id FROM transaction_enrichments
+                WHERE transaction_id = %s
+                LIMIT 1
+            ''', (transaction_id,))
+            return cursor.fetchone() is not None
+
+
+def get_enrichment_from_cache(description, direction):
+    """
+    Retrieve cached enrichment for a transaction description.
+
+    Args:
+        description: Transaction description to look up
+        direction: Transaction direction ('in' or 'out')
+
+    Returns:
+        Enrichment object or None if not cached
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT enrichment_data
+                FROM llm_enrichment_cache
+                WHERE transaction_description = %s AND transaction_direction = %s
+                LIMIT 1
+            ''', (description, direction))
+
+            row = cursor.fetchone()
+            if row and row['enrichment_data']:
+                try:
+                    import json
+                    from mcp.llm_enricher import EnrichmentResult
+                    data = json.loads(row['enrichment_data'])
+                    return EnrichmentResult(**data)
+                except (json.JSONDecodeError, Exception):
+                    return None
+    return None
+
+
+def cache_enrichment(description, direction, enrichment, provider, model):
+    """
+    Cache enrichment result for a transaction description.
+
+    Args:
+        description: Transaction description
+        direction: Transaction direction ('in' or 'out')
+        enrichment: EnrichmentResult object with enrichment data
+        provider: LLM provider name
+        model: LLM model name
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            try:
+                import json
+                enrichment_json = json.dumps({
+                    'primary_category': enrichment.primary_category,
+                    'subcategory': enrichment.subcategory,
+                    'merchant_clean_name': enrichment.merchant_clean_name,
+                    'merchant_type': enrichment.merchant_type,
+                    'essential_discretionary': enrichment.essential_discretionary,
+                    'payment_method': enrichment.payment_method,
+                    'payment_method_subtype': enrichment.payment_method_subtype,
+                    'confidence_score': enrichment.confidence_score,
+                    'llm_provider': provider,
+                    'llm_model': model
+                })
+
+                cursor.execute('''
+                    INSERT INTO llm_enrichment_cache
+                    (transaction_description, transaction_direction, enrichment_data)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (transaction_description, transaction_direction) DO UPDATE SET
+                        enrichment_data = EXCLUDED.enrichment_data,
+                        cached_at = CURRENT_TIMESTAMP
+                ''', (description, direction, enrichment_json))
+
+                conn.commit()
+            except Exception as e:
+                # Silently fail on cache errors
+                pass
+
+
+def log_enrichment_failure(transaction_id, error_message, retry_count=0):
+    """
+    Log enrichment failure for a transaction.
+
+    Args:
+        transaction_id: ID of transaction that failed
+        error_message: Error message explaining the failure
+        retry_count: Number of retry attempts already made
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            try:
+                cursor.execute('''
+                    INSERT INTO llm_enrichment_failures
+                    (transaction_id, error_message, retry_count)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (transaction_id) DO UPDATE SET
+                        error_message = EXCLUDED.error_message,
+                        retry_count = EXCLUDED.retry_count,
+                        failed_at = CURRENT_TIMESTAMP
+                ''', (transaction_id, str(error_message)[:500], retry_count))
+
+                conn.commit()
+            except Exception as e:
+                # Silently fail on logging errors
+                pass
 
 
 def update_transactions_by_merchant(merchant, category):

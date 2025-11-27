@@ -5,10 +5,9 @@ Handles periodic syncing of transactions from TrueLayer API,
 deduplication, and integration with the app's transaction database.
 """
 
-import database_init as database
+import database_postgres as database
 from .truelayer_client import TrueLayerClient
 from .truelayer_auth import decrypt_token, refresh_access_token, encrypt_token
-from .categorizer import categorize_transaction
 from datetime import datetime, timezone
 
 
@@ -43,30 +42,24 @@ def identify_merchant(description: str, merchant_from_api: str = None) -> str:
     return description or 'Unknown Merchant'
 
 
-def classify_and_enrich_transaction(txn: dict) -> dict:
+def identify_transaction_merchant(txn: dict) -> dict:
     """
-    Classify transaction into category and identify merchant.
+    Identify merchant from transaction data.
 
     Args:
         txn: Transaction dictionary from normalized data
 
     Returns:
-        Transaction dictionary with updated merchant_name and transaction_category
+        Transaction dictionary with updated merchant_name
     """
-    # Identify merchant
+    # Identify merchant (will be enriched with category via LLM later)
     merchant = identify_merchant(
         txn.get('description', ''),
         txn.get('merchant_name')
     )
     txn['merchant_name'] = merchant
-
-    # Classify transaction into category
-    category = categorize_transaction(
-        description=txn.get('description', ''),
-        merchant=merchant,
-        amount=float(txn.get('amount', 0))
-    )
-    txn['category'] = category
+    # Set initial category to 'Other' - will be enriched by LLM
+    txn['category'] = 'Other'
 
     return txn
 
@@ -159,17 +152,17 @@ def sync_account_transactions(
                             print(f"     ⏭️  Transaction {idx}: Duplicate (id: {normalised_id})")
                         continue
 
-                    # Classify and enrich transaction with merchant identification and categorization
+                    # Identify merchant (categorization will be done by LLM enricher later)
                     try:
-                        txn = classify_and_enrich_transaction(txn)
+                        txn = identify_transaction_merchant(txn)
                         merchant_name = txn.get('merchant_name')
                         category = txn.get('category')
-                        print(f"     📊 Transaction {idx}: {merchant_name} → {category}")
+                        print(f"     📊 Transaction {idx}: {merchant_name} (awaiting LLM enrichment)")
                     except Exception as e:
-                        print(f"     ⚠️  Could not classify transaction {idx}: {e}")
-                        # Continue with original merchant/category if classification fails
+                        print(f"     ⚠️  Could not identify merchant for transaction {idx}: {e}")
+                        # Continue with original merchant/category if identification fails
                         merchant_name = txn.get('merchant_name', 'Unknown Merchant')
-                        category = txn.get('category', 'Other')
+                        category = 'Other'
 
                     # Insert new transaction
                     txn_id = database.insert_truelayer_transaction(

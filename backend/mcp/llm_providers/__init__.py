@@ -2,10 +2,27 @@
 
 from .base_provider import BaseLLMProvider
 from .anthropic_provider import AnthropicProvider
-from .openai_provider import OpenAIProvider
-from .google_provider import GoogleProvider
-from .deepseek_provider import DeepseekProvider
-from .ollama_provider import OllamaProvider
+
+# Optional providers - import gracefully if dependencies available
+try:
+    from .openai_provider import OpenAIProvider
+except ImportError:
+    OpenAIProvider = None
+
+try:
+    from .google_provider import GoogleProvider
+except ImportError:
+    GoogleProvider = None
+
+try:
+    from .deepseek_provider import DeepseekProvider
+except ImportError:
+    DeepseekProvider = None
+
+try:
+    from .ollama_provider import OllamaProvider
+except ImportError:
+    OllamaProvider = None
 
 __all__ = [
     'BaseLLMProvider',

@@ -7,7 +7,7 @@ Handles batching, caching, error handling, and cost tracking
 import logging
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
-import database
+import database_postgres as database
 from config.llm_config import LLMConfig, LLMProvider, load_llm_config
 from mcp.llm_providers import (
     BaseLLMProvider,

@@ -5,7 +5,7 @@ CRITICAL: Excludes Apple Pay payment method transactions.
 """
 
 from datetime import datetime, timedelta
-import database
+import database_postgres as database
 import re
 
 

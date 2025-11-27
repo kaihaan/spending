@@ -96,6 +96,33 @@ export default function TrueLayerIntegration() {
     }
   };
 
+  const handleClearTransactions = async () => {
+    if (!confirm('⚠️  Are you sure? This will delete ALL TrueLayer transactions permanently!')) {
+      return;
+    }
+
+    if (!confirm('🔴 This action is IRREVERSIBLE. Click OK to confirm deletion.')) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const response = await axios.delete(`${API_URL}/truelayer/clear-transactions`, {
+        headers: {
+          'X-Confirm-Delete': 'yes'
+        }
+      });
+
+      alert(`✅ ${response.data.message}\nDeleted: ${response.data.deleted_count} transactions`);
+      fetchConnections();
+      window.dispatchEvent(new Event('transactions-updated'));
+    } catch (err: any) {
+      alert(`❌ ${err.response?.data?.error || 'Failed to clear transactions'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDisconnect = async (connectionId: number) => {
     if (!confirm('Are you sure you want to disconnect this bank account?')) {
       return;
@@ -287,6 +314,27 @@ export default function TrueLayerIntegration() {
                 </div>
               </div>
             )}
+
+            {/* Testing/Development Section */}
+            <div className="divider my-4"></div>
+            <div className="collapse collapse-arrow border border-error/20 bg-error/5">
+              <input type="checkbox" />
+              <div className="collapse-title text-sm font-semibold text-error">
+                🧪 Testing & Development
+              </div>
+              <div className="collapse-content">
+                <p className="text-xs text-base-content/70 mb-3">
+                  ⚠️ These actions are for testing/development only and cannot be undone.
+                </p>
+                <button
+                  className="btn btn-sm btn-error btn-outline"
+                  onClick={handleClearTransactions}
+                  disabled={loading}
+                >
+                  🗑️ Clear All TrueLayer Transactions
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

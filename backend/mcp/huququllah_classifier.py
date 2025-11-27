@@ -5,7 +5,7 @@ This module provides smart suggestions for classifying transactions as essential
 based on historical user classification patterns.
 """
 
-import database
+import database_postgres as database
 from collections import defaultdict, Counter
 
 

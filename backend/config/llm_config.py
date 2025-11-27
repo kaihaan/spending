@@ -150,7 +150,6 @@ def load_llm_config() -> Optional[LLMConfig]:
         pass
 
     provider_str = os.getenv("LLM_PROVIDER", "").lower()
-    api_key = os.getenv("LLM_API_KEY", "").strip()
 
     # If no provider is set, LLM enrichment is disabled
     if not provider_str:
@@ -164,6 +163,25 @@ def load_llm_config() -> Optional[LLMConfig]:
             f"Invalid LLM_PROVIDER: {provider_str}. "
             f"Must be one of: {', '.join([p.value for p in LLMProvider])}"
         )
+
+    # Get API key - try generic LLM_API_KEY first, then provider-specific keys
+    api_key = os.getenv("LLM_API_KEY", "").strip()
+    if not api_key:
+        # Try provider-specific API keys
+        provider_api_key_map = {
+            LLMProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
+            LLMProvider.OPENAI: "OPENAI_API_KEY",
+            LLMProvider.GOOGLE: "GOOGLE_API_KEY",
+            LLMProvider.DEEPSEEK: "DEEPSEEK_API_KEY",
+            LLMProvider.OLLAMA: "OLLAMA_API_KEY",  # Optional for Ollama (local)
+        }
+        api_key_env_var = provider_api_key_map.get(provider)
+        if api_key_env_var:
+            api_key = os.getenv(api_key_env_var, "").strip()
+
+        # Ollama doesn't require an API key (local inference)
+        if not api_key and provider == LLMProvider.OLLAMA:
+            api_key = "ollama-local"  # Dummy key for local Ollama
 
     # Get model with provider-specific defaults
     model = os.getenv("LLM_MODEL", "").strip()

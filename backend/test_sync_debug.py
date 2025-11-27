@@ -12,7 +12,7 @@ os.chdir('/mnt/c/dev/spending/backend')
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-import database_init as database
+import database_postgres as database
 from mcp.truelayer_sync import sync_account_transactions
 from mcp.truelayer_auth import decrypt_token
 

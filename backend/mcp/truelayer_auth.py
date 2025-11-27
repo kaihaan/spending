@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
-import database_init as database
+import database_postgres as database
 
 # Load environment variables (override=True to prefer .env file over shell env)
 load_dotenv(override=True)

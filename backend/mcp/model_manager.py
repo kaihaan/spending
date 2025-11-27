@@ -7,7 +7,7 @@ Supports runtime model switching and custom model addition.
 import requests
 import logging
 from typing import Dict, List, Optional
-import database
+import database_postgres as database
 from config.llm_config import LLMProvider, LLMModel, get_provider_info
 
 logger = logging.getLogger(__name__)

@@ -147,7 +147,9 @@ Never include amounts or actual monetary values in your analysis."""
         transaction_lines = []
         for i, txn in enumerate(transactions, 1):
             desc = txn.get('description', '').strip()
-            date = txn.get('date', '').strip()
+            # Handle date as either string or date object
+            date_val = txn.get('date', '')
+            date = str(date_val).strip() if date_val else ''
             lookup_desc = txn.get('lookup_description', '').strip()
             merchant = txn.get('merchant', '').strip()
 

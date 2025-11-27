@@ -5,7 +5,7 @@ Updates transaction descriptions and marks items as returned.
 """
 
 from datetime import datetime, timedelta
-import database
+import database_postgres as database
 
 
 def match_all_returns():
@@ -120,7 +120,7 @@ def find_transaction_for_order(order_db_id):
             SELECT t.*
             FROM transactions t
             JOIN amazon_transaction_matches m ON t.id = m.transaction_id
-            WHERE m.amazon_order_id = ?
+            WHERE m.amazon_order_id = %s
         ''', (order_db_id,))
         row = c.fetchone()
         return dict(row) if row else None

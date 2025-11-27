@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request, Response, stream_with_context
 from flask_cors import CORS
-import database_init as database
+import database_postgres as database
 import re
 import os
 import json
@@ -43,7 +43,8 @@ def get_transactions():
         all_transactions = regular_transactions + truelayer_transactions
 
         # Sort by date descending (most recent first)
-        all_transactions.sort(key=lambda t: t.get('date') or t.get('timestamp', ''), reverse=True)
+        # Convert to string for consistent sorting across date/datetime types
+        all_transactions.sort(key=lambda t: str(t.get('date') or t.get('timestamp', '')), reverse=True)
 
         return jsonify(all_transactions)
     except Exception as e:
@@ -583,49 +584,6 @@ def fix_direct_debit_merchants():
     try:
         result = database.fix_direct_debit_merchants()
         return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/migrations/normalize-merchants', methods=['POST'])
-def normalize_merchants():
-    """Normalize all merchant names in existing transactions."""
-    try:
-        transactions = database.get_all_transactions()
-        from mcp.merchant_normalizer import normalize_merchant_name
-
-        updated_count = 0
-        changes = []
-
-        for txn in transactions:
-            original_merchant = txn.get('merchant')
-            if original_merchant:
-                normalized_merchant = normalize_merchant_name(original_merchant)
-
-                if original_merchant != normalized_merchant:
-                    # Update the merchant in database
-                    with database.get_db() as conn:
-                        c = conn.cursor()
-                        c.execute('''
-                            UPDATE transactions
-                            SET merchant = ?
-                            WHERE id = ?
-                        ''', (normalized_merchant, txn['id']))
-                        conn.commit()
-
-                    updated_count += 1
-                    changes.append({
-                        'transaction_id': txn['id'],
-                        'original': original_merchant,
-                        'normalized': normalized_merchant,
-                        'description': txn.get('description', '')[:50]
-                    })
-
-        return jsonify({
-            'changes': changes,
-            'count': len(changes),
-            'message': f'{len(changes)} card payment transaction(s) would be updated'
-        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1655,6 +1613,33 @@ def disconnect_bank_account():
             'status': 'disconnected',
             'connection_id': connection_id
         })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/clear-transactions', methods=['DELETE'])
+def clear_truelayer_transactions():
+    """Clear all TrueLayer transactions from database (for testing)."""
+    try:
+        # Check confirmation header
+        confirmation = request.headers.get('X-Confirm-Delete', '').lower()
+        if confirmation != 'yes':
+            return jsonify({'error': 'Deletion not confirmed'}), 400
+
+        # Delete TrueLayer transactions
+        with database.get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('DELETE FROM truelayer_transactions')
+                conn.commit()
+                deleted_count = cursor.rowcount
+                cursor.close()
+
+        return jsonify({
+            'success': True,
+            'message': f'Deleted {deleted_count} TrueLayer transaction(s)',
+            'deleted_count': deleted_count
+        }), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
