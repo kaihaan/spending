@@ -1,18 +1,28 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response, stream_with_context
 from flask_cors import CORS
 import database_init as database
 import re
 import os
+import json
+import threading
+import logging
+from config import llm_config
 from mcp.merchant_normalizer import detect_account_pattern
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend communication
 
 # Get frontend URL from environment, default to localhost:5173
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+
+# Global enrichment progress tracking
+enrichment_progress = {}
+enrichment_lock = threading.Lock()
 
 
 @app.route('/api/health')
@@ -116,6 +126,12 @@ def import_file():
         from mcp.categorizer import categorize_transactions
         transactions = categorize_transactions(transactions)
 
+        # Extract pattern data from descriptions
+        from mcp.pattern_extractor import extract_and_update
+        for txn in transactions:
+            extracted = extract_and_update(txn['description'])
+            txn.update(extracted)
+
         # Insert transactions into database
         imported_count = 0
         imported_transaction_ids = []
@@ -129,7 +145,20 @@ def import_file():
                     amount=txn['amount'],
                     category=txn.get('category', 'Other'),
                     source_file=txn['source_file'],
-                    merchant=txn['merchant']
+                    merchant=txn['merchant'],
+                    provider=txn.get('provider'),
+                    variant=txn.get('variant'),
+                    payee=txn.get('payee'),
+                    reference=txn.get('reference'),
+                    mandate_number=txn.get('mandate_number'),
+                    branch=txn.get('branch'),
+                    entity=txn.get('entity'),
+                    trip_date=txn.get('trip_date'),
+                    sender=txn.get('sender'),
+                    rate=txn.get('rate'),
+                    tax=txn.get('tax'),
+                    payment_count=txn.get('payment_count'),
+                    extraction_confidence=txn.get('extraction_confidence')
                 )
                 imported_count += 1
                 imported_transaction_ids.append(txn_id)
@@ -169,12 +198,43 @@ def import_file():
                     'matched_count': coverage['matched_count']
                 }
 
+        # Auto-enrich with LLM (automatic, unless disabled with skip_enrichment)
+        llm_enrichment_stats = None
+        skip_enrichment = data.get('skip_enrichment', False)
+
+        if not skip_enrichment and imported_transaction_ids:
+            try:
+                from mcp.llm_enricher import get_enricher
+                enricher = get_enricher()
+
+                if enricher:
+                    # Enrich only the newly imported transactions
+                    enrichment_direction = 'out' if any(t['amount'] < 0 for t in transactions) else 'in'
+                    stats = enricher.enrich_transactions(
+                        transaction_ids=imported_transaction_ids,
+                        direction=enrichment_direction,
+                        force_refresh=False
+                    )
+                    llm_enrichment_stats = {
+                        'successful': stats.successful_enrichments,
+                        'failed': stats.failed_enrichments,
+                        'cached_hits': stats.cached_hits,
+                        'api_calls': stats.api_calls_made,
+                        'total_cost': stats.total_cost
+                    }
+            except Exception as e:
+                print(f"LLM enrichment during import failed: {e}")
+                import traceback
+                traceback.print_exc()
+                # Don't fail the import if enrichment fails
+
         return jsonify({
             'success': True,
             'imported': imported_count,
             'filename': filename,
             'amazon_matching': match_results,
-            'coverage_warning': coverage_warning
+            'coverage_warning': coverage_warning,
+            'llm_enrichment': llm_enrichment_stats
         }), 201
 
     except FileNotFoundError as e:
@@ -318,204 +378,6 @@ def clear_transactions():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/rules', methods=['GET'])
-def get_rules():
-    """Get all categorization rules (merged from DB and defaults)."""
-    try:
-        from mcp.categorizer import get_category_rules
-        rules = get_category_rules()
-
-        # Get list of all categories
-        categories = database.get_all_categories()
-
-        return jsonify({
-            'rules': rules,
-            'categories': [cat['name'] for cat in categories]
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rules/keywords', methods=['POST'])
-def add_keyword():
-    """Add a keyword to a category."""
-    try:
-        data = request.json
-
-        if 'category' not in data or 'keyword' not in data:
-            return jsonify({'error': 'Missing category or keyword'}), 400
-
-        category = data['category']
-        keyword = data['keyword']
-
-        success = database.add_category_keyword(category, keyword)
-
-        if success:
-            # Reload rules in categorizer
-            from mcp.categorizer import rebuild_keyword_lookup
-            rebuild_keyword_lookup()
-
-            return jsonify({'success': True, 'category': category, 'keyword': keyword})
-        else:
-            return jsonify({'error': 'Keyword already exists for this category'}), 400
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rules/keywords', methods=['DELETE'])
-def remove_keyword():
-    """Remove a keyword from a category."""
-    try:
-        data = request.json
-
-        if 'category' not in data or 'keyword' not in data:
-            return jsonify({'error': 'Missing category or keyword'}), 400
-
-        category = data['category']
-        keyword = data['keyword']
-
-        success = database.remove_category_keyword(category, keyword)
-
-        if success:
-            # Reload rules in categorizer
-            from mcp.categorizer import rebuild_keyword_lookup
-            rebuild_keyword_lookup()
-
-            return jsonify({'success': True, 'category': category, 'keyword': keyword})
-        else:
-            return jsonify({'error': 'Keyword not found'}), 404
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rules/categories', methods=['POST'])
-def create_category():
-    """Create a new custom category."""
-    try:
-        data = request.json
-
-        if 'name' not in data:
-            return jsonify({'error': 'Missing category name'}), 400
-
-        name = data['name']
-
-        success = database.create_custom_category(name)
-
-        if success:
-            return jsonify({'success': True, 'name': name}), 201
-        else:
-            return jsonify({'error': 'Category already exists'}), 400
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rules/categories/<string:name>', methods=['DELETE'])
-def delete_category(name):
-    """Delete a custom category."""
-    try:
-        success = database.delete_custom_category(name)
-
-        if success:
-            # Reload rules in categorizer
-            from mcp.categorizer import rebuild_keyword_lookup
-            rebuild_keyword_lookup()
-
-            return jsonify({'success': True, 'name': name})
-        else:
-            return jsonify({'error': 'Cannot delete default category or category not found'}), 400
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rules/preview', methods=['POST'])
-def preview_rules():
-    """Preview what would change if rules are re-applied."""
-    try:
-        data = request.json
-        filters = data.get('filters', {'only_other': True})
-
-        transactions = database.get_all_transactions()
-
-        from mcp.categorizer import preview_recategorization
-        changes = preview_recategorization(transactions, filters)
-
-        return jsonify({
-            'changes': changes,
-            'count': len(changes)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rules/apply', methods=['POST'])
-def apply_rules():
-    """Apply rules to selected transactions."""
-    try:
-        data = request.json
-        transaction_ids = data.get('transaction_ids', [])
-
-        if not transaction_ids:
-            return jsonify({'error': 'No transactions selected'}), 400
-
-        # Get transactions and re-categorize
-        transactions = database.get_all_transactions()
-        txn_map = {txn['id']: txn for txn in transactions}
-
-        from mcp.categorizer import categorize_transaction
-
-        updated_count = 0
-        for txn_id in transaction_ids:
-            if txn_id in txn_map:
-                txn = txn_map[txn_id]
-                new_category = categorize_transaction(
-                    description=txn.get('description', ''),
-                    merchant=txn.get('merchant', ''),
-                    amount=txn.get('amount', 0.0)
-                )
-
-                # Update in database
-                database.update_transaction_category(txn_id, new_category)
-                updated_count += 1
-
-        return jsonify({
-            'success': True,
-            'updated': updated_count
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/rules/suggestions', methods=['GET'])
-def get_keyword_suggestions():
-    """Get AI-powered keyword suggestions from 'Other' category transactions."""
-    try:
-        # Get query parameters
-        min_frequency = int(request.args.get('min_frequency', 3))
-        min_confidence = float(request.args.get('min_confidence', 40.0))
-        max_doc_frequency = float(request.args.get('max_doc_frequency', 0.3))
-
-        # Get transactions and rules
-        transactions = database.get_all_transactions()
-        from mcp.categorizer import get_category_rules
-        rules = get_category_rules()
-
-        # Analyze and get suggestions
-        from mcp.keyword_analyzer import get_keyword_suggestions as get_suggestions
-        suggestions_data = get_suggestions(
-            transactions,
-            rules,
-            min_frequency=min_frequency,
-            min_confidence=min_confidence,
-            max_doc_frequency=max_doc_frequency
-        )
-
-        return jsonify(suggestions_data)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/migrations/normalize-merchants/preview', methods=['GET'])
@@ -549,7 +411,14 @@ def normalize_merchants():
 
                 if original_merchant != normalized_merchant:
                     # Update the merchant in database
-                    database.update_merchant(txn['id'], normalized_merchant)
+                    with database.get_db() as conn:
+                        c = conn.cursor()
+                        c.execute('''
+                            UPDATE transactions
+                            SET merchant = ?
+                            WHERE id = ?
+                        ''', (normalized_merchant, txn['id']))
+                        conn.commit()
 
                     updated_count += 1
                     changes.append({
@@ -564,6 +433,209 @@ def normalize_merchants():
             'updated_count': updated_count,
             'sample_changes': changes[:20]  # Show first 20 examples
         })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-paypal-merchants/preview', methods=['GET'])
+def preview_fix_paypal_merchants():
+    """Preview what would change if PayPal merchants are extracted from descriptions."""
+    try:
+        changes = database.fix_paypal_merchants_preview()
+
+        return jsonify({
+            'changes': changes,
+            'count': len(changes),
+            'message': f'{len(changes)} PayPal transaction(s) would be updated'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-paypal-merchants', methods=['POST'])
+def fix_paypal_merchants():
+    """Extract real merchant names from PayPal transactions and update the database."""
+    try:
+        result = database.fix_paypal_merchants()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-via-apple-pay-merchants/preview', methods=['GET'])
+def preview_fix_via_apple_pay_merchants():
+    """Preview what would change if VIA APPLE PAY merchants are extracted from descriptions."""
+    try:
+        changes = database.fix_via_apple_pay_merchants_preview()
+
+        return jsonify({
+            'changes': changes,
+            'count': len(changes),
+            'message': f'{len(changes)} VIA APPLE PAY transaction(s) would be updated'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-via-apple-pay-merchants', methods=['POST'])
+def fix_via_apple_pay_merchants():
+    """Extract real merchant names from VIA APPLE PAY transactions and update the database."""
+    try:
+        result = database.fix_via_apple_pay_merchants()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-zettle-merchants/preview', methods=['GET'])
+def preview_fix_zettle_merchants():
+    """Preview what would change if Zettle merchants are extracted from descriptions."""
+    try:
+        changes = database.fix_zettle_merchants_preview()
+
+        return jsonify({
+            'changes': changes,
+            'count': len(changes),
+            'message': f'{len(changes)} Zettle transaction(s) would be updated'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-zettle-merchants', methods=['POST'])
+def fix_zettle_merchants():
+    """Extract real merchant names from Zettle transactions and update the database."""
+    try:
+        result = database.fix_zettle_merchants()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-bill-payment-merchants/preview', methods=['GET'])
+def preview_fix_bill_payment_merchants():
+    """Preview what would change if bill payment merchants are extracted from descriptions."""
+    try:
+        changes = database.fix_bill_payment_merchants_preview()
+
+        return jsonify({
+            'changes': changes,
+            'count': len(changes),
+            'message': f'{len(changes)} bill payment transaction(s) would be updated'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-bill-payment-merchants', methods=['POST'])
+def fix_bill_payment_merchants():
+    """Extract merchant names from bill payment transactions and update the database."""
+    try:
+        result = database.fix_bill_payment_merchants()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-bank-giro-merchants/preview', methods=['GET'])
+def preview_fix_bank_giro_merchants():
+    """Preview what would change if bank giro merchants are extracted from descriptions."""
+    try:
+        changes = database.fix_bank_giro_merchants_preview()
+
+        return jsonify({
+            'changes': changes,
+            'count': len(changes),
+            'message': f'{len(changes)} bank giro transaction(s) would be updated'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-bank-giro-merchants', methods=['POST'])
+def fix_bank_giro_merchants():
+    """Extract merchant names from bank giro transactions and update the database."""
+    try:
+        result = database.fix_bank_giro_merchants()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-direct-debit-merchants/preview', methods=['GET'])
+def preview_fix_direct_debit_merchants():
+    """Preview what would change if direct debit merchants are extracted from descriptions."""
+    try:
+        changes = database.fix_direct_debit_merchants_preview()
+
+        return jsonify({
+            'changes': changes,
+            'count': len(changes),
+            'message': f'{len(changes)} direct debit transaction(s) would be updated'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-direct-debit-merchants', methods=['POST'])
+def fix_direct_debit_merchants():
+    """Extract real merchant names from direct debit transactions and update the database."""
+    try:
+        result = database.fix_direct_debit_merchants()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/normalize-merchants', methods=['POST'])
+def normalize_merchants():
+    """Normalize all merchant names in existing transactions."""
+    try:
+        transactions = database.get_all_transactions()
+        from mcp.merchant_normalizer import normalize_merchant_name
+
+        updated_count = 0
+        changes = []
+
+        for txn in transactions:
+            original_merchant = txn.get('merchant')
+            if original_merchant:
+                normalized_merchant = normalize_merchant_name(original_merchant)
+
+                if original_merchant != normalized_merchant:
+                    # Update the merchant in database
+                    with database.get_db() as conn:
+                        c = conn.cursor()
+                        c.execute('''
+                            UPDATE transactions
+                            SET merchant = ?
+                            WHERE id = ?
+                        ''', (normalized_merchant, txn['id']))
+                        conn.commit()
+
+                    updated_count += 1
+                    changes.append({
+                        'transaction_id': txn['id'],
+                        'original': original_merchant,
+                        'normalized': normalized_merchant,
+                        'description': txn.get('description', '')[:50]
+                    })
+
+        return jsonify({
+            'changes': changes,
+            'count': len(changes),
+            'message': f'{len(changes)} card payment transaction(s) would be updated'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/fix-card-payment-merchants', methods=['POST'])
+def fix_card_payment_merchants():
+    """Extract real merchant names from card payment transactions and update the database."""
+    try:
+        result = database.fix_card_payment_merchants()
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -777,15 +849,6 @@ def get_unclassified_transactions():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/huququllah/category-patterns', methods=['GET'])
-def get_category_patterns():
-    """Get classification patterns for each category."""
-    try:
-        from mcp.huququllah_classifier import get_category_classification_patterns
-        patterns = get_category_classification_patterns()
-        return jsonify(patterns)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/migrations/add-huququllah-column', methods=['POST'])
@@ -797,6 +860,29 @@ def migrate_huququllah_column():
             'success': True,
             'column_added': was_added,
             'message': 'Migration completed successfully' if was_added else 'Column already exists'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/migrations/refresh-lookup-descriptions', methods=['POST'])
+def refresh_lookup_descriptions():
+    """
+    Refresh lookup_description field for all matched Amazon and Apple transactions.
+
+    This endpoint repopulates the lookup_description field based on current matches
+    in the amazon_transaction_matches and apple_transaction_matches tables.
+    """
+    try:
+        result = database.populate_lookup_descriptions()
+        return jsonify({
+            'success': True,
+            'message': f"Updated {result['total']} lookup descriptions",
+            'updated': {
+                'total': result['total'],
+                'amazon': result['amazon'],
+                'apple': result['apple']
+            }
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -972,6 +1058,43 @@ def list_amazon_files():
             'files': file_list,
             'count': len(file_list)
         })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/amazon/upload', methods=['POST'])
+def upload_amazon_file():
+    """Upload an Amazon CSV file."""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+
+        file = request.files['file']
+
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+
+        if not file.filename.lower().endswith('.csv'):
+            return jsonify({'error': 'Only CSV files are allowed'}), 400
+
+        # Save the file to the sample folder
+        import os
+        sample_folder = os.path.join(os.path.dirname(__file__), '..', 'sample')
+        os.makedirs(sample_folder, exist_ok=True)
+
+        # Sanitize filename
+        filename = os.path.basename(file.filename)
+        filepath = os.path.join(sample_folder, filename)
+
+        # Save file
+        file.save(filepath)
+
+        return jsonify({
+            'success': True,
+            'message': f'File uploaded successfully: {filename}',
+            'filename': filename
+        }), 201
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

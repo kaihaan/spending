@@ -11,6 +11,8 @@ export default function FileList() {
   const [importing, setImporting] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
   const [coverageWarning, setCoverageWarning] = useState<any>(null);
+  const [autoEnrich, setAutoEnrich] = useState(false);
+  const [llmEnrichmentStats, setLlmEnrichmentStats] = useState<any>(null);
 
   useEffect(() => {
     fetchFiles();
@@ -36,9 +38,11 @@ export default function FileList() {
       setImportSuccess(null);
       setError(null);
       setCoverageWarning(null);
+      setLlmEnrichmentStats(null);
 
       const response = await axios.post<any>(`${API_URL}/import`, {
-        filename: filename
+        filename: filename,
+        auto_enrich: autoEnrich
       });
 
       // Build success message
@@ -50,6 +54,13 @@ export default function FileList() {
         if (total_processed > 0) {
           successMessage += `\n\nAmazon Matching: ${matched} of ${total_processed} Amazon transactions enriched`;
         }
+      }
+
+      // Add LLM enrichment info if available
+      if (response.data.llm_enrichment) {
+        const llmStats = response.data.llm_enrichment;
+        setLlmEnrichmentStats(llmStats);
+        successMessage += `\n\nLLM Enrichment: ${llmStats.successful} successful, ${llmStats.failed} failed (Cost: $${llmStats.total_cost.toFixed(4)})`;
       }
 
       setImportSuccess(successMessage);
@@ -111,6 +122,24 @@ export default function FileList() {
 
   return (
     <div className="space-y-4">
+      {/* Auto-enrich option */}
+      <div className="card bg-base-100 border border-base-300">
+        <div className="card-body py-4">
+          <label className="label cursor-pointer justify-start gap-3">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-sm"
+              checked={autoEnrich}
+              onChange={(e) => setAutoEnrich(e.target.checked)}
+            />
+            <span className="label-text">Auto-enrich with LLM during import</span>
+          </label>
+          <p className="text-xs text-base-content/60 ml-8">
+            Automatically categorize and enrich transactions using configured AI provider. May incur costs.
+          </p>
+        </div>
+      </div>
+
       {importSuccess && (
         <div className="alert alert-success">
           <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">

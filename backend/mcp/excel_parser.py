@@ -176,17 +176,289 @@ def clean_currency_value(value):
         return None
 
 
+def extract_card_payment_merchant(description):
+    """
+    Extract merchant name from card payment transactions.
+
+    Pattern: "CARD PAYMENT TO {MERCHANT}{*{ref} OR -{ref}} ON {date}"
+    Supports various formats with optional asterisk/dash and reference numbers.
+
+    Special cases:
+    - Uber *ONE -> "Uber One" (special service)
+    - Uber *EATS -> "Uber" (ignore Eats suffix)
+    - Zipcar Trip -> "Zipcar" (ignore trip details)
+    - Bandcamp variations -> "Bandcamp"
+
+    Examples:
+        "CARD PAYMENT TO AIRBNB * HM4EFPXHB8 ON 30-09-2025" -> "AIRBNB"
+        "CARD PAYMENT TO LIME*3 RIDES 7RUI ON 28-09-2025" -> "LIME"
+        "CARD PAYMENT TO Microsoft-G113688814 ON 15-09-2025" -> "Microsoft"
+        "CARD PAYMENT TO HSBC - Teya ON 15-01-2025" -> "HSBC - Teya"
+        "CARD PAYMENT TO UBER *ONE ON 14-09-2025" -> "Uber One"
+        "CARD PAYMENT TO UBER *EATS ON 12-09-2025" -> "Uber"
+        "CARD PAYMENT TO Zipcar Trip SEP06 ON 06-09-2025" -> "Zipcar"
+        "CARD PAYMENT TO BANDCAMPLESDISQUESBO ,9.60 EUR, RATE 0.8" -> "Bandcamp"
+
+    Args:
+        description: Transaction description
+
+    Returns:
+        Extracted merchant name if card payment transaction, None otherwise
+    """
+    if not description or 'CARD PAYMENT TO' not in description.upper():
+        return None
+
+    # Match merchant name after "CARD PAYMENT TO"
+    # Stop at: *, " ON ", comma, or end of string
+    # Allow hyphens in merchant names (e.g., "HSBC - Teya")
+    match = re.search(r'CARD PAYMENT TO\s+(.+?)(?:\s*\*|\s+ON\s+|,|\s*$)', description, re.IGNORECASE)
+
+    if not match:
+        return None
+
+    merchant = match.group(1).strip()
+
+    if not merchant:
+        return None
+
+    # Remove reference codes that appear after a hyphen with no space: -XXXXXX
+    # Example: "Microsoft-G113688814" -> "Microsoft"
+    # This preserves hyphens with spaces like "HSBC - Teya"
+    merchant = re.sub(r'-[A-Z0-9]+$', '', merchant)
+
+    # Special case: Bandcamp (contains "BANDCAMP" in merchant name)
+    if 'BANDCAMP' in merchant.upper():
+        return 'Bandcamp'
+
+    # Special case: Zipcar (contains "ZIPCAR" and "TRIP" in description)
+    if 'ZIPCAR' in merchant.upper() and 'TRIP' in description.upper():
+        return 'Zipcar'
+
+    # Special case: Uber *ONE -> "Uber One" (specific service)
+    if merchant.upper() == 'UBER' and re.search(r'\*\s*ONE', description, re.IGNORECASE):
+        return 'Uber One'
+
+    # Special case: Uber *EATS -> "Uber" (ignore Eats suffix, return base Uber)
+    if merchant.upper() == 'UBER' and re.search(r'\*\s*EATS', description, re.IGNORECASE):
+        return 'Uber'
+
+    return merchant
+
+
+def extract_direct_debit_merchant(description):
+    """
+    Extract merchant name from direct debit transactions with REF pattern.
+
+    Direct debit transactions have the merchant between "Direct debit payment to" and "REF".
+    Examples:
+        "Direct debit payment to THAMES WATER REF 123456789" -> "THAMES WATER"
+        "DIRECT DEBIT PAYMENT TO BRITISH GAS REF ABC123" -> "BRITISH GAS"
+
+    Args:
+        description: Transaction description
+
+    Returns:
+        Extracted merchant name if direct debit REF transaction, None otherwise
+    """
+    if not description or 'DIRECT DEBIT PAYMENT TO' not in description.upper() or 'REF' not in description.upper():
+        return None
+
+    # Look for pattern: DIRECT DEBIT PAYMENT TO {MERCHANT} REF
+    # Capture merchant name between "DIRECT DEBIT PAYMENT TO" and "REF"
+    match = re.search(r'DIRECT DEBIT PAYMENT TO\s+([A-Z0-9\s]+?)\s+REF', description, re.IGNORECASE)
+
+    if match:
+        merchant = match.group(1).strip()
+        # Clean up - remove trailing numbers/codes if present
+        merchant = re.sub(r'\s+\d+$', '', merchant)
+        if merchant:
+            return merchant
+
+    return None
+
+
+def extract_zettle_merchant(description):
+    """
+    Extract real merchant name from Zettle transactions.
+
+    Zettle transactions have the real merchant embedded after ZETTLE_*.
+    Examples:
+        "ZETTLE_*HAGEN ESPRESSO" -> "HAGEN ESPRESSO"
+        "ZETTLE_*NETFLIX ON 26-06-2025" -> "NETFLIX"
+
+    Args:
+        description: Transaction description
+
+    Returns:
+        Extracted merchant name if Zettle transaction, None otherwise
+    """
+    if not description or 'ZETTLE' not in description.upper():
+        return None
+
+    # Look for pattern: ZETTLE_*MERCHANTNAME
+    # Match ZETTLE_* followed by merchant name
+    match = re.search(r'ZETTLE_\*([A-Z0-9\s]+?)(?:\s+ON\s+\d{1,2}|\s+[A-Z]{2}(?:\s|$)|\s*$)', description, re.IGNORECASE)
+
+    if match:
+        merchant = match.group(1).strip()
+        # Clean up - remove trailing numbers/codes if present
+        merchant = re.sub(r'\s+\d+$', '', merchant)
+        if merchant:
+            return merchant
+
+    return None
+
+
+def extract_via_apple_pay_merchant(description):
+    """
+    Extract merchant name from VIA APPLE PAY transactions.
+
+    VIA APPLE PAY transactions have the merchant name BEFORE the "(VIA APPLE PAY)" text.
+    Examples:
+        "HIGHGATE WHOLEFOODS (VIA APPLE PAY), ON 16-05-2025" -> "HIGHGATE WHOLEFOODS"
+        "SAINSBURYS (VIA APPLE PAY)" -> "SAINSBURYS"
+
+    Args:
+        description: Transaction description
+
+    Returns:
+        Extracted merchant name if VIA APPLE PAY transaction, None otherwise
+    """
+    if not description or 'VIA APPLE PAY' not in description.upper():
+        return None
+
+    # Look for pattern: MERCHANTNAME (VIA APPLE PAY)
+    # Extract everything before "(VIA APPLE PAY)"
+    match = re.search(r'^(.+?)\s*\(VIA APPLE PAY\)', description, re.IGNORECASE)
+
+    if match:
+        merchant = match.group(1).strip()
+        # Clean up - remove trailing numbers/codes if present
+        merchant = re.sub(r'\s+\d+$', '', merchant)
+        if merchant:
+            return merchant
+
+    return None
+
+
+def extract_paypal_merchant(description):
+    """
+    Extract real merchant name from PayPal transactions.
+
+    PayPal transactions have the real merchant embedded after an asterisk.
+    Examples:
+        "CARD PAYMENT TO PAYPAL *NETFLIX ON 26-06-2025" -> "NETFLIX"
+        "PAYPAL *AMAZON" -> "AMAZON"
+
+    Args:
+        description: Transaction description
+
+    Returns:
+        Extracted merchant name if PayPal transaction, None otherwise
+    """
+    if not description or 'PAYPAL' not in description.upper():
+        return None
+
+    # Look for pattern: *MERCHANTNAME
+    # Match asterisk followed by merchant name (letters, spaces, digits)
+    # Use greedy matching to capture full merchant name up to date or location code
+    match = re.search(r'\*([A-Z0-9\s]+?)(?:\s+ON\s+\d{1,2}|\s+[A-Z]{2}(?:\s|$)|\s*$)', description, re.IGNORECASE)
+
+    if match:
+        merchant = match.group(1).strip()
+        # Clean up - remove trailing numbers/codes if present
+        merchant = re.sub(r'\s+\d+$', '', merchant)
+        if merchant:
+            return merchant
+
+    return None
+
+
+def extract_bank_giro_merchant(description):
+    """
+    Extract merchant name from Bank Giro Credit transactions.
+
+    Bank Giro Credit transactions have the merchant name after "REF".
+    Examples:
+        "BANK GIRO CREDIT REF CITI PAYROLL, SALARY" -> "CITI PAYROLL, SALARY"
+        "BANK GIRO CREDIT REF EMPLOYER PAYMENT" -> "EMPLOYER PAYMENT"
+
+    Args:
+        description: Transaction description
+
+    Returns:
+        Extracted merchant name if Bank Giro Credit transaction, None otherwise
+    """
+    if not description or 'BANK GIRO CREDIT' not in description.upper():
+        return None
+
+    # Look for pattern: BANK GIRO CREDIT REF {MERCHANT}
+    # Capture everything after "REF " until end of string
+    match = re.search(r'BANK GIRO CREDIT\s+REF\s+(.+)$', description, re.IGNORECASE)
+
+    if match:
+        merchant = match.group(1).strip()
+        if merchant:
+            return merchant
+
+    return None
+
+
+def extract_bill_payment_merchant(description):
+    """
+    Extract merchant name from Bill Payment via Faster Payment transactions.
+
+    Bill Payment transactions have the merchant name after "TO".
+    Examples:
+        "BILL PAYMENT VIA FASTER PAYMENT TO BRITISH GAS REFE ABC123" -> "BRITISH GAS"
+        "BILL PAYMENT VIA FASTER PAYMENT TO THAMES WATER REFEREN 123" -> "THAMES WATER"
+
+    Args:
+        description: Transaction description
+
+    Returns:
+        Extracted merchant name if Bill Payment transaction, None otherwise
+    """
+    if not description or 'BILL PAYMENT VIA FASTER PAYMENT TO' not in description.upper():
+        return None
+
+    # Look for pattern: BILL PAYMENT VIA FASTER PAYMENT TO {MERCHANT} REFEREN...
+    # Match everything between "TO " and either " REFE", " REFEREN", " REF" or end of string
+    match = re.search(r'BILL PAYMENT VIA FASTER PAYMENT TO\s+(.+?)(?:\s+REF(?:E|EREN)?|\s*$)', description, re.IGNORECASE)
+
+    if match:
+        merchant = match.group(1).strip()
+        if merchant:
+            return merchant
+
+    return None
+
+
 def extract_merchant(description):
     """
     Extract merchant name from transaction description.
 
-    This is a simple heuristic that takes the first few words.
-    Can be enhanced with more sophisticated parsing later.
+    Tries specific patterns first (highest priority) then falls back to generic extraction.
+    Priority order:
+    1. Bill Payment via Faster Payment (has REF delimiter)
+    2. Bank Giro Credit (has REF delimiter)
+    3. Direct debit with REF pattern (most specific - has delimiters on both sides)
+    2. Card payment to merchant (very specific pattern)
+    3. VIA APPLE PAY (payment method but merchant is before it)
+    4. Zettle (real merchant is after ZETTLE_*)
+    5. PayPal (real merchant is after PAYPAL *)
+    6. Generic extraction (fallback)
 
     Examples:
+        "BILL PAYMENT VIA FASTER PAYMENT TO BRITISH GAS REFE ABC123" -> "BRITISH GAS"
+        "BANK GIRO CREDIT REF CITI PAYROLL, SALARY" -> "CITI PAYROLL, SALARY"
+        "Direct debit payment to THAMES WATER REF 123456789" -> "THAMES WATER"
+        "CARD PAYMENT TO AIRBNB * HM4EFPXHB8 ON 30-09-2025" -> "AIRBNB"
+        "CARD PAYMENT TO UBER *ONE ON 14-09-2025" -> "Uber One"
+        "HIGHGATE WHOLEFOODS (VIA APPLE PAY), ON 16-05-2025" -> "HIGHGATE WHOLEFOODS"
+        "ZETTLE_*HAGEN ESPRESSO" -> "HAGEN ESPRESSO"
+        "CARD PAYMENT TO PAYPAL *NETFLIX ON 26-06-2025" -> "NETFLIX"
         "TESCO STORES 1234 LONDON" -> "TESCO STORES"
-        "AMAZON PRIME MEMBERSHIP" -> "AMAZON PRIME"
-        "DIRECT DEBIT PAYMENT TO THAMES WATER" -> "THAMES WATER"
 
     Args:
         description: Raw transaction description
@@ -194,6 +466,46 @@ def extract_merchant(description):
     Returns:
         Extracted merchant name
     """
+    # Try bill payment via faster payment extraction first (has REF delimiter)
+    bill_payment_merchant = extract_bill_payment_merchant(description)
+    if bill_payment_merchant:
+        return bill_payment_merchant
+
+    # Try bank giro credit extraction (has specific REF delimiter)
+    bank_giro_merchant = extract_bank_giro_merchant(description)
+    if bank_giro_merchant:
+        return bank_giro_merchant
+
+    # Try direct debit with REF pattern (most specific - has delimiters on both sides)
+    direct_debit_merchant = extract_direct_debit_merchant(description)
+    if direct_debit_merchant:
+        return direct_debit_merchant
+
+    # Try card payment extraction (very specific pattern)
+    card_payment_merchant = extract_card_payment_merchant(description)
+    if card_payment_merchant:
+        # Special case: if card payment extracted "PAYPAL", check if PayPal extraction finds the real merchant
+        # Example: "CARD PAYMENT TO PAYPAL *NETFLIX" should return "NETFLIX", not "PAYPAL"
+        if card_payment_merchant.upper() == 'PAYPAL':
+            paypal_merchant = extract_paypal_merchant(description)
+            if paypal_merchant:
+                return paypal_merchant
+        return card_payment_merchant
+
+    # Try VIA APPLE PAY extraction (payment method but merchant is before it)
+    via_apple_pay_merchant = extract_via_apple_pay_merchant(description)
+    if via_apple_pay_merchant:
+        return via_apple_pay_merchant
+
+    # Try Zettle extraction (real merchant is after ZETTLE_*)
+    zettle_merchant = extract_zettle_merchant(description)
+    if zettle_merchant:
+        return zettle_merchant
+
+    # Try PayPal extraction (real merchant is after PAYPAL *)
+    paypal_merchant = extract_paypal_merchant(description)
+    if paypal_merchant:
+        return paypal_merchant
     # Remove common prefixes
     prefixes_to_remove = [
         'DIRECT DEBIT PAYMENT TO ',
@@ -210,8 +522,9 @@ def extract_merchant(description):
             cleaned = cleaned[len(prefix):]
             break
 
-    # Remove card numbers (4 digits at the end)
-    cleaned = re.sub(r'\s+\d{4}$', '', cleaned)
+    # Remove card numbers (4 digits at the end or in the middle followed by space)
+    # This handles: "TESCO STORES 1234 LONDON" and "TESCO 1234"
+    cleaned = re.sub(r'\s+\d{4}(?:\s|$)', ' ', cleaned)
 
     # Remove location codes (like "LONDON", "GB")
     cleaned = re.sub(r'\s+[A-Z]{2,}$', '', cleaned)

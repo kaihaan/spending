@@ -3,7 +3,8 @@ import axios from 'axios';
 import AmazonOrderHistory from '../components/AmazonOrderHistory';
 import AmazonReturns from '../components/AmazonReturns';
 import AppleTransactions from '../components/AppleTransactions';
-import TrueLayerIntegration from '../components/TrueLayerIntegration';
+import LookupDescriptionRefresh from '../components/LookupDescriptionRefresh';
+import LLMEnrichmentSettings from '../components/LLMEnrichmentSettings';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -467,6 +468,12 @@ export default function Settings() {
 
       {/* Apple Transactions Section */}
       <AppleTransactions />
+
+      {/* Lookup Description Refresh Section */}
+      <LookupDescriptionRefresh />
+
+      {/* LLM Enrichment Section */}
+      <LLMEnrichmentSettings />
 
       {/* Add Mapping Dialog */}
       {showAddDialog && (

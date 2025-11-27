@@ -21,13 +21,12 @@ export default function Navigation() {
     { path: '/transactions', label: 'Transactions', icon: '💳' },
     { path: '/huququllah', label: 'Huququllah', icon: '💝' },
     { path: '/import', label: 'Import', icon: '📂' },
-    { path: '/rules', label: 'Rules', icon: '⚙️' },
     { path: '/settings', label: 'Settings', icon: '🔧' },
     { path: '/auth/callback', label: 'OAuth Callback', icon: '🔐', hidden: true },
   ];
 
   return (
-    <div className="navbar bg-base-300 shadow-lg">
+    <div className="navbar bg-base-300 shadow-lg sticky top-0 z-50">
       <div className="navbar-start">
         <div className="dropdown">
           <label

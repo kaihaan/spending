@@ -26,3 +26,6 @@ backup_*.sql
 .DS_Store
 *.swp
 *.swo
+
+# sample finance data
+sample/

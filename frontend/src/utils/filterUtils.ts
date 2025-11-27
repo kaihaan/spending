@@ -2,6 +2,7 @@ import type { Transaction } from '../types';
 
 export interface TransactionFilters {
   selectedCategory: string;
+  selectedSubcategory: string; // empty string means no subcategory filter
   dateFrom: string;
   dateTo: string;
   searchKeyword: string;
@@ -9,6 +10,7 @@ export interface TransactionFilters {
 
 export const DEFAULT_FILTERS: TransactionFilters = {
   selectedCategory: 'All',
+  selectedSubcategory: '',
   dateFrom: '',
   dateTo: '',
   searchKeyword: ''
@@ -46,6 +48,11 @@ export const saveFilters = (filters: TransactionFilters): void => {
 export const applyFilters = (txn: Transaction, filters: TransactionFilters): boolean => {
   // Category filter
   if (filters.selectedCategory !== 'All' && txn.category !== filters.selectedCategory) {
+    return false;
+  }
+
+  // Subcategory filter (only applies if category is selected and subcategory is set)
+  if (filters.selectedSubcategory && txn.subcategory !== filters.selectedSubcategory) {
     return false;
   }
 
@@ -94,4 +101,52 @@ export const getFilteredCountForCategory = (
 ): number => {
   const categoryFilters = { ...filters, selectedCategory: category };
   return transactions.filter(txn => applyFilters(txn, categoryFilters)).length;
+};
+
+/**
+ * Extract all unique primary categories from transactions (sorted alphabetically)
+ */
+export const getUniqueCategories = (transactions: Transaction[]): string[] => {
+  const categories = new Set<string>();
+
+  transactions.forEach(txn => {
+    if (txn.category) {
+      categories.add(txn.category);
+    }
+  });
+
+  return Array.from(categories).sort();
+};
+
+/**
+ * Extract all unique subcategories from transactions (sorted alphabetically)
+ */
+export const getUniqueSubcategories = (transactions: Transaction[]): string[] => {
+  const subcategories = new Set<string>();
+
+  transactions.forEach(txn => {
+    if (txn.subcategory) {
+      subcategories.add(txn.subcategory);
+    }
+  });
+
+  return Array.from(subcategories).sort();
+};
+
+/**
+ * Get subcategories for a specific category (sorted alphabetically)
+ */
+export const getSubcategoriesForCategory = (
+  transactions: Transaction[],
+  category: string
+): string[] => {
+  const subcategories = new Set<string>();
+
+  transactions.forEach(txn => {
+    if (txn.category === category && txn.subcategory) {
+      subcategories.add(txn.subcategory);
+    }
+  });
+
+  return Array.from(subcategories).sort();
 };

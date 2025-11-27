@@ -11,7 +11,7 @@ import database
 def match_all_amazon_transactions():
     """
     Run fuzzy matching on all unmatched Amazon transactions.
-    Finds matches in the Amazon orders database and updates transaction descriptions.
+    Finds matches in the Amazon orders database and populates lookup descriptions.
 
     Returns:
         Dictionary with matching statistics
@@ -46,8 +46,8 @@ def match_all_amazon_transactions():
             )
 
             if success:
-                # Update transaction description with product names
-                database.update_transaction_description(
+                # Populate lookup_description with product names (keep original description)
+                database.update_transaction_lookup_description(
                     transaction['id'],
                     match['product_names']
                 )
@@ -58,7 +58,7 @@ def match_all_amazon_transactions():
                     'order_id': match['order_id'],
                     'confidence': match['confidence'],
                     'original_description': transaction['description'],
-                    'new_description': match['product_names']
+                    'product_names': match['product_names']
                 })
 
     return {
@@ -247,8 +247,8 @@ def rematch_transaction(transaction_id):
             match['confidence']
         )
 
-        # Update description
-        database.update_transaction_description(
+        # Populate lookup_description with product names (keep original description)
+        database.update_transaction_lookup_description(
             transaction_id,
             match['product_names']
         )

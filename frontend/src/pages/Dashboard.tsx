@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { Transaction, Category } from '../types';
-import { getCategoryColor, ALL_CATEGORIES } from '../utils/categoryColors';
+import { getCategoryColor } from '../utils/categoryColors';
 import {
   loadFilters,
   saveFilters,
   getFilteredTransactions,
   getFilteredCountForCategory,
+  getUniqueCategories,
+  getSubcategoriesForCategory,
   type TransactionFilters
 } from '../utils/filterUtils';
 
@@ -50,12 +52,18 @@ export default function Dashboard() {
   };
 
   const updateFilter = (key: keyof TransactionFilters, value: string) => {
-    setFilters(prev => ({ ...prev, [key]: value }));
+    const newFilters = { ...filters, [key]: value };
+    // Clear subcategory when category changes
+    if (key === 'selectedCategory') {
+      newFilters.selectedSubcategory = '';
+    }
+    setFilters(newFilters);
   };
 
   const clearAllFilters = () => {
     setFilters({
       selectedCategory: 'All',
+      selectedSubcategory: '',
       dateFrom: '',
       dateTo: '',
       searchKeyword: ''
@@ -72,8 +80,11 @@ export default function Dashboard() {
     );
   }
 
+  // Get all unique categories from transactions
+  const uniqueCategories = getUniqueCategories(transactions);
+
   // Process data for category bar chart
-  const categoryData = ALL_CATEGORIES
+  const categoryData = uniqueCategories
     .map(category => {
       const categoryTransactions = filteredTransactions.filter(
         txn => txn.category === category && txn.amount < 0
@@ -211,27 +222,65 @@ export default function Dashboard() {
             </div>
 
             {/* Category Filter */}
-            <div className="flex flex-wrap gap-2">
-              <button
-                className={`btn btn-sm ${filters.selectedCategory === 'All' ? 'btn-primary' : 'btn-ghost'}`}
+            <div className="flex flex-wrap gap-2 items-center">
+              <span
                 onClick={() => updateFilter('selectedCategory', 'All')}
+                className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${filters.selectedCategory === 'All'
+                    ? 'badge-primary scale-110'
+                    : 'badge-ghost hover:scale-105'
+                  }`}
               >
                 All ({getFilteredCountForCategory(transactions, filters, 'All')})
-              </button>
-              {ALL_CATEGORIES.map(cat => {
+              </span>
+              {uniqueCategories.map(cat => {
                 const count = getFilteredCountForCategory(transactions, filters, cat);
                 if (count === 0) return null;
                 return (
-                  <button
+                  <span
                     key={cat}
-                    className={`btn btn-sm ${filters.selectedCategory === cat ? 'btn-primary' : 'btn-ghost'}`}
                     onClick={() => updateFilter('selectedCategory', cat)}
+                    className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${getCategoryColor(cat)} ${filters.selectedCategory === cat ? 'scale-110' : 'hover:scale-105'
+                      }`}
                   >
                     {cat} ({count})
-                  </button>
+                  </span>
                 );
               })}
             </div>
+
+            {/* Subcategory Filter (shown when a category is selected) */}
+            {filters.selectedCategory !== 'All' && (
+              <div className="flex flex-wrap gap-2 ml-4 items-center">
+                <span className="text-sm font-semibold">Subcategories:</span>
+                <span
+                  onClick={() => updateFilter('selectedSubcategory', '')}
+                  className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${!filters.selectedSubcategory
+                      ? 'badge-primary scale-105'
+                      : 'badge-ghost hover:scale-105'
+                    }`}
+                >
+                  All
+                </span>
+                {getSubcategoriesForCategory(transactions, filters.selectedCategory).map(subcat => {
+                  const subcount = transactions.filter(
+                    txn =>
+                      txn.category === filters.selectedCategory &&
+                      txn.subcategory === subcat
+                  ).length;
+                  if (subcount === 0) return null;
+                  return (
+                    <span
+                      key={subcat}
+                      onClick={() => updateFilter('selectedSubcategory', subcat)}
+                      className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${getCategoryColor(filters.selectedCategory)
+                        } ${filters.selectedSubcategory === subcat ? 'scale-105' : 'hover:scale-105'}`}
+                    >
+                      {subcat} ({subcount})
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Chart View Toggle */}
