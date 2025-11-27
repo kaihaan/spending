@@ -57,7 +57,7 @@ export default function AmazonOrderHistory() {
 
       // Fetch available files and statistics in parallel
       const [filesRes, statsRes] = await Promise.all([
-        axios.get<{files: AmazonFile[], count: number}>(`${API_URL}/amazon/files`),
+        axios.get<{ files: AmazonFile[], count: number }>(`${API_URL}/amazon/files`),
         axios.get<AmazonStats>(`${API_URL}/amazon/statistics`)
       ]);
 
@@ -191,7 +191,7 @@ export default function AmazonOrderHistory() {
   const toggleShowOrders = async () => {
     if (!showOrders && orders.length === 0) {
       try {
-        const response = await axios.get<{orders: AmazonOrder[], count: number}>(`${API_URL}/amazon/orders`);
+        const response = await axios.get<{ orders: AmazonOrder[], count: number }>(`${API_URL}/amazon/orders`);
         setOrders(response.data.orders);
       } catch (err) {
         console.error('Error fetching orders:', err);

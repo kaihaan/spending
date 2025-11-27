@@ -1,6 +1,13 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 
+interface NavLink {
+  path: string;
+  label: string;
+  icon: string;
+  hidden?: boolean;
+}
+
 export default function Navigation() {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -15,6 +22,7 @@ export default function Navigation() {
     { path: '/huququllah', label: 'Huququllah', icon: '💝' },
     { path: '/import', label: 'Import', icon: '📂' },
     { path: '/settings', label: 'Settings', icon: '🔧' },
+    { path: '/auth/callback', label: 'OAuth Callback', icon: '🔐', hidden: true },
   ];
 
   return (
@@ -36,7 +44,7 @@ export default function Navigation() {
               className="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow bg-base-200 rounded-box w-52"
               onClick={() => setMobileMenuOpen(false)}
             >
-              {navLinks.map((link) => (
+              {navLinks.filter(link => !link.hidden).map((link) => (
                 <li key={link.path}>
                   <Link
                     to={link.path}
@@ -57,7 +65,7 @@ export default function Navigation() {
 
       <div className="navbar-center hidden lg:flex">
         <ul className="menu menu-horizontal px-1">
-          {navLinks.map((link) => (
+          {navLinks.filter(link => !link.hidden).map((link) => (
             <li key={link.path}>
               <Link
                 to={link.path}

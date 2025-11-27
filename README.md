@@ -1,14 +1,16 @@
 # Personal Finance Analysis Service
 
-A **privacy-first local personal finance tracker** that parses Santander bank statements, categorizes transactions using AI, and provides spending insights through a web dashboard.
+A **privacy-first local personal finance tracker** that parses Santander bank statements and TrueLayer bank connections, categorizes transactions using AI, and provides spending insights through a web dashboard.
 
 ## Key Features
 
 - 📊 **Import & Analyze** - Parse Santander Excel bank statements automatically
+- 🏦 **Bank Integration** - TrueLayer API for real-time bank synchronization
 - 🤖 **AI-Powered Categorization** - Uses Claude MCP for intelligent transaction classification
 - 📈 **Spending Insights** - Track trends, identify patterns, and get savings recommendations
 - 🔒 **Privacy-First** - All data processing is **local-only** (no cloud uploads)
-- 💾 **SQLite Storage** - Lightweight database for fast queries
+- 💾 **PostgreSQL Storage** - Production-ready database with ACID compliance
+- 📦 **Docker Ready** - PostgreSQL runs in Docker for easy setup
 
 ## Tech Stack
 
@@ -22,8 +24,11 @@ A **privacy-first local personal finance tracker** that parses Santander bank st
 ### Backend
 - **Python 3** + Flask
 - **pandas** + openpyxl - Excel parsing
-- **SQLite** - Database
+- **PostgreSQL** (production) or SQLite (legacy) - Database
+- **psycopg2** - PostgreSQL adapter
+- **Docker** - Container for PostgreSQL
 - **Claude API** - AI-assisted categorization via MCP
+- **TrueLayer API** - Bank data synchronization
 
 ## Prerequisites
 
@@ -31,6 +36,7 @@ Before you begin, ensure you have the following installed:
 
 - **Node.js** (v18 or higher) and **npm**
 - **Python 3.8+**
+- **Docker** and **Docker Compose** (for PostgreSQL database)
 - **Git**
 
 ## Setup Instructions
@@ -42,7 +48,33 @@ git clone <repository-url>
 cd spending
 ```
 
-### 2. Backend Setup
+### 2. Environment Setup
+
+```bash
+# Copy environment template
+cp .env.example .env
+
+# Edit .env and configure:
+# - POSTGRES_PASSWORD (secure password)
+# - POSTGRES_PORT (default: 5433)
+# - DB_TYPE=postgres (default)
+# - ANTHROPIC_API_KEY (for Claude MCP)
+```
+
+### 3. PostgreSQL Database Setup
+
+```bash
+# Start PostgreSQL container
+docker-compose up -d
+
+# Verify container is running
+docker-compose ps
+
+# Check initialization logs
+docker-compose logs postgres
+```
+
+### 4. Backend Setup
 
 ```bash
 # Navigate to backend directory
@@ -58,7 +90,20 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Frontend Setup
+### 5. Data Migration (if you have existing SQLite data)
+
+```bash
+# Ensure you're in the backend directory with venv activated
+cd backend
+source venv/bin/activate
+
+# Run the migration script
+python migrate_to_postgres.py
+
+# Follow the prompts - it will validate and ask for confirmation
+```
+
+### 6. Frontend Setup
 
 ```bash
 # Navigate to frontend directory
@@ -70,16 +115,32 @@ npm install
 
 ## Running the Development Servers
 
-You'll need **two terminal windows** - one for the backend and one for the frontend.
+You'll need **three terminal windows** - one for Docker, one for the backend, and one for the frontend.
+
+### Terminal 0: Docker PostgreSQL Database (First!)
+
+```bash
+# Start PostgreSQL container (run from project root)
+docker-compose up
+
+# Or run in background
+docker-compose up -d
+```
+
+Wait for the message: `PostgreSQL init process complete; ready for start up.`
 
 ### Terminal 1: Backend Server
 
 ```bash
-# Always activate venv first!
-source /home/kaihaan/projects/spending/backend/venv/bin/activate
-
 # Navigate to backend directory
-cd /home/kaihaan/projects/spending/backend
+cd backend
+
+# Always activate venv first!
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Ensure environment variables are set
+export DB_TYPE=postgres
+export ANTHROPIC_API_KEY=your_key_here
 
 # Start the Flask server
 python app.py
@@ -91,13 +152,26 @@ The backend API will run on **http://localhost:5000**
 
 ```bash
 # Navigate to frontend directory
-cd /home/kaihaan/projects/spending/frontend
+cd frontend
 
 # Start the Vite dev server
 npm run dev
 ```
 
 The frontend will run on **http://localhost:5173**
+
+### Connecting to Database (Optional - for debugging)
+
+```bash
+# Access PostgreSQL shell
+docker exec -it spending-postgres psql -U spending_user -d spending_db
+
+# List tables
+\dt
+
+# Exit shell
+\q
+```
 
 ## Project Structure
 
@@ -173,16 +247,39 @@ npm run lint     # Run ESLint
 ```
 
 ### Database
-SQLite database (`finance.db`) is automatically initialized on backend startup. No manual setup required.
+
+PostgreSQL database is initialized by Docker during `docker-compose up`. The schema is created from `postgres/init/01_schema.sql` and includes:
+
+- **9 Legacy Tables:** transactions, categories, account_mappings, amazon_orders, etc.
+- **8 TrueLayer Tables:** For future bank integration (users, bank_connections, truelayer_transactions, etc.)
+
+**Switching Databases:**
+```bash
+# Use PostgreSQL (default, production)
+export DB_TYPE=postgres
+
+# Use SQLite (legacy, local file)
+export DB_TYPE=sqlite
+```
+
+**Database Connection:**
+- PostgreSQL: `localhost:5433` (or 5432 inside Docker network)
+- SQLite: `backend/finance.db`
 
 ## Future Roadmap
 
-- Support for PDF and CSV bank statements
-- Multi-bank support
-- Budget and goal tracking
-- Encrypted data store
-- Export reports (PDF/CSV)
-- Recurring transaction detection
+- ✅ **PostgreSQL Integration** - Production-ready database
+- ✅ **Amazon Order Matching** - Link transactions to Amazon purchases
+- ✅ **Apple Transaction Matching** - Link transactions to App Store purchases
+- 🔄 **TrueLayer Bank Integration** - Real-time bank synchronization (in progress)
+- 📱 Support for PDF and CSV bank statements
+- 💼 Budget and goal tracking
+- 🔐 Encrypted data store
+- 📄 Export reports (PDF/CSV)
+- 🔄 Recurring transaction detection
+- 🧠 Machine learning for category predictions
+- ⚠️ Duplicate transaction detection
+- 🏦 Multi-bank support (beyond Santander)
 
 ## License
 

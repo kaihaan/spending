@@ -260,11 +260,10 @@ export default function TransactionList() {
       <div className="flex flex-wrap gap-2 items-center">
         <span
           onClick={() => updateFilter('selectedCategory', 'All')}
-          className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${
-            filters.selectedCategory === 'All'
+          className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${filters.selectedCategory === 'All'
               ? 'badge-primary scale-110'
               : 'badge-ghost hover:scale-105'
-          }`}
+            }`}
         >
           All ({getFilteredCountForCategory(transactions, filters, 'All')})
         </span>
@@ -275,9 +274,8 @@ export default function TransactionList() {
             <span
               key={cat}
               onClick={() => updateFilter('selectedCategory', cat)}
-              className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${getCategoryColor(cat)} ${
-                filters.selectedCategory === cat ? 'scale-110' : 'hover:scale-105'
-              }`}
+              className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${getCategoryColor(cat)} ${filters.selectedCategory === cat ? 'scale-110' : 'hover:scale-105'
+                }`}
             >
               {cat} ({count})
             </span>
@@ -291,11 +289,10 @@ export default function TransactionList() {
           <span className="text-sm font-semibold">Subcategories:</span>
           <span
             onClick={() => updateFilter('selectedSubcategory', '')}
-            className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${
-              !filters.selectedSubcategory
+            className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${!filters.selectedSubcategory
                 ? 'badge-primary scale-105'
                 : 'badge-ghost hover:scale-105'
-            }`}
+              }`}
           >
             All
           </span>
@@ -310,9 +307,8 @@ export default function TransactionList() {
               <span
                 key={subcat}
                 onClick={() => updateFilter('selectedSubcategory', subcat)}
-                className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${
-                  getCategoryColor(filters.selectedCategory)
-                } ${filters.selectedSubcategory === subcat ? 'scale-105' : 'hover:scale-105'}`}
+                className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${getCategoryColor(filters.selectedCategory)
+                  } ${filters.selectedSubcategory === subcat ? 'scale-105' : 'hover:scale-105'}`}
               >
                 {subcat} ({subcount})
               </span>
@@ -516,13 +512,12 @@ export default function TransactionList() {
                 {columnVisibility.enrichment_source && (
                   <td className="text-sm text-center">
                     {txn.enrichment_source ? (
-                      <span className={`badge badge-sm ${
-                        txn.enrichment_source === 'llm' ? 'badge-info' :
-                        txn.enrichment_source === 'lookup' ? 'badge-primary' :
-                        txn.enrichment_source === 'regex' ? 'badge-warning' :
-                        txn.enrichment_source === 'manual' ? 'badge-success' :
-                        'badge-ghost'
-                      }`}>
+                      <span className={`badge badge-sm ${txn.enrichment_source === 'llm' ? 'badge-info' :
+                          txn.enrichment_source === 'lookup' ? 'badge-primary' :
+                            txn.enrichment_source === 'regex' ? 'badge-warning' :
+                              txn.enrichment_source === 'manual' ? 'badge-success' :
+                                'badge-ghost'
+                        }`}>
                         {txn.enrichment_source}
                       </span>
                     ) : <span className="text-base-content/40">-</span>}

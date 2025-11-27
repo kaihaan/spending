@@ -225,11 +225,10 @@ export default function Dashboard() {
             <div className="flex flex-wrap gap-2 items-center">
               <span
                 onClick={() => updateFilter('selectedCategory', 'All')}
-                className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${
-                  filters.selectedCategory === 'All'
+                className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${filters.selectedCategory === 'All'
                     ? 'badge-primary scale-110'
                     : 'badge-ghost hover:scale-105'
-                }`}
+                  }`}
               >
                 All ({getFilteredCountForCategory(transactions, filters, 'All')})
               </span>
@@ -240,9 +239,8 @@ export default function Dashboard() {
                   <span
                     key={cat}
                     onClick={() => updateFilter('selectedCategory', cat)}
-                    className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${getCategoryColor(cat)} ${
-                      filters.selectedCategory === cat ? 'scale-110' : 'hover:scale-105'
-                    }`}
+                    className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${getCategoryColor(cat)} ${filters.selectedCategory === cat ? 'scale-110' : 'hover:scale-105'
+                      }`}
                   >
                     {cat} ({count})
                   </span>
@@ -256,11 +254,10 @@ export default function Dashboard() {
                 <span className="text-sm font-semibold">Subcategories:</span>
                 <span
                   onClick={() => updateFilter('selectedSubcategory', '')}
-                  className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${
-                    !filters.selectedSubcategory
+                  className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${!filters.selectedSubcategory
                       ? 'badge-primary scale-105'
                       : 'badge-ghost hover:scale-105'
-                  }`}
+                    }`}
                 >
                   All
                 </span>
@@ -275,9 +272,8 @@ export default function Dashboard() {
                     <span
                       key={subcat}
                       onClick={() => updateFilter('selectedSubcategory', subcat)}
-                      className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${
-                        getCategoryColor(filters.selectedCategory)
-                      } ${filters.selectedSubcategory === subcat ? 'scale-105' : 'hover:scale-105'}`}
+                      className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${getCategoryColor(filters.selectedCategory)
+                        } ${filters.selectedSubcategory === subcat ? 'scale-105' : 'hover:scale-105'}`}
                     >
                       {subcat} ({subcount})
                     </span>
