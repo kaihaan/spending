@@ -23,10 +23,19 @@ def health():
 
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
-    """Get all transactions."""
+    """Get all transactions (both imported and TrueLayer synced)."""
     try:
-        transactions = database.get_all_transactions()
-        return jsonify(transactions)
+        # Get both regular and TrueLayer transactions
+        regular_transactions = database.get_all_transactions() or []
+        truelayer_transactions = database.get_all_truelayer_transactions() or []
+
+        # Combine both lists (frontend will handle display)
+        all_transactions = regular_transactions + truelayer_transactions
+
+        # Sort by date descending (most recent first)
+        all_transactions.sort(key=lambda t: t.get('date') or t.get('timestamp', ''), reverse=True)
+
+        return jsonify(all_transactions)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1436,7 +1445,8 @@ def sync_truelayer_transactions():
     try:
         from mcp.truelayer_sync import sync_all_accounts
 
-        data = request.json
+        print(f"🔄 Starting TrueLayer sync...")
+        data = request.json or {}
 
         # Support both user_id and connection_id
         user_id = data.get('user_id')
@@ -1447,24 +1457,46 @@ def sync_truelayer_transactions():
             connection = database.get_connection(connection_id)
             if connection:
                 user_id = connection.get('user_id')
+                print(f"   📍 Found user_id {user_id} from connection {connection_id}")
 
         # Default to user 1 if still not found
         if not user_id:
             user_id = 1
+            print(f"   📍 Using default user_id: {user_id}")
 
         # Sync all accounts for user
+        print(f"   🔄 Syncing all accounts for user {user_id}...")
         result = sync_all_accounts(user_id)
 
-        return jsonify({
+        # Calculate totals
+        total_synced = sum(acc.get('synced', 0) for acc in result.get('accounts', []))
+        total_duplicates = sum(acc.get('duplicates', 0) for acc in result.get('accounts', []))
+        total_errors = sum(acc.get('errors', 0) for acc in result.get('accounts', []))
+
+        print(f"✅ Sync completed: {total_synced} synced, {total_duplicates} duplicates, {total_errors} errors")
+
+        response = {
             'status': 'completed',
+            'summary': {
+                'total_accounts': result.get('total_accounts', 0),
+                'total_synced': total_synced,
+                'total_duplicates': total_duplicates,
+                'total_errors': total_errors,
+            },
             'result': result
-        })
+        }
+
+        return jsonify(response)
 
     except Exception as e:
         print(f"❌ Sync error: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'error_type': type(e).__name__
+        }), 500
 
 
 @app.route('/api/truelayer/sync/status', methods=['GET'])
@@ -1502,6 +1534,212 @@ def disconnect_bank_account():
         })
 
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/fetch-accounts', methods=['POST'])
+def fetch_truelayer_accounts_on_demand():
+    """On-demand fetch of TrueLayer account transactions."""
+    try:
+        from mcp.truelayer_sync import sync_all_accounts
+
+        data = request.json
+
+        # Support both user_id and connection_id
+        user_id = data.get('user_id')
+        connection_id = data.get('connection_id')
+
+        # If connection_id provided, get user_id from connection
+        if connection_id and not user_id:
+            connection = database.get_connection(connection_id)
+            if connection:
+                user_id = connection.get('user_id')
+
+        # Default to user 1 if still not found
+        if not user_id:
+            user_id = 1
+
+        # Sync all accounts for user
+        result = sync_all_accounts(user_id)
+
+        return jsonify({
+            'status': 'completed',
+            'result': result
+        })
+
+    except Exception as e:
+        print(f"❌ Account fetch error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/fetch-cards', methods=['POST'])
+def fetch_truelayer_cards_on_demand():
+    """On-demand fetch of TrueLayer card transactions."""
+    try:
+        from mcp.truelayer_sync import sync_all_cards
+
+        data = request.json
+
+        # Support both user_id and connection_id
+        user_id = data.get('user_id')
+        connection_id = data.get('connection_id')
+
+        # If connection_id provided, get user_id from connection
+        if connection_id and not user_id:
+            connection = database.get_connection(connection_id)
+            if connection:
+                user_id = connection.get('user_id')
+
+        # Default to user 1 if still not found
+        if not user_id:
+            user_id = 1
+
+        # Sync all cards for user
+        result = sync_all_cards(user_id)
+
+        return jsonify({
+            'status': 'completed',
+            'result': result
+        })
+
+    except Exception as e:
+        print(f"❌ Card fetch error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/cards', methods=['GET'])
+def get_truelayer_cards():
+    """Get all connected TrueLayer cards for a user."""
+    try:
+        user_id = request.args.get('user_id', 1, type=int)
+
+        # Get all active connections for user
+        connections = database.get_user_connections(user_id)
+
+        if not connections:
+            return jsonify({
+                'user_id': user_id,
+                'connections': []
+            })
+
+        connections_data = []
+        for connection in connections:
+            connection_id = connection.get('id')
+            cards = database.get_connection_cards(connection_id)
+
+            connections_data.append({
+                'connection_id': connection_id,
+                'provider_id': connection.get('provider_id'),
+                'connection_status': connection.get('connection_status'),
+                'last_synced_at': connection.get('last_synced_at'),
+                'cards': cards if cards else []
+            })
+
+        return jsonify({
+            'user_id': user_id,
+            'connections': connections_data
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/fetch-transactions', methods=['POST'])
+def fetch_transactions_on_demand():
+    """On-demand fetch of transactions for a specific account or card."""
+    try:
+        from mcp.truelayer_auth import decrypt_token
+        from mcp.truelayer_client import TrueLayerClient
+
+        data = request.json
+        account_id = data.get('account_id')
+        card_id = data.get('card_id')
+        from_date = data.get('from_date')
+        to_date = data.get('to_date')
+
+        if not account_id and not card_id:
+            return jsonify({'error': 'Must provide either account_id or card_id'}), 400
+
+        # If account_id provided
+        if account_id:
+            account = database.get_account_by_truelayer_id(account_id)
+            if not account:
+                return jsonify({'error': f'Account {account_id} not found'}), 404
+
+            db_account_id = account.get('id')
+            connection_id = account.get('connection_id')
+            connection = database.get_connection(connection_id)
+            access_token = decrypt_token(connection.get('access_token'))
+
+            client = TrueLayerClient(access_token)
+            transactions = client.get_transactions(account_id, from_date, to_date)
+
+            # Normalize transactions
+            normalized = [client.normalize_transaction(txn) for txn in transactions]
+
+            # Count existing transactions
+            synced_count = 0
+            duplicate_count = 0
+            for txn in normalized:
+                existing = database.get_truelayer_transaction_by_id(txn.get('normalised_provider_id'))
+                if not existing:
+                    synced_count += 1
+                else:
+                    duplicate_count += 1
+
+            return jsonify({
+                'status': 'completed',
+                'account_id': account_id,
+                'total_transactions': len(transactions),
+                'synced': synced_count,
+                'duplicates': duplicate_count,
+                'transactions': transactions
+            })
+
+        # If card_id provided
+        elif card_id:
+            card = database.get_card_by_truelayer_id(card_id)
+            if not card:
+                return jsonify({'error': f'Card {card_id} not found'}), 404
+
+            db_card_id = card.get('id')
+            connection_id = card.get('connection_id')
+            connection = database.get_connection(connection_id)
+            access_token = decrypt_token(connection.get('access_token'))
+
+            client = TrueLayerClient(access_token)
+            transactions = client.get_card_transactions(card_id, from_date, to_date)
+
+            # Normalize card transactions
+            normalized = [client.normalize_card_transaction(txn) for txn in transactions]
+
+            # Count existing transactions
+            synced_count = 0
+            duplicate_count = 0
+            for txn in normalized:
+                existing = database.get_card_transaction_by_id(txn.get('normalised_provider_id'))
+                if not existing:
+                    synced_count += 1
+                else:
+                    duplicate_count += 1
+
+            return jsonify({
+                'status': 'completed',
+                'card_id': card_id,
+                'total_transactions': len(transactions),
+                'synced': synced_count,
+                'duplicates': duplicate_count,
+                'transactions': transactions
+            })
+
+    except Exception as e:
+        print(f"❌ Transaction fetch error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 

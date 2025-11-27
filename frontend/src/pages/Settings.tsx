@@ -286,6 +286,9 @@ export default function Settings() {
         </p>
       </div>
 
+      {/* TrueLayer Bank Integration Section */}
+      <TrueLayerIntegration />
+
       {/* Account Mappings Section */}
       <div className="mb-8">
         <div className="flex justify-between items-center mb-4">
@@ -464,9 +467,6 @@ export default function Settings() {
 
       {/* Apple Transactions Section */}
       <AppleTransactions />
-
-      {/* TrueLayer Bank Integration Section */}
-      <TrueLayerIntegration />
 
       {/* Add Mapping Dialog */}
       {showAddDialog && (

@@ -33,7 +33,7 @@ DEFAULT_CATEGORY_RULES = {
     'Entertainment': [
         'cinema', 'spotify', 'netflix', 'amazon prime', 'apple music',
         'disney', 'youtube', 'xbox', 'playstation', 'steam',
-        'odeon', 'vue', 'cineworld', 'theatre', 'concert'
+        'odeon', 'vue', 'cineworld', 'theatre', 'concert', 'subscription'
     ],
     'Utilities': [
         'thames water', 'british gas', 'edf', 'eon', 'octopus energy',

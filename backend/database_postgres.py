@@ -12,6 +12,7 @@ from psycopg2 import pool, extras
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 import os
+import json
 from dotenv import load_dotenv
 
 # Load environment variables (override=True to prefer .env file over shell env)
@@ -43,6 +44,8 @@ def init_pool():
             print("✓ PostgreSQL connection pool created successfully")
             # Create oauth_state table if it doesn't exist
             _create_oauth_state_table()
+            # Create TrueLayer card tables if they don't exist
+            _create_truelayer_card_tables()
     except (Exception, psycopg2.Error) as error:
         print(f"✗ Error creating connection pool: {error}")
         raise
@@ -69,6 +72,76 @@ def _create_oauth_state_table():
                 conn.commit()
     except Exception as e:
         print(f"⚠️  Warning: Could not create oauth_state table: {e}")
+
+
+def _create_truelayer_card_tables():
+    """Create TrueLayer card-related tables if they don't exist."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                # Create truelayer_cards table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS truelayer_cards (
+                        id SERIAL PRIMARY KEY,
+                        connection_id INTEGER NOT NULL,
+                        card_id VARCHAR(255) NOT NULL,
+                        card_name VARCHAR(255),
+                        card_type VARCHAR(50),
+                        last_four VARCHAR(4),
+                        issuer VARCHAR(255),
+                        status VARCHAR(50),
+                        last_synced_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(connection_id, card_id),
+                        FOREIGN KEY (connection_id) REFERENCES bank_connections(id) ON DELETE CASCADE
+                    )
+                ''')
+
+                # Create truelayer_card_transactions table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS truelayer_card_transactions (
+                        id SERIAL PRIMARY KEY,
+                        card_id INTEGER NOT NULL,
+                        transaction_id VARCHAR(255),
+                        normalised_provider_id VARCHAR(255) UNIQUE,
+                        timestamp TIMESTAMP,
+                        description TEXT,
+                        amount NUMERIC,
+                        currency VARCHAR(3),
+                        transaction_type VARCHAR(50),
+                        category VARCHAR(255),
+                        merchant_name VARCHAR(255),
+                        running_balance NUMERIC,
+                        metadata TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (card_id) REFERENCES truelayer_cards(id) ON DELETE CASCADE
+                    )
+                ''')
+
+                # Create truelayer_card_balance_snapshots table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS truelayer_card_balance_snapshots (
+                        id SERIAL PRIMARY KEY,
+                        card_id INTEGER NOT NULL,
+                        current_balance NUMERIC,
+                        currency VARCHAR(3),
+                        snapshot_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (card_id) REFERENCES truelayer_cards(id) ON DELETE CASCADE
+                    )
+                ''')
+
+                # Create indexes for better query performance
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_truelayer_cards_connection ON truelayer_cards(connection_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_truelayer_card_transactions_card ON truelayer_card_transactions(card_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_truelayer_card_transactions_timestamp ON truelayer_card_transactions(timestamp)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_truelayer_card_balance_snapshots_card ON truelayer_card_balance_snapshots(card_id)')
+
+                conn.commit()
+                print("✓ TrueLayer card tables created successfully")
+    except Exception as e:
+        print(f"⚠️  Warning: Could not create TrueLayer card tables: {e}")
 
 
 @contextmanager
@@ -1137,10 +1210,10 @@ def get_truelayer_transaction_by_id(normalised_provider_id):
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute('''
-                SELECT id, account_id, normalised_provider_id, timestamp,
-                       description, amount, merchant_name, category
+                SELECT id, account_id, normalised_provider_transaction_id, timestamp,
+                       description, amount, merchant_name, transaction_category
                 FROM truelayer_transactions
-                WHERE normalised_provider_id = %s
+                WHERE normalised_provider_transaction_id = %s
             ''', (normalised_provider_id,))
             return cursor.fetchone()
 
@@ -1154,14 +1227,14 @@ def insert_truelayer_transaction(account_id, transaction_id, normalised_provider
             try:
                 cursor.execute('''
                     INSERT INTO truelayer_transactions
-                    (account_id, transaction_id, normalised_provider_id, timestamp,
-                     description, amount, currency, transaction_type, category,
+                    (account_id, transaction_id, normalised_provider_transaction_id, timestamp,
+                     description, amount, currency, transaction_type, transaction_category,
                      merchant_name, running_balance, metadata)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 ''', (account_id, transaction_id, normalised_provider_id, timestamp,
                       description, amount, currency, transaction_type, transaction_category,
-                      merchant_name, running_balance, str(metadata)))
+                      merchant_name, running_balance, json.dumps(metadata)))
                 txn_id = cursor.fetchone()[0]
                 conn.commit()
                 return txn_id
@@ -1177,18 +1250,18 @@ def get_all_truelayer_transactions(account_id=None):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             if account_id:
                 cursor.execute('''
-                    SELECT id, account_id, transaction_id, normalised_provider_id,
+                    SELECT id, account_id, transaction_id, normalised_provider_transaction_id,
                            timestamp, description, amount, currency, transaction_type,
-                           category, merchant_name, running_balance, metadata, created_at
+                           transaction_category, merchant_name, running_balance, metadata, created_at
                     FROM truelayer_transactions
                     WHERE account_id = %s
                     ORDER BY timestamp DESC
                 ''', (account_id,))
             else:
                 cursor.execute('''
-                    SELECT id, account_id, transaction_id, normalised_provider_id,
+                    SELECT id, account_id, transaction_id, normalised_provider_transaction_id,
                            timestamp, description, amount, currency, transaction_type,
-                           category, merchant_name, running_balance, metadata, created_at
+                           transaction_category, merchant_name, running_balance, metadata, created_at
                     FROM truelayer_transactions
                     ORDER BY timestamp DESC
                 ''')
@@ -1278,6 +1351,163 @@ def get_latest_balance_snapshots(account_id=None, limit=10):
                 cursor.execute('''
                     SELECT id, account_id, current_balance, currency, snapshot_at
                     FROM truelayer_balance_snapshots
+                    ORDER BY snapshot_at DESC
+                    LIMIT %s
+                ''', (limit,))
+            return cursor.fetchall()
+
+
+def save_connection_card(connection_id, card_id, card_name, card_type, last_four=None, issuer=None):
+    """Save a card linked to a TrueLayer bank connection."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO truelayer_cards
+                (connection_id, card_id, card_name, card_type, last_four, issuer, status)
+                VALUES (%s, %s, %s, %s, %s, %s, 'active')
+                ON CONFLICT (connection_id, card_id) DO UPDATE
+                SET card_name = EXCLUDED.card_name, card_type = EXCLUDED.card_type, updated_at = NOW()
+                RETURNING id
+            ''', (connection_id, card_id, card_name, card_type, last_four, issuer))
+            card_db_id = cursor.fetchone()[0]
+            conn.commit()
+            return card_db_id
+
+
+def get_connection_cards(connection_id):
+    """Get all cards linked to a TrueLayer bank connection."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, connection_id, card_id, card_name, card_type,
+                       last_four, issuer, status, last_synced_at, created_at
+                FROM truelayer_cards
+                WHERE connection_id = %s
+                ORDER BY card_name
+            ''', (connection_id,))
+            return cursor.fetchall()
+
+
+def get_card_by_truelayer_id(truelayer_card_id):
+    """Get card from database by TrueLayer card ID."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, connection_id, card_id, card_name, card_type,
+                       last_four, issuer, status, created_at
+                FROM truelayer_cards
+                WHERE card_id = %s
+            ''', (truelayer_card_id,))
+            return cursor.fetchone()
+
+
+def update_card_last_synced(card_id, timestamp):
+    """Update the last sync timestamp for a specific TrueLayer card."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                UPDATE truelayer_cards
+                SET last_synced_at = %s, updated_at = NOW()
+                WHERE id = %s
+            ''', (timestamp, card_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+
+def get_card_transaction_by_id(normalised_provider_id):
+    """Check if a TrueLayer card transaction already exists (deduplication)."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, card_id, normalised_provider_id, timestamp,
+                       description, amount, merchant_name, category
+                FROM truelayer_card_transactions
+                WHERE normalised_provider_id = %s
+            ''', (normalised_provider_id,))
+            return cursor.fetchone()
+
+
+def insert_truelayer_card_transaction(card_id, transaction_id, normalised_provider_id,
+                                      timestamp, description, amount, currency, transaction_type,
+                                      transaction_category, merchant_name, running_balance, metadata):
+    """Insert a new card transaction from TrueLayer."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            try:
+                cursor.execute('''
+                    INSERT INTO truelayer_card_transactions
+                    (card_id, transaction_id, normalised_provider_id, timestamp,
+                     description, amount, currency, transaction_type, category,
+                     merchant_name, running_balance, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                ''', (card_id, transaction_id, normalised_provider_id, timestamp,
+                      description, amount, currency, transaction_type, transaction_category,
+                      merchant_name, running_balance, str(metadata)))
+                txn_id = cursor.fetchone()[0]
+                conn.commit()
+                return txn_id
+            except Exception as e:
+                conn.rollback()
+                print(f"Error inserting TrueLayer card transaction: {e}")
+                return None
+
+
+def get_all_truelayer_card_transactions(card_id=None):
+    """Get all card transactions synced from TrueLayer."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            if card_id:
+                cursor.execute('''
+                    SELECT id, card_id, transaction_id, normalised_provider_id,
+                           timestamp, description, amount, currency, transaction_type,
+                           category, merchant_name, running_balance, metadata, created_at
+                    FROM truelayer_card_transactions
+                    WHERE card_id = %s
+                    ORDER BY timestamp DESC
+                ''', (card_id,))
+            else:
+                cursor.execute('''
+                    SELECT id, card_id, transaction_id, normalised_provider_id,
+                           timestamp, description, amount, currency, transaction_type,
+                           category, merchant_name, running_balance, metadata, created_at
+                    FROM truelayer_card_transactions
+                    ORDER BY timestamp DESC
+                ''')
+            return cursor.fetchall()
+
+
+def insert_card_balance_snapshot(card_id, current_balance, currency, snapshot_at):
+    """Store a balance snapshot from TrueLayer card."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO truelayer_card_balance_snapshots
+                (card_id, current_balance, currency, snapshot_at)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+            ''', (card_id, current_balance, currency, snapshot_at))
+            snapshot_id = cursor.fetchone()[0]
+            conn.commit()
+            return snapshot_id
+
+
+def get_latest_card_balance_snapshots(card_id=None, limit=10):
+    """Get the latest balance snapshots for cards."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            if card_id:
+                cursor.execute('''
+                    SELECT id, card_id, current_balance, currency, snapshot_at
+                    FROM truelayer_card_balance_snapshots
+                    WHERE card_id = %s
+                    ORDER BY snapshot_at DESC
+                    LIMIT %s
+                ''', (card_id, limit))
+            else:
+                cursor.execute('''
+                    SELECT id, card_id, current_balance, currency, snapshot_at
+                    FROM truelayer_card_balance_snapshots
                     ORDER BY snapshot_at DESC
                     LIMIT %s
                 ''', (limit,))

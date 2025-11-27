@@ -189,8 +189,20 @@ def encrypt_token(token: str) -> str:
 def decrypt_token(encrypted_token: str) -> str:
     """Decrypt stored token."""
     if not cipher:
+        print("⚠️  ENCRYPTION_KEY not set. Assuming token is stored in plain text.")
         return encrypted_token
-    return cipher.decrypt(encrypted_token.encode()).decode()
+
+    try:
+        if isinstance(encrypted_token, bytes):
+            decrypted = cipher.decrypt(encrypted_token).decode()
+        else:
+            decrypted = cipher.decrypt(encrypted_token.encode()).decode()
+        print(f"✅ Successfully decrypted token (length: {len(decrypted)} chars)")
+        return decrypted
+    except Exception as e:
+        print(f"❌ Token decryption failed: {e}")
+        print(f"   Token type: {type(encrypted_token)}, length: {len(encrypted_token) if encrypted_token else 0}")
+        raise
 
 
 def save_bank_connection(user_id: int, connection_data: dict) -> dict:
@@ -258,9 +270,20 @@ def discover_and_save_accounts(connection_id: int, access_token: str) -> dict:
     try:
         from .truelayer_client import TrueLayerClient
 
+        print(f"📋 Starting account discovery for connection_id={connection_id}")
+        print(f"   Access token (first 20 chars): {access_token[:20]}...")
+
         # Initialize client and fetch accounts
         client = TrueLayerClient(access_token)
+        print(f"   TrueLayerClient initialized")
+
         accounts = client.get_accounts()
+        print(f"   ✅ TrueLayer API returned {len(accounts)} accounts")
+
+        if accounts:
+            print(f"   Account details:")
+            for i, acc in enumerate(accounts):
+                print(f"     [{i}] {acc.get('display_name')} (ID: {acc.get('account_id')}, Type: {acc.get('account_type')})")
 
         # Save each account to database
         saved_accounts = []
@@ -269,6 +292,8 @@ def discover_and_save_accounts(connection_id: int, access_token: str) -> dict:
             display_name = account.get('display_name', 'Unknown Account')
             account_type = account.get('account_type', 'TRANSACTION')
             currency = account.get('currency', 'GBP')
+
+            print(f"   Saving account: {display_name} (account_id={account_id})")
 
             # Save to database
             db_account_id = database.save_connection_account(
@@ -279,6 +304,8 @@ def discover_and_save_accounts(connection_id: int, access_token: str) -> dict:
                 currency=currency
             )
 
+            print(f"     ✅ Saved to DB with id={db_account_id}")
+
             saved_accounts.append({
                 'account_id': account_id,
                 'display_name': display_name,
@@ -287,6 +314,8 @@ def discover_and_save_accounts(connection_id: int, access_token: str) -> dict:
                 'db_id': db_account_id
             })
 
+        print(f"   ✅ Account discovery complete: {len(saved_accounts)} accounts saved")
+
         return {
             'accounts_discovered': len(accounts),
             'accounts_saved': len(saved_accounts),
@@ -294,4 +323,6 @@ def discover_and_save_accounts(connection_id: int, access_token: str) -> dict:
         }
     except Exception as e:
         print(f"❌ Error discovering accounts: {e}")
+        import traceback
+        traceback.print_exc()
         raise

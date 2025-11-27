@@ -7,7 +7,68 @@ deduplication, and integration with the app's transaction database.
 
 import database_init as database
 from .truelayer_client import TrueLayerClient
-from datetime import datetime
+from .truelayer_auth import decrypt_token, refresh_access_token, encrypt_token
+from .categorizer import categorize_transaction
+from datetime import datetime, timezone
+
+
+def identify_merchant(description: str, merchant_from_api: str = None) -> str:
+    """
+    Identify merchant from transaction description.
+
+    Prefers TrueLayer API merchant name, falls back to extracting from description.
+
+    Args:
+        description: Transaction description text
+        merchant_from_api: Merchant name from TrueLayer API (if available)
+
+    Returns:
+        Merchant name (or description if no merchant can be identified)
+    """
+    # If TrueLayer API already provided merchant name, use it
+    if merchant_from_api and merchant_from_api.strip():
+        return merchant_from_api.strip()
+
+    # Otherwise, try to extract from description (usually first few words)
+    # Most merchants appear at the start of the description
+    if description:
+        # Split by comma or space, take first meaningful part
+        parts = description.split(',')
+        merchant = parts[0].strip()
+
+        # If merchant looks like a reference number (all digits), use full description
+        if merchant and not merchant.isdigit():
+            return merchant
+
+    return description or 'Unknown Merchant'
+
+
+def classify_and_enrich_transaction(txn: dict) -> dict:
+    """
+    Classify transaction into category and identify merchant.
+
+    Args:
+        txn: Transaction dictionary from normalized data
+
+    Returns:
+        Transaction dictionary with updated merchant_name and transaction_category
+    """
+    # Identify merchant
+    merchant = identify_merchant(
+        txn.get('description', ''),
+        txn.get('merchant_name')
+    )
+    txn['merchant_name'] = merchant
+
+    # Classify transaction into category
+    category = categorize_transaction(
+        description=txn.get('description', ''),
+        merchant=merchant,
+        amount=float(txn.get('amount', 0))
+    )
+    txn['category'] = category
+
+    return txn
 
 
 def sync_account_transactions(
@@ -42,59 +103,100 @@ def sync_account_transactions(
         if use_incremental:
             # Get the connection's last sync timestamp
             connection = database.get_connection(connection_id)
-            if connection and connection.get('last_synced_at'):
-                last_sync = datetime.fromisoformat(connection['last_synced_at'])
-                # Calculate days since last sync
-                days_since_sync = (datetime.utcnow() - last_sync).days
-                # Only sync new data since last sync (add buffer of 1 day for safety)
-                sync_days = max(1, days_since_sync + 1)
-                print(f"   📅 Incremental sync: last synced {days_since_sync} days ago, fetching {sync_days} days")
-            else:
-                print(f"   📅 No previous sync found, fetching full {days_back} days")
+            last_synced_at = connection.get('last_synced_at') if connection else None
+
+            try:
+                if last_synced_at:
+                    # Handle both string and datetime object formats
+                    if isinstance(last_synced_at, str):
+                        last_sync = datetime.fromisoformat(last_synced_at)
+                    else:
+                        # If it's already a datetime object, use it directly
+                        last_sync = last_synced_at
+
+                    # Ensure we're comparing timezone-aware datetimes
+                    # If last_sync is naive, assume UTC
+                    if last_sync.tzinfo is None:
+                        last_sync = last_sync.replace(tzinfo=timezone.utc)
+
+                    # Get current time in UTC for comparison
+                    now_utc = datetime.now(timezone.utc)
+
+                    # Calculate days since last sync
+                    days_since_sync = (now_utc - last_sync).days
+                    # Only sync new data since last sync (add buffer of 1 day for safety)
+                    sync_days = max(1, days_since_sync + 1)
+                    print(f"   📅 Incremental sync: last synced {days_since_sync} days ago, fetching {sync_days} days")
+                else:
+                    print(f"   📅 No previous sync found, fetching full {days_back} days")
+            except Exception as e:
+                print(f"   ⚠️  Error parsing last_synced_at ({type(last_synced_at).__name__}): {e}")
+                print(f"   📅 Falling back to full {days_back} days sync")
+                # Fall back to fetching all days
 
         # Fetch transactions from TrueLayer
+        print(f"   📡 Fetching transactions from TrueLayer (last {sync_days} days)...")
         transactions = client.fetch_all_transactions(truelayer_account_id, sync_days)
+        print(f"   📦 Received {len(transactions)} transactions from API")
 
         synced_count = 0
         duplicate_count = 0
         error_count = 0
 
         if transactions:
+            print(f"   🔄 Processing {len(transactions)} transactions...")
+
             # Insert/update transactions in database
-            for txn in transactions:
+            for idx, txn in enumerate(transactions, 1):
                 try:
                     # Check if transaction already exists (using normalised_provider_id)
-                    existing = database.get_truelayer_transaction_by_id(
-                        txn.get('normalised_provider_id')
-                    )
+                    normalised_id = txn.get('normalised_provider_id')
+                    existing = database.get_truelayer_transaction_by_id(normalised_id)
 
                     if existing:
                         duplicate_count += 1
+                        if idx <= 3:  # Log first few duplicates
+                            print(f"     ⏭️  Transaction {idx}: Duplicate (id: {normalised_id})")
                         continue
+
+                    # Classify and enrich transaction with merchant identification and categorization
+                    try:
+                        txn = classify_and_enrich_transaction(txn)
+                        merchant_name = txn.get('merchant_name')
+                        category = txn.get('category')
+                        print(f"     📊 Transaction {idx}: {merchant_name} → {category}")
+                    except Exception as e:
+                        print(f"     ⚠️  Could not classify transaction {idx}: {e}")
+                        # Continue with original merchant/category if classification fails
+                        merchant_name = txn.get('merchant_name', 'Unknown Merchant')
+                        category = txn.get('category', 'Other')
 
                     # Insert new transaction
                     txn_id = database.insert_truelayer_transaction(
                         account_id=db_account_id,
                         transaction_id=txn.get('transaction_id'),
-                        normalised_provider_id=txn.get('normalised_provider_id'),
+                        normalised_provider_id=normalised_id,
                         timestamp=txn.get('date'),
                         description=txn.get('description'),
                         amount=txn.get('amount'),
                         currency=txn.get('currency', 'GBP'),
                         transaction_type=txn.get('transaction_type'),
-                        transaction_category=txn.get('category'),
-                        merchant_name=txn.get('merchant_name'),
+                        transaction_category=category,
+                        merchant_name=merchant_name,
                         running_balance=txn.get('running_balance'),
                         metadata=txn.get('metadata', {})
                     )
 
                     if txn_id:
                         synced_count += 1
+                        if idx <= 3:  # Log first few insertions
+                            print(f"     ✅ Transaction {idx}: Inserted (id: {normalised_id})")
                     else:
                         error_count += 1
+                        print(f"     ❌ Transaction {idx}: Failed to insert (id: {normalised_id})")
 
                 except Exception as e:
-                    print(f"❌ Error inserting transaction: {e}")
+                    print(f"     ❌ Transaction {idx}: Error inserting: {e}")
                     error_count += 1
         else:
             print(f"⚠️  No transactions found for account {truelayer_account_id}")
@@ -129,6 +231,80 @@ def sync_account_transactions(
         }
 
 
+def refresh_token_if_needed(connection_id: int, connection: dict) -> dict:
+    """
+    Check if token is expired and refresh if needed.
+
+    Args:
+        connection_id: Database connection ID
+        connection: Connection dict with token info
+
+    Returns:
+        Updated connection dict with fresh token
+    """
+    try:
+        token_expires_at = connection.get('token_expires_at')
+
+        # Check if token is expired or about to expire (within 5 minutes)
+        if token_expires_at:
+            try:
+                # Parse expiration time
+                if isinstance(token_expires_at, str):
+                    expires_dt = datetime.fromisoformat(token_expires_at)
+                else:
+                    expires_dt = token_expires_at
+
+                # Ensure we're comparing timezone-aware datetimes
+                # If expires_dt is naive, assume UTC
+                if expires_dt.tzinfo is None:
+                    expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+
+                # Get current time in UTC
+                now_utc = datetime.now(timezone.utc)
+
+                time_until_expiry = (expires_dt - now_utc).total_seconds()
+
+                # If expired or expiring within 5 minutes, refresh
+                if time_until_expiry < 300:
+                    print(f"   ⏰ Token expires in {time_until_expiry:.0f} seconds - refreshing...")
+
+                    # Decrypt refresh token and refresh
+                    encrypted_refresh_token = connection.get('refresh_token')
+                    refresh_token = decrypt_token(encrypted_refresh_token)
+
+                    # Call TrueLayer to refresh
+                    new_tokens = refresh_access_token(refresh_token)
+                    print(f"   ✅ Token refreshed successfully")
+
+                    # Encrypt new tokens
+                    new_access_token = encrypt_token(new_tokens['access_token'])
+                    new_refresh_token = encrypt_token(new_tokens['refresh_token'])
+
+                    # Update database
+                    database.update_connection_tokens(
+                        connection_id,
+                        new_access_token,
+                        new_refresh_token,
+                        new_tokens['expires_at']
+                    )
+
+                    # Update connection dict
+                    connection['access_token'] = new_access_token
+                    connection['refresh_token'] = new_refresh_token
+                    connection['token_expires_at'] = new_tokens['expires_at']
+
+                    return connection
+            except Exception as e:
+                print(f"   ⚠️  Could not parse token expiry time: {e}")
+                # Continue anyway, let the API call fail if token is actually invalid
+
+        return connection
+
+    except Exception as e:
+        print(f"   ⚠️  Token refresh check failed: {e}")
+        return connection
+
+
 def sync_all_accounts(user_id: int) -> dict:
     """
     Sync transactions for all connected accounts of a user.
@@ -157,23 +333,60 @@ def sync_all_accounts(user_id: int) -> dict:
 
     for connection in connections:
         connection_id = connection.get('id')
-        user_id = connection.get('user_id')
+        user_id_from_conn = connection.get('user_id')
+        conn_status = connection.get('connection_status')
+
+        print(f"   📍 Connection {connection_id} - Status: {conn_status}")
+
+        # Refresh token if expired
+        connection = refresh_token_if_needed(connection_id, connection)
 
         # Get accounts for this connection
         accounts = database.get_connection_accounts(connection_id)
+        print(f"   📊 Found {len(accounts)} accounts for connection {connection_id}")
 
         for account in accounts:
             truelayer_account_id = account.get('account_id')
             db_account_id = account.get('id')  # Database ID
-            access_token = decrypt_token(connection.get('access_token'))
+            account_display_name = account.get('display_name', 'N/A')
 
-            result = sync_account_transactions(
-                connection_id=connection_id,
-                truelayer_account_id=truelayer_account_id,
-                db_account_id=db_account_id,
-                access_token=access_token,
-            )
-            account_results.append(result)
+            print(f"     🏦 Account: {account_display_name} (ID: {truelayer_account_id}, DB ID: {db_account_id})")
+
+            try:
+                # Decrypt access token
+                encrypted_token = connection.get('access_token')
+                if not encrypted_token:
+                    print(f"     ❌ No access token found for connection {connection_id}")
+                    account_results.append({
+                        'account_id': truelayer_account_id,
+                        'synced': 0,
+                        'duplicates': 0,
+                        'errors': 1,
+                        'error_message': 'No access token found',
+                    })
+                    continue
+
+                access_token = decrypt_token(encrypted_token)
+                print(f"   ✅ Successfully decrypted access token for account {truelayer_account_id}")
+
+                result = sync_account_transactions(
+                    connection_id=connection_id,
+                    truelayer_account_id=truelayer_account_id,
+                    db_account_id=db_account_id,
+                    access_token=access_token,
+                )
+                account_results.append(result)
+            except Exception as e:
+                print(f"❌ Error processing account {truelayer_account_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                account_results.append({
+                    'account_id': truelayer_account_id,
+                    'synced': 0,
+                    'duplicates': 0,
+                    'errors': 1,
+                    'error_message': str(e),
+                })
 
     # Aggregate results
     total_synced = sum(r.get('synced', 0) for r in account_results)
@@ -187,6 +400,206 @@ def sync_all_accounts(user_id: int) -> dict:
         'total_duplicates': total_duplicates,
         'total_errors': total_errors,
         'accounts': account_results,
+    }
+
+
+def sync_card_transactions(
+    connection_id: int,
+    truelayer_card_id: str,
+    db_card_id: int,
+    access_token: str,
+    days_back: int = 90,
+    use_incremental: bool = True
+) -> dict:
+    """
+    Sync transactions from TrueLayer for a specific card.
+
+    Args:
+        connection_id: Database connection ID
+        truelayer_card_id: TrueLayer card ID (string)
+        db_card_id: Database card ID (foreign key to truelayer_cards.id)
+        access_token: Valid OAuth access token
+        days_back: Number of days to fetch (fallback if no last_synced_at)
+        use_incremental: Use incremental sync based on last_synced_at
+
+    Returns:
+        Dictionary with sync results
+    """
+    try:
+        print(f"🔄 Syncing card {truelayer_card_id}...")
+
+        client = TrueLayerClient(access_token)
+
+        # Determine the sync window
+        sync_days = days_back
+        if use_incremental:
+            # Get the card's last sync timestamp
+            card = database.get_connection_cards(connection_id)
+            # Find this specific card in the list
+            card_record = next((c for c in card if c.get('id') == db_card_id), None)
+            if card_record and card_record.get('last_synced_at'):
+                last_sync = datetime.fromisoformat(card_record['last_synced_at'])
+                days_since_sync = (datetime.utcnow() - last_sync).days
+                sync_days = max(1, days_since_sync + 1)
+                print(f"   📅 Incremental sync: last synced {days_since_sync} days ago, fetching {sync_days} days")
+            else:
+                print(f"   📅 No previous sync found, fetching full {days_back} days")
+
+        # Fetch transactions from TrueLayer
+        transactions = client.fetch_all_card_transactions(truelayer_card_id, sync_days)
+
+        synced_count = 0
+        duplicate_count = 0
+        error_count = 0
+
+        if transactions:
+            # Insert/update transactions in database
+            for txn in transactions:
+                try:
+                    # Check if transaction already exists (using normalised_provider_id)
+                    existing = database.get_card_transaction_by_id(
+                        txn.get('normalised_provider_id')
+                    )
+
+                    if existing:
+                        duplicate_count += 1
+                        continue
+
+                    # Insert new card transaction
+                    txn_id = database.insert_truelayer_card_transaction(
+                        card_id=db_card_id,
+                        transaction_id=txn.get('transaction_id'),
+                        normalised_provider_id=txn.get('normalised_provider_id'),
+                        timestamp=txn.get('date'),
+                        description=txn.get('description'),
+                        amount=txn.get('amount'),
+                        currency=txn.get('currency', 'GBP'),
+                        transaction_type=txn.get('transaction_type'),
+                        transaction_category=txn.get('category'),
+                        merchant_name=txn.get('merchant_name'),
+                        running_balance=txn.get('running_balance'),
+                        metadata=txn.get('metadata', {})
+                    )
+
+                    if txn_id:
+                        synced_count += 1
+                    else:
+                        error_count += 1
+
+                except Exception as e:
+                    print(f"❌ Error inserting card transaction: {e}")
+                    error_count += 1
+        else:
+            print(f"⚠️  No transactions found for card {truelayer_card_id}")
+
+        # Update card-level sync timestamp
+        database.update_card_last_synced(db_card_id, datetime.utcnow().isoformat())
+
+        result = {
+            'card_id': truelayer_card_id,
+            'synced': synced_count,
+            'duplicates': duplicate_count,
+            'errors': error_count,
+            'total_processed': synced_count + duplicate_count,
+        }
+
+        print(f"✅ Card sync complete: {synced_count} synced, {duplicate_count} duplicates, {error_count} errors")
+        return result
+
+    except Exception as e:
+        print(f"❌ Sync failed for card {truelayer_card_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'card_id': truelayer_card_id,
+            'synced': 0,
+            'duplicates': 0,
+            'errors': 1,
+            'error_message': str(e),
+        }
+
+
+def sync_all_cards(user_id: int) -> dict:
+    """
+    Discover and sync transactions for all cards of a user.
+
+    Args:
+        user_id: User ID
+
+    Returns:
+        Dictionary with aggregate sync results
+    """
+    print(f"🔄 Starting card sync for user {user_id}...")
+
+    # Get all active connections for user
+    connections = database.get_user_connections(user_id)
+
+    if not connections:
+        print(f"⚠️  No active connections found for user {user_id}")
+        return {
+            'user_id': user_id,
+            'total_cards': 0,
+            'total_synced': 0,
+            'cards': []
+        }
+
+    card_results = []
+
+    for connection in connections:
+        connection_id = connection.get('id')
+        access_token = decrypt_token(connection.get('access_token'))
+
+        try:
+            client = TrueLayerClient(access_token)
+
+            # Discover cards for this connection
+            cards = client.get_cards()
+
+            if not cards:
+                print(f"⚠️  No cards found for connection {connection_id}")
+                continue
+
+            for card in cards:
+                truelayer_card_id = card.get('id')
+                card_name = card.get('display_name', card.get('name', 'Unknown Card'))
+                card_type = card.get('type', 'UNKNOWN')
+                last_four = card.get('partial_card_number', '')[-4:] if card.get('partial_card_number') else None
+                issuer = card.get('card_issuer', None)
+
+                # Save or update card in database
+                db_card_id = database.save_connection_card(
+                    connection_id=connection_id,
+                    card_id=truelayer_card_id,
+                    card_name=card_name,
+                    card_type=card_type,
+                    last_four=last_four,
+                    issuer=issuer
+                )
+
+                # Sync transactions for this card
+                result = sync_card_transactions(
+                    connection_id=connection_id,
+                    truelayer_card_id=truelayer_card_id,
+                    db_card_id=db_card_id,
+                    access_token=access_token,
+                )
+                card_results.append(result)
+
+        except Exception as e:
+            print(f"❌ Error syncing cards for connection {connection_id}: {e}")
+
+    # Aggregate results
+    total_synced = sum(r.get('synced', 0) for r in card_results)
+    total_duplicates = sum(r.get('duplicates', 0) for r in card_results)
+    total_errors = sum(r.get('errors', 0) for r in card_results)
+
+    return {
+        'user_id': user_id,
+        'total_cards': len(card_results),
+        'total_synced': total_synced,
+        'total_duplicates': total_duplicates,
+        'total_errors': total_errors,
+        'cards': card_results,
     }
 
 

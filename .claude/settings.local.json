@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker --version:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker exec:*)",
+      "Bash(test:*)",
+      "Bash(pkill:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(cat:*)",
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(source:*)",
+      "Bash(__NEW_LINE__ echo \"1. Test /api/truelayer/authorize endpoint:\" curl -s \"http://localhost:5000/api/truelayer/authorize?user_id=1\")",
+      "Bash(psql:*)",
+      "Bash(xargs kill:*)",
+      "WebFetch(domain:docs.truelayer.com)",
+      "Bash(PGPASSWORD=\"aC0_Xbvulrw8ldPgU6sa\" psql:*)",
+      "WebSearch",
+      "Bash(python -m py_compile:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
