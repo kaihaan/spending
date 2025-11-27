@@ -42,6 +42,10 @@ export default function AmazonOrderHistory() {
   const [importResult, setImportResult] = useState<any>(null);
   const [showOrders, setShowOrders] = useState(false);
   const [orders, setOrders] = useState<AmazonOrder[]>([]);
+  const [uploadMode, setUploadMode] = useState<'upload' | 'select'>('upload');
+  const [uploading, setUploading] = useState(false);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [loadingFiles, setLoadingFiles] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -66,9 +70,44 @@ export default function AmazonOrderHistory() {
     }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      alert('Please select a CSV file');
+      return;
+    }
+
+    try {
+      setUploading(true);
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await axios.post(`${API_URL}/amazon/upload`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+
+      setUploadedFile(file);
+      setSelectedFile(response.data.filename);
+
+      // Refresh file list
+      await fetchData();
+
+      // Auto-switch to select tab and show success
+      setUploadMode('select');
+    } catch (err: any) {
+      alert(`Upload failed: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleImport = async () => {
     if (!selectedFile) {
-      alert('Please select a file to import');
+      alert('Please select or upload a file to import');
       return;
     }
 
@@ -84,8 +123,9 @@ export default function AmazonOrderHistory() {
       setImportResult(response.data);
       setShowImportDialog(false);
       setSelectedFile('');
+      setUploadedFile(null);
 
-      // Refresh statistics
+      // Refresh statistics and files
       await fetchData();
 
       // Show success message
@@ -94,6 +134,24 @@ export default function AmazonOrderHistory() {
       alert(`Import failed: ${err.response?.data?.error || err.message}`);
     } finally {
       setImporting(false);
+    }
+  };
+
+  const openImportDialog = async () => {
+    // Reset state first
+    setUploadMode('select');
+    setSelectedFile('');
+    setUploadedFile(null);
+
+    // Open dialog with loading state
+    setLoadingFiles(true);
+    setShowImportDialog(true);
+
+    // Refresh file list in the background
+    try {
+      await fetchData();
+    } finally {
+      setLoadingFiles(false);
     }
   };
 
@@ -188,7 +246,7 @@ export default function AmazonOrderHistory() {
           </button>
           <button
             className="btn btn-primary"
-            onClick={() => setShowImportDialog(true)}
+            onClick={openImportDialog}
           >
             + Import Amazon Orders
           </button>
@@ -314,27 +372,76 @@ export default function AmazonOrderHistory() {
                 <label className="label">
                   <span className="label-text">CSV File</span>
                 </label>
-                {files.length > 0 ? (
-                  <select
-                    className="select select-bordered"
-                    value={selectedFile}
-                    onChange={(e) => setSelectedFile(e.target.value)}
+
+                {/* Toggle between upload and select modes */}
+                <div className="tabs tabs-boxed mb-3">
+                  <a
+                    className={`tab ${uploadMode === 'upload' ? 'tab-active' : ''}`}
+                    onClick={() => setUploadMode('upload')}
                   >
-                    <option value="">Select a file...</option>
-                    {files.map((file) => (
-                      <option key={file.filename} value={file.filename}>
-                        {file.filename}
-                      </option>
-                    ))}
-                  </select>
+                    📤 Upload File
+                  </a>
+                  <a
+                    className={`tab ${uploadMode === 'select' ? 'tab-active' : ''}`}
+                    onClick={() => setUploadMode('select')}
+                  >
+                    📋 Select from Folder
+                  </a>
+                </div>
+
+                {uploadMode === 'upload' ? (
+                  <div>
+                    <input
+                      type="file"
+                      className="file-input file-input-bordered w-full"
+                      accept=".csv"
+                      onChange={handleFileUpload}
+                      disabled={uploading || loadingFiles}
+                    />
+                    {uploadedFile && (
+                      <div className="alert alert-success mt-2">
+                        <span>✓ Selected: {uploadedFile.name}</span>
+                      </div>
+                    )}
+                    {uploading && (
+                      <div className="flex gap-2 items-center mt-2">
+                        <span className="loading loading-spinner loading-sm"></span>
+                        <span>Uploading...</span>
+                      </div>
+                    )}
+                  </div>
                 ) : (
-                  <div className="alert alert-warning">
-                    <span>No Amazon CSV files found in /sample folder</span>
+                  <div>
+                    {loadingFiles ? (
+                      <div className="flex gap-2 items-center justify-center p-4">
+                        <span className="loading loading-spinner loading-sm"></span>
+                        <span>Loading files...</span>
+                      </div>
+                    ) : files.length > 0 ? (
+                      <select
+                        className="select select-bordered w-full"
+                        value={selectedFile}
+                        onChange={(e) => setSelectedFile(e.target.value)}
+                      >
+                        <option value="">Select a file...</option>
+                        {files.map((file) => (
+                          <option key={file.filename} value={file.filename}>
+                            {file.filename}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="alert alert-info">
+                        <span>No Amazon CSV files found in /sample folder. Use the "Upload File" tab above to add one.</span>
+                      </div>
+                    )}
                   </div>
                 )}
                 <label className="label">
                   <span className="label-text-alt">
-                    Place Amazon order history CSV files in the /sample folder
+                    {uploadMode === 'upload'
+                      ? 'Select a CSV file from your computer'
+                      : 'Select from previously uploaded files'}
                   </span>
                 </label>
               </div>
@@ -358,15 +465,17 @@ export default function AmazonOrderHistory() {
                 onClick={() => {
                   setShowImportDialog(false);
                   setSelectedFile('');
+                  setUploadedFile(null);
+                  setUploadMode('select');
                 }}
-                disabled={importing}
+                disabled={importing || uploading}
               >
                 Cancel
               </button>
               <button
                 className="btn btn-primary"
                 onClick={handleImport}
-                disabled={!selectedFile || importing}
+                disabled={!selectedFile || importing || loadingFiles || uploading}
               >
                 {importing ? (
                   <>

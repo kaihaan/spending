@@ -1,5 +1,6 @@
 import sqlite3
 from contextlib import contextmanager
+from typing import Optional
 
 DATABASE_PATH = 'finance.db'
 
@@ -20,17 +21,14 @@ def init_db():
     with get_db() as conn:
         c = conn.cursor()
 
-        # Transactions table
+        # Transactions table - stores original data from bank imports only
         c.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
                 description TEXT NOT NULL,
                 amount REAL NOT NULL,
-                category TEXT DEFAULT 'Other',
                 source_file TEXT,
-                merchant TEXT,
-                huququllah_classification TEXT CHECK(huququllah_classification IN ('essential', 'discretionary', NULL)),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -65,6 +63,16 @@ def init_db():
                 friendly_name TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(sort_code, account_number)
+            )
+        ''')
+
+        # Merchants table - stores merchant to category mappings
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS merchants (
+                merchant_name TEXT PRIMARY KEY,
+                category TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
@@ -149,6 +157,68 @@ def init_db():
             )
         ''')
 
+        # Transaction Enrichments table - stores all LLM enrichment data
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS transaction_enrichments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_id INTEGER NOT NULL UNIQUE,
+                primary_category TEXT,
+                subcategory TEXT,
+                merchant_clean_name TEXT,
+                merchant_type TEXT,
+                essential_discretionary TEXT CHECK(essential_discretionary IN ('Essential', 'Discretionary', NULL)),
+                payment_method TEXT,
+                payment_method_subtype TEXT,
+                payee TEXT,
+                purchase_date TEXT,
+                confidence_score REAL,
+                raw_response TEXT,
+                llm_provider TEXT,
+                llm_model TEXT,
+                enrichment_source TEXT CHECK(enrichment_source IN ('lookup', 'llm', 'regex', 'manual', NULL)),
+                enriched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+            )
+        ''')
+
+        # LLM Enrichment Cache table - stores enriched data to avoid re-querying
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS llm_enrichment_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_description TEXT NOT NULL UNIQUE,
+                direction TEXT NOT NULL CHECK(direction IN ('in', 'out')),
+                primary_category TEXT,
+                subcategory TEXT,
+                merchant_clean_name TEXT,
+                merchant_type TEXT,
+                essential_discretionary TEXT,
+                payment_method TEXT,
+                payment_method_subtype TEXT,
+                payee TEXT,
+                purchase_date TEXT,
+                confidence_score REAL,
+                llm_provider TEXT,
+                llm_model TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # LLM Enrichment Failures table - tracks failed enrichment attempts
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS llm_enrichment_failures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_id INTEGER,
+                transaction_description TEXT NOT NULL,
+                error_type TEXT,
+                error_message TEXT,
+                llm_provider TEXT,
+                attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                retry_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'pending_retry' CHECK(status IN ('pending_retry', 'ignored', 'manual_review')),
+                FOREIGN KEY (transaction_id) REFERENCES transactions(id)
+            )
+        ''')
+
         # Seed default categories
         default_categories = [
             'Groceries', 'Transport', 'Dining', 'Entertainment',
@@ -161,28 +231,64 @@ def init_db():
         conn.commit()
         print("✓ Database initialized successfully")
 
+    # Run migrations
+    add_lookup_description_column()
+    add_transaction_pattern_columns()
+    add_enrichment_source_column()
+    populate_lookup_descriptions()
+    create_llm_model_config_table()
+
 
 def get_all_transactions():
-    """Get all transactions from database."""
+    """Get all transactions from database with their LLM enrichment data."""
     with get_db() as conn:
         c = conn.cursor()
         c.execute('''
-            SELECT id, date, description, amount, category, source_file, merchant, huququllah_classification, created_at
-            FROM transactions
-            ORDER BY date DESC
+            SELECT
+                t.id, t.date, t.description, t.amount, t.source_file, t.created_at,
+                te.primary_category as category,
+                te.merchant_clean_name,
+                te.subcategory,
+                te.merchant_type,
+                te.essential_discretionary,
+                te.payment_method,
+                te.payment_method_subtype,
+                te.payee,
+                te.purchase_date,
+                te.confidence_score,
+                te.enrichment_source,
+                te.llm_provider,
+                te.llm_model,
+                t.lookup_description
+            FROM transactions t
+            LEFT JOIN transaction_enrichments te ON t.id = te.transaction_id
+            ORDER BY t.date DESC
         ''')
         rows = c.fetchall()
         return [dict(row) for row in rows]
 
 
-def add_transaction(date, description, amount, category='Other', source_file=None, merchant=None):
-    """Add a single transaction to database."""
+def add_transaction(
+    date, description, amount, source_file=None, category=None, merchant=None,
+    provider=None, variant=None, payee=None, reference=None, mandate_number=None,
+    branch=None, entity=None, trip_date=None, sender=None, rate=None, tax=None,
+    payment_count=None, extraction_confidence=None
+):
+    """
+    Add a single transaction to database.
+
+    Note: category and merchant parameters are deprecated - enrichment data is now
+    stored in the transaction_enrichments table. These parameters are accepted for
+    backwards compatibility but ignored.
+    """
     with get_db() as conn:
         c = conn.cursor()
         c.execute('''
-            INSERT INTO transactions (date, description, amount, category, source_file, merchant)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (date, description, amount, category, source_file, merchant))
+            INSERT INTO transactions (
+                date, description, amount, source_file
+            )
+            VALUES (?, ?, ?, ?)
+        ''', (date, description, amount, source_file))
         conn.commit()
         return c.lastrowid
 
@@ -417,6 +523,383 @@ def delete_custom_category(name):
         c.execute('DELETE FROM categories WHERE name = ?', (name,))
         conn.commit()
         return c.rowcount > 0
+
+
+# ============================================================================
+# Merchant Management Functions
+# ============================================================================
+
+def get_all_merchants():
+    """
+    Get all unique merchants from transactions with their transaction counts
+    and assigned categories (if any).
+
+    Returns:
+        List of dictionaries with merchant_name, transaction_count, assigned_category, and most_common_category
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('''
+            SELECT
+                t.merchant,
+                COUNT(*) as transaction_count,
+                m.category as assigned_category,
+                (
+                    SELECT category FROM transactions
+                    WHERE merchant = t.merchant
+                    GROUP BY category
+                    ORDER BY COUNT(*) DESC
+                    LIMIT 1
+                ) as most_common_category
+            FROM transactions t
+            LEFT JOIN merchants m ON t.merchant = m.merchant_name
+            WHERE t.merchant IS NOT NULL AND t.merchant != ''
+            GROUP BY t.merchant
+            ORDER BY transaction_count DESC
+        ''')
+        rows = c.fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_merchant_category(merchant_name):
+    """
+    Get the assigned category for a merchant.
+
+    Args:
+        merchant_name: Name of the merchant
+
+    Returns:
+        Category name or None if not assigned
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('SELECT category FROM merchants WHERE merchant_name = ?', (merchant_name,))
+        row = c.fetchone()
+        return row['category'] if row else None
+
+
+def set_merchant_category(merchant_name, category):
+    """
+    Assign a category to a merchant and update all existing transactions.
+
+    Args:
+        merchant_name: Name of the merchant
+        category: Category name to assign
+
+    Returns:
+        Number of transactions updated
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Insert or update merchant mapping
+        c.execute('''
+            INSERT OR REPLACE INTO merchants (merchant_name, category, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+        ''', (merchant_name, category))
+
+        # Update all transactions from this merchant
+        c.execute('''
+            UPDATE transactions
+            SET category = ?
+            WHERE merchant = ?
+        ''', (category, merchant_name))
+
+        conn.commit()
+        return c.rowcount
+
+
+def delete_merchant_mapping(merchant_name):
+    """
+    Delete the category mapping for a merchant.
+
+    Args:
+        merchant_name: Name of the merchant
+
+    Returns:
+        Boolean indicating success
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('DELETE FROM merchants WHERE merchant_name = ?', (merchant_name,))
+        conn.commit()
+        return c.rowcount > 0
+
+
+def fix_paypal_merchants_preview():
+    """
+    Preview what PayPal merchant fixes would be applied.
+
+    Returns:
+        List of changes that would be made
+    """
+    import re
+
+    transactions = get_all_transactions()
+    changes = []
+
+    for txn in transactions:
+        description = txn.get('description', '')
+        merchant = txn.get('merchant', '')
+
+        if not description or 'PAYPAL' not in description.upper():
+            continue
+
+        # Extract PayPal merchant from description
+        match = re.search(r'\*([A-Z0-9\s]+?)(?:\s+ON\s+\d{1,2}|\s+[A-Z]{2}(?:\s|$)|\s*$)', description, re.IGNORECASE)
+
+        if match:
+            extracted_merchant = match.group(1).strip()
+            # Clean up trailing numbers
+            extracted_merchant = re.sub(r'\s+\d+$', '', extracted_merchant)
+
+            if extracted_merchant and extracted_merchant != merchant:
+                changes.append({
+                    'transaction_id': txn['id'],
+                    'description': description[:60],
+                    'current_merchant': merchant,
+                    'new_merchant': extracted_merchant
+                })
+
+    return changes
+
+
+def fix_paypal_merchants():
+    """
+    Fix PayPal transactions by extracting real merchant names from descriptions.
+
+    Returns:
+        Dictionary with fix statistics
+    """
+    import re
+
+    transactions = get_all_transactions()
+    fixed_count = 0
+    changes = []
+
+    with get_db() as conn:
+        c = conn.cursor()
+
+        for txn in transactions:
+            description = txn.get('description', '')
+            merchant = txn.get('merchant', '')
+
+            if not description or 'PAYPAL' not in description.upper():
+                continue
+
+            # Extract PayPal merchant from description
+            match = re.search(r'\*([A-Z0-9\s]+?)(?:\s+ON\s+\d{1,2}|\s+[A-Z]{2}(?:\s|$)|\s*$)', description, re.IGNORECASE)
+
+            if match:
+                extracted_merchant = match.group(1).strip()
+                # Clean up trailing numbers
+                extracted_merchant = re.sub(r'\s+\d+$', '', extracted_merchant)
+
+                if extracted_merchant and extracted_merchant != merchant:
+                    c.execute('''
+                        UPDATE transactions
+                        SET merchant = ?
+                        WHERE id = ?
+                    ''', (extracted_merchant, txn['id']))
+
+                    fixed_count += 1
+                    changes.append({
+                        'transaction_id': txn['id'],
+                        'old_merchant': merchant,
+                        'new_merchant': extracted_merchant
+                    })
+
+        conn.commit()
+
+    return {
+        'success': True,
+        'fixed_count': fixed_count,
+        'sample_changes': changes[:20]  # Show first 20 examples
+    }
+
+
+def fix_via_apple_pay_merchants_preview():
+    """
+    Preview what VIA APPLE PAY merchant fixes would be applied.
+
+    Returns:
+        List of changes that would be made
+    """
+    import re
+
+    transactions = get_all_transactions()
+    changes = []
+
+    for txn in transactions:
+        description = txn.get('description', '')
+        merchant = txn.get('merchant', '')
+
+        if not description or 'VIA APPLE PAY' not in description.upper():
+            continue
+
+        # Extract VIA APPLE PAY merchant from description
+        match = re.search(r'^(.+?)\s*\(VIA APPLE PAY\)', description, re.IGNORECASE)
+
+        if match:
+            extracted_merchant = match.group(1).strip()
+            # Clean up trailing numbers
+            extracted_merchant = re.sub(r'\s+\d+$', '', extracted_merchant)
+
+            if extracted_merchant and extracted_merchant != merchant:
+                changes.append({
+                    'transaction_id': txn['id'],
+                    'description': description[:60],
+                    'current_merchant': merchant,
+                    'new_merchant': extracted_merchant
+                })
+
+    return changes
+
+
+def fix_via_apple_pay_merchants():
+    """
+    Fix VIA APPLE PAY transactions by extracting real merchant names from descriptions.
+
+    Returns:
+        Dictionary with fix statistics
+    """
+    import re
+
+    transactions = get_all_transactions()
+    fixed_count = 0
+    changes = []
+
+    with get_db() as conn:
+        c = conn.cursor()
+
+        for txn in transactions:
+            description = txn.get('description', '')
+            merchant = txn.get('merchant', '')
+
+            if not description or 'VIA APPLE PAY' not in description.upper():
+                continue
+
+            # Extract VIA APPLE PAY merchant from description
+            match = re.search(r'^(.+?)\s*\(VIA APPLE PAY\)', description, re.IGNORECASE)
+
+            if match:
+                extracted_merchant = match.group(1).strip()
+                # Clean up trailing numbers
+                extracted_merchant = re.sub(r'\s+\d+$', '', extracted_merchant)
+
+                if extracted_merchant and extracted_merchant != merchant:
+                    c.execute('''
+                        UPDATE transactions
+                        SET merchant = ?
+                        WHERE id = ?
+                    ''', (extracted_merchant, txn['id']))
+
+                    fixed_count += 1
+                    changes.append({
+                        'transaction_id': txn['id'],
+                        'old_merchant': merchant,
+                        'new_merchant': extracted_merchant
+                    })
+
+        conn.commit()
+
+    return {
+        'success': True,
+        'fixed_count': fixed_count,
+        'sample_changes': changes[:20]  # Show first 20 examples
+    }
+
+
+def fix_zettle_merchants_preview():
+    """
+    Preview what Zettle merchant fixes would be applied.
+
+    Returns:
+        List of changes that would be made
+    """
+    import re
+
+    transactions = get_all_transactions()
+    changes = []
+
+    for txn in transactions:
+        description = txn.get('description', '')
+        merchant = txn.get('merchant', '')
+
+        if not description or 'ZETTLE' not in description.upper():
+            continue
+
+        # Extract Zettle merchant from description
+        match = re.search(r'ZETTLE_\*([A-Z0-9\s]+?)(?:\s+ON\s+\d{1,2}|\s+[A-Z]{2}(?:\s|$)|\s*$)', description, re.IGNORECASE)
+
+        if match:
+            extracted_merchant = match.group(1).strip()
+            # Clean up trailing numbers
+            extracted_merchant = re.sub(r'\s+\d+$', '', extracted_merchant)
+
+            if extracted_merchant and extracted_merchant != merchant:
+                changes.append({
+                    'transaction_id': txn['id'],
+                    'description': description[:60],
+                    'current_merchant': merchant,
+                    'new_merchant': extracted_merchant
+                })
+
+    return changes
+
+
+def fix_zettle_merchants():
+    """
+    Fix Zettle transactions by extracting real merchant names from descriptions.
+
+    Returns:
+        Dictionary with fix statistics
+    """
+    import re
+
+    transactions = get_all_transactions()
+    fixed_count = 0
+    changes = []
+
+    with get_db() as conn:
+        c = conn.cursor()
+
+        for txn in transactions:
+            description = txn.get('description', '')
+            merchant = txn.get('merchant', '')
+
+            if not description or 'ZETTLE' not in description.upper():
+                continue
+
+            # Extract Zettle merchant from description
+            match = re.search(r'ZETTLE_\*([A-Z0-9\s]+?)(?:\s+ON\s+\d{1,2}|\s+[A-Z]{2}(?:\s|$)|\s*$)', description, re.IGNORECASE)
+
+            if match:
+                extracted_merchant = match.group(1).strip()
+                # Clean up trailing numbers
+                extracted_merchant = re.sub(r'\s+\d+$', '', extracted_merchant)
+
+                if extracted_merchant and extracted_merchant != merchant:
+                    c.execute('''
+                        UPDATE transactions
+                        SET merchant = ?
+                        WHERE id = ?
+                    ''', (extracted_merchant, txn['id']))
+
+                    fixed_count += 1
+                    changes.append({
+                        'transaction_id': txn['id'],
+                        'old_merchant': merchant,
+                        'new_merchant': extracted_merchant
+                    })
+
+        conn.commit()
+
+    return {
+        'success': True,
+        'fixed_count': fixed_count,
+        'sample_changes': changes[:20]  # Show first 20 examples
+    }
 
 
 def bulk_update_transaction_categories(transaction_ids, category):
@@ -675,6 +1158,401 @@ def migrate_add_huququllah_column():
         return False
 
 
+def add_lookup_description_column():
+    """
+    Add lookup_description column to transactions table if it doesn't exist.
+    This column stores product/service descriptions from lookups (Apple, Amazon, etc.).
+
+    This is safe to run multiple times - it will only add the column if it doesn't exist.
+
+    Returns:
+        Boolean indicating whether migration was needed and executed
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Check if column already exists
+        c.execute("PRAGMA table_info(transactions)")
+        columns = [col[1] for col in c.fetchall()]
+
+        if 'lookup_description' not in columns:
+            # Add the column
+            c.execute('''
+                ALTER TABLE transactions
+                ADD COLUMN lookup_description TEXT
+            ''')
+            conn.commit()
+            print("✓ Added lookup_description column to transactions table")
+            return True
+
+        return False
+
+
+def add_transaction_pattern_columns():
+    """
+    Add provider, variant, and extracted variable columns to transactions table.
+
+    This migration adds columns for structured data extracted from transaction descriptions:
+    - provider: The payment/transaction provider (Apple Pay, Card Payment, etc.)
+    - variant: Sub-type or variant (e.g., AIRBNB for Card Payment, Marketplace for Amazon)
+    - payee: The recipient/merchant of the transaction
+    - reference: Reference code or transaction reference number
+    - mandate_number: For Direct Debit transactions
+    - branch: Branch or location information
+    - entity: Additional entity information (e.g., number of rides)
+    - trip_date: Date of a trip (for transport services)
+    - sender: For transfers, the source person/entity
+    - rate: Interest rate or cashback rate
+    - tax: Tax amount
+    - payment_count: Number of payments (for aggregated entries)
+    - extraction_confidence: Confidence score of the extraction (0-100)
+
+    This is safe to run multiple times - it will only add columns that don't exist.
+
+    Returns:
+        Dictionary with counts of added columns
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Check existing columns
+        c.execute("PRAGMA table_info(transactions)")
+        existing_columns = {col[1] for col in c.fetchall()}
+
+        columns_to_add = {
+            'provider': 'TEXT',
+            'variant': 'TEXT',
+            'payee': 'TEXT',
+            'reference': 'TEXT',
+            'mandate_number': 'TEXT',
+            'branch': 'TEXT',
+            'entity': 'TEXT',
+            'trip_date': 'TEXT',
+            'sender': 'TEXT',
+            'rate': 'TEXT',
+            'tax': 'TEXT',
+            'payment_count': 'INTEGER',
+            'extraction_confidence': 'INTEGER'
+        }
+
+        added_count = 0
+        for col_name, col_type in columns_to_add.items():
+            if col_name not in existing_columns:
+                c.execute(f'''
+                    ALTER TABLE transactions
+                    ADD COLUMN {col_name} {col_type}
+                ''')
+                added_count += 1
+
+        if added_count > 0:
+            conn.commit()
+            print(f"✓ Added {added_count} pattern extraction columns to transactions table")
+
+        return added_count
+
+
+def add_enrichment_source_column():
+    """
+    Add enrichment_source column to transaction_enrichments table if it doesn't exist.
+    This column tracks the source of enrichment data: 'lookup', 'llm', 'regex', 'manual', or NULL.
+
+    This is safe to run multiple times - it will only add the column if it doesn't exist.
+
+    Returns:
+        Boolean indicating whether migration was needed and executed
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Check if column already exists
+        c.execute("PRAGMA table_info(transaction_enrichments)")
+        columns = [col[1] for col in c.fetchall()]
+
+        if 'enrichment_source' not in columns:
+            # Add the column
+            c.execute('''
+                ALTER TABLE transaction_enrichments
+                ADD COLUMN enrichment_source TEXT CHECK(enrichment_source IN ('lookup', 'llm', 'regex', 'manual', NULL))
+            ''')
+            conn.commit()
+            print("✓ Added enrichment_source column to transaction_enrichments table")
+            return True
+
+        return False
+
+
+def populate_lookup_descriptions():
+    """
+    Populate lookup_description column for transactions that have matches to Amazon or Apple purchases.
+
+    For transactions matched to Amazon orders, use the product_names from the order.
+    For transactions matched to Apple transactions, use the app_names.
+
+    This function is safe to run multiple times - it will update existing lookup_description values.
+
+    Returns:
+        Dictionary with counts of updated transactions
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+
+        updated_amazon = 0
+        updated_apple = 0
+
+        # Update lookup_description for Amazon matches
+        try:
+            c.execute('''
+                UPDATE transactions
+                SET lookup_description = (
+                    SELECT ao.product_names
+                    FROM amazon_transaction_matches atm
+                    JOIN amazon_orders ao ON atm.amazon_order_id = ao.id
+                    WHERE atm.transaction_id = transactions.id
+                    LIMIT 1
+                )
+                WHERE id IN (
+                    SELECT t.id FROM transactions t
+                    WHERE EXISTS (
+                        SELECT 1 FROM amazon_transaction_matches atm
+                        WHERE atm.transaction_id = t.id
+                    )
+                )
+            ''')
+            updated_amazon = c.rowcount
+
+            # Update lookup_description for Apple matches (don't overwrite Amazon data)
+            c.execute('''
+                UPDATE transactions
+                SET lookup_description = (
+                    SELECT COALESCE(
+                        NULLIF(lookup_description, ''),
+                        at.app_names
+                    )
+                    FROM apple_transaction_matches atm
+                    JOIN apple_transactions at ON atm.apple_transaction_id = at.id
+                    WHERE atm.bank_transaction_id = transactions.id
+                    LIMIT 1
+                )
+                WHERE id IN (
+                    SELECT t.id FROM transactions t
+                    WHERE EXISTS (
+                        SELECT 1 FROM apple_transaction_matches atm
+                        WHERE atm.bank_transaction_id = t.id
+                    )
+                )
+            ''')
+            updated_apple = c.rowcount
+
+            conn.commit()
+
+            total_updated = updated_amazon + updated_apple
+            if total_updated > 0:
+                print(f"✓ Populated lookup_description for {total_updated} transactions")
+                print(f"  - {updated_amazon} from Amazon matches")
+                print(f"  - {updated_apple} from Apple matches")
+
+            return {
+                'total': total_updated,
+                'amazon': updated_amazon,
+                'apple': updated_apple
+            }
+        except Exception as e:
+            print(f"✗ Error populating lookup descriptions: {e}")
+            return {
+                'total': 0,
+                'amazon': 0,
+                'apple': 0
+            }
+
+
+def create_llm_model_config_table():
+    """
+    Create llm_model_config table to store user-selected and custom LLM models.
+
+    This table tracks which models users have configured for each provider,
+    and allows adding custom Ollama models at runtime.
+
+    This is safe to run multiple times - it will only create the table if it doesn't exist.
+
+    Returns:
+        Boolean indicating whether table was created
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Check if table already exists
+        c.execute('''
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='llm_model_config'
+        ''')
+
+        if not c.fetchone():
+            # Create the table
+            c.execute('''
+                CREATE TABLE llm_model_config (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    is_custom BOOLEAN DEFAULT 0,
+                    is_selected BOOLEAN DEFAULT 0,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(provider, model_name)
+                )
+            ''')
+            conn.commit()
+            print("✓ Created llm_model_config table")
+            return True
+
+        return False
+
+
+def add_llm_model(provider: str, model_name: str, is_custom: bool = False) -> bool:
+    """
+    Add or update an LLM model in the configuration.
+
+    Args:
+        provider: LLM provider name (ollama, anthropic, openai, etc.)
+        model_name: Model name/identifier
+        is_custom: Whether this is a user-added custom model
+
+    Returns:
+        True if model was added, False if it already existed
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+
+        try:
+            c.execute('''
+                INSERT INTO llm_model_config (provider, model_name, is_custom)
+                VALUES (?, ?, ?)
+            ''', (provider, model_name, int(is_custom)))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            # Model already exists
+            return False
+
+
+def set_selected_model(provider: str, model_name: str) -> bool:
+    """
+    Set the currently selected model for a provider.
+
+    Args:
+        provider: LLM provider name
+        model_name: Model name to select
+
+    Returns:
+        True if model was selected, False if model not found
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Deselect all models for this provider
+        c.execute('''
+            UPDATE llm_model_config
+            SET is_selected = 0
+            WHERE provider = ?
+        ''', (provider,))
+
+        # Select the specified model
+        c.execute('''
+            UPDATE llm_model_config
+            SET is_selected = 1
+            WHERE provider = ? AND model_name = ?
+        ''', (provider, model_name))
+
+        conn.commit()
+        return c.rowcount > 0
+
+
+def get_selected_model(provider: str) -> Optional[str]:
+    """
+    Get the currently selected model for a provider.
+
+    Args:
+        provider: LLM provider name
+
+    Returns:
+        Model name if one is selected, None otherwise
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('''
+            SELECT model_name
+            FROM llm_model_config
+            WHERE provider = ? AND is_selected = 1
+            LIMIT 1
+        ''', (provider,))
+
+        result = c.fetchone()
+        return result[0] if result else None
+
+
+def get_provider_models(provider: str) -> dict:
+    """
+    Get all models for a provider (both built-in and custom).
+
+    Args:
+        provider: LLM provider name
+
+    Returns:
+        Dict with 'built_in' and 'custom' lists of models
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('''
+            SELECT model_name, is_custom, is_selected
+            FROM llm_model_config
+            WHERE provider = ?
+            ORDER BY is_custom ASC, model_name ASC
+        ''', (provider,))
+
+        models = {
+            'built_in': [],
+            'custom': []
+        }
+        selected = None
+
+        for row in c.fetchall():
+            model_info = {
+                'name': row['model_name'],
+                'selected': bool(row['is_selected'])
+            }
+            if row['is_custom']:
+                models['custom'].append(model_info)
+            else:
+                models['built_in'].append(model_info)
+
+            if row['is_selected']:
+                selected = row['model_name']
+
+        models['selected'] = selected
+        return models
+
+
+def delete_custom_model(provider: str, model_name: str) -> bool:
+    """
+    Delete a custom model from configuration.
+
+    Args:
+        provider: LLM provider name
+        model_name: Model name to delete
+
+    Returns:
+        True if model was deleted, False if not found or is built-in
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+
+        c.execute('''
+            DELETE FROM llm_model_config
+            WHERE provider = ? AND model_name = ? AND is_custom = 1
+        ''', (provider, model_name))
+
+        conn.commit()
+        return c.rowcount > 0
+
+
 # ============================================================================
 # Amazon Order Management Functions
 # ============================================================================
@@ -832,7 +1710,7 @@ def get_amazon_match_for_transaction(transaction_id):
 
 def get_unmatched_amazon_transactions():
     """
-    Get all transactions with Amazon merchant that haven't been matched to orders.
+    Get all transactions with Amazon references that haven't been matched to orders.
 
     Returns:
         List of transaction dictionaries
@@ -845,9 +1723,7 @@ def get_unmatched_amazon_transactions():
             LEFT JOIN amazon_transaction_matches m ON t.id = m.transaction_id
             WHERE m.id IS NULL
             AND (
-                UPPER(t.merchant) LIKE '%AMAZON%'
-                OR UPPER(t.merchant) LIKE '%AMZN%'
-                OR UPPER(t.description) LIKE '%AMAZON%'
+                UPPER(t.description) LIKE '%AMAZON%'
                 OR UPPER(t.description) LIKE '%AMZN%'
             )
             ORDER BY t.date DESC
@@ -877,9 +1753,7 @@ def check_amazon_coverage(date_from, date_to):
             FROM transactions
             WHERE date >= ? AND date <= ?
             AND (
-                UPPER(merchant) LIKE '%AMAZON%'
-                OR UPPER(merchant) LIKE '%AMZN%'
-                OR UPPER(description) LIKE '%AMAZON%'
+                UPPER(description) LIKE '%AMAZON%'
                 OR UPPER(description) LIKE '%AMZN%'
             )
         ''', (date_from, date_to))
@@ -993,6 +1867,29 @@ def update_transaction_description(transaction_id, new_description):
             SET description = ?
             WHERE id = ?
         ''', (new_description, transaction_id))
+        conn.commit()
+        return c.rowcount > 0
+
+
+def update_transaction_lookup_description(transaction_id, lookup_description):
+    """
+    Update the lookup_description field of a transaction.
+    Used to populate lookup information from Amazon/Apple matches.
+
+    Args:
+        transaction_id: ID of the transaction
+        lookup_description: New lookup description text
+
+    Returns:
+        Boolean indicating success
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('''
+            UPDATE transactions
+            SET lookup_description = ?
+            WHERE id = ?
+        ''', (lookup_description, transaction_id))
         conn.commit()
         return c.rowcount > 0
 
@@ -1405,3 +2302,851 @@ def clear_apple_transactions():
 
         conn.commit()
         return count
+
+
+def fix_bill_payment_merchants_preview():
+    """
+    Preview what bill payment merchant fixes would be applied.
+
+    Returns:
+        List of changes that would be made
+    """
+    from mcp.excel_parser import extract_bill_payment_merchant
+
+    transactions = get_all_transactions()
+    changes = []
+
+    for txn in transactions:
+        description = txn.get('description', '')
+        merchant = txn.get('merchant', '')
+
+        if not description or 'BILL PAYMENT VIA FASTER PAYMENT TO' not in description.upper():
+            continue
+
+        # Extract bill payment merchant from description
+        extracted_merchant = extract_bill_payment_merchant(description)
+
+        if extracted_merchant and extracted_merchant != merchant:
+            changes.append({
+                'transaction_id': txn['id'],
+                'description': description[:60],
+                'current_merchant': merchant,
+                'new_merchant': extracted_merchant
+            })
+
+    return changes
+
+
+def fix_bill_payment_merchants():
+    """
+    Fix bill payment transactions by extracting merchant names from descriptions.
+
+    Returns:
+        Dictionary with fix statistics
+    """
+    from mcp.excel_parser import extract_bill_payment_merchant
+
+    transactions = get_all_transactions()
+    fixed_count = 0
+    changes = []
+
+    with get_db() as conn:
+        c = conn.cursor()
+
+        for txn in transactions:
+            description = txn.get('description', '')
+            merchant = txn.get('merchant', '')
+
+            if not description or 'BILL PAYMENT VIA FASTER PAYMENT TO' not in description.upper():
+                continue
+
+            # Extract bill payment merchant from description
+            extracted_merchant = extract_bill_payment_merchant(description)
+
+            if extracted_merchant and extracted_merchant != merchant:
+                c.execute('''
+                    UPDATE transactions
+                    SET merchant = ?
+                    WHERE id = ?
+                ''', (extracted_merchant, txn['id']))
+
+                fixed_count += 1
+                changes.append({
+                    'transaction_id': txn['id'],
+                    'old_merchant': merchant,
+                    'new_merchant': extracted_merchant
+                })
+
+        conn.commit()
+
+    return {
+        'success': True,
+        'fixed_count': fixed_count,
+        'sample_changes': changes[:20]  # Show first 20 examples
+    }
+
+
+def fix_bank_giro_merchants_preview():
+    """
+    Preview what bank giro merchant fixes would be applied.
+
+    Returns:
+        List of changes that would be made
+    """
+    from mcp.excel_parser import extract_bank_giro_merchant
+
+    transactions = get_all_transactions()
+    changes = []
+
+    for txn in transactions:
+        description = txn.get('description', '')
+        merchant = txn.get('merchant', '')
+
+        if not description or 'BANK GIRO CREDIT' not in description.upper():
+            continue
+
+        # Extract bank giro merchant from description
+        extracted_merchant = extract_bank_giro_merchant(description)
+
+        if extracted_merchant and extracted_merchant != merchant:
+            changes.append({
+                'transaction_id': txn['id'],
+                'description': description[:60],
+                'current_merchant': merchant,
+                'new_merchant': extracted_merchant
+            })
+
+    return changes
+
+
+def fix_bank_giro_merchants():
+    """
+    Fix bank giro transactions by extracting merchant names from descriptions.
+
+    Returns:
+        Dictionary with fix statistics
+    """
+    from mcp.excel_parser import extract_bank_giro_merchant
+
+    transactions = get_all_transactions()
+    fixed_count = 0
+    changes = []
+
+    with get_db() as conn:
+        c = conn.cursor()
+
+        for txn in transactions:
+            description = txn.get('description', '')
+            merchant = txn.get('merchant', '')
+
+            if not description or 'BANK GIRO CREDIT' not in description.upper():
+                continue
+
+            # Extract bank giro merchant from description
+            extracted_merchant = extract_bank_giro_merchant(description)
+
+            if extracted_merchant and extracted_merchant != merchant:
+                c.execute('''
+                    UPDATE transactions
+                    SET merchant = ?
+                    WHERE id = ?
+                ''', (extracted_merchant, txn['id']))
+
+                fixed_count += 1
+                changes.append({
+                    'transaction_id': txn['id'],
+                    'old_merchant': merchant,
+                    'new_merchant': extracted_merchant
+                })
+
+        conn.commit()
+
+    return {
+        'success': True,
+        'fixed_count': fixed_count,
+        'sample_changes': changes[:20]  # Show first 20 examples
+    }
+
+
+def fix_direct_debit_merchants_preview():
+    """
+    Preview what direct debit merchant fixes would be applied.
+
+    Returns:
+        List of changes that would be made
+    """
+    from mcp.excel_parser import extract_direct_debit_merchant
+
+    transactions = get_all_transactions()
+    changes = []
+
+    for txn in transactions:
+        description = txn.get('description', '')
+        merchant = txn.get('merchant', '')
+
+        if not description or 'DIRECT DEBIT PAYMENT TO' not in description.upper():
+            continue
+
+        # Extract direct debit merchant from description
+        extracted_merchant = extract_direct_debit_merchant(description)
+
+        if extracted_merchant and extracted_merchant != merchant:
+            changes.append({
+                'transaction_id': txn['id'],
+                'description': description[:60],
+                'current_merchant': merchant,
+                'new_merchant': extracted_merchant
+            })
+
+    return changes
+
+
+def fix_direct_debit_merchants():
+    """
+    Fix direct debit transactions by extracting real merchant names from descriptions.
+
+    Returns:
+        Dictionary with fix statistics
+    """
+    from mcp.excel_parser import extract_direct_debit_merchant
+
+    transactions = get_all_transactions()
+    fixed_count = 0
+    changes = []
+
+    with get_db() as conn:
+        c = conn.cursor()
+
+        for txn in transactions:
+            description = txn.get('description', '')
+            merchant = txn.get('merchant', '')
+
+            if not description or 'DIRECT DEBIT PAYMENT TO' not in description.upper():
+                continue
+
+            # Extract direct debit merchant from description
+            extracted_merchant = extract_direct_debit_merchant(description)
+
+            if extracted_merchant and extracted_merchant != merchant:
+                c.execute('''
+                    UPDATE transactions
+                    SET merchant = ?
+                    WHERE id = ?
+                ''', (extracted_merchant, txn['id']))
+
+                fixed_count += 1
+                changes.append({
+                    'transaction_id': txn['id'],
+                    'old_merchant': merchant,
+                    'new_merchant': extracted_merchant
+                })
+
+        conn.commit()
+
+    return {
+        'success': True,
+        'fixed_count': fixed_count,
+        'sample_changes': changes[:20]  # Show first 20 examples
+    }
+
+
+def fix_card_payment_merchants_preview():
+    """
+    Preview what card payment merchant fixes would be applied.
+
+    Returns:
+        List of changes that would be made
+    """
+    from mcp.excel_parser import extract_merchant
+
+    transactions = get_all_transactions()
+    changes = []
+
+    for txn in transactions:
+        description = txn.get('description', '')
+        merchant = txn.get('merchant', '')
+
+        if not description or 'CARD PAYMENT TO' not in description.upper():
+            continue
+
+        # Extract merchant from description using full extract_merchant function
+        # This includes special handling for PayPal and other nested payment services
+        extracted_merchant = extract_merchant(description)
+
+        if extracted_merchant and extracted_merchant != merchant:
+            changes.append({
+                'transaction_id': txn['id'],
+                'description': description[:60],
+                'current_merchant': merchant,
+                'new_merchant': extracted_merchant
+            })
+
+    return changes
+
+
+def fix_card_payment_merchants():
+    """
+    Fix card payment transactions by extracting real merchant names from descriptions.
+
+    Returns:
+        Dictionary with fix statistics
+    """
+    from mcp.excel_parser import extract_merchant
+
+    transactions = get_all_transactions()
+    fixed_count = 0
+    changes = []
+
+    with get_db() as conn:
+        c = conn.cursor()
+
+        for txn in transactions:
+            description = txn.get('description', '')
+            merchant = txn.get('merchant', '')
+
+            if not description or 'CARD PAYMENT TO' not in description.upper():
+                continue
+
+            # Extract merchant from description using full extract_merchant function
+            # This includes special handling for PayPal and other nested payment services
+            extracted_merchant = extract_merchant(description)
+
+            if extracted_merchant and extracted_merchant != merchant:
+                c.execute('''
+                    UPDATE transactions
+                    SET merchant = ?
+                    WHERE id = ?
+                ''', (extracted_merchant, txn['id']))
+
+                fixed_count += 1
+                changes.append({
+                    'transaction_id': txn['id'],
+                    'old_merchant': merchant,
+                    'new_merchant': extracted_merchant
+                })
+
+        conn.commit()
+
+    return {
+        'success': True,
+        'fixed_count': fixed_count,
+        'sample_changes': changes[:20]  # Show first 20 examples
+    }
+
+
+# ============================================================================
+# LLM Enrichment Functions
+# ============================================================================
+
+def get_enrichment_from_cache(description: str, direction: str):
+    """
+    Get cached enrichment for a transaction description.
+
+    Args:
+        description: Transaction description
+        direction: "in" or "out"
+
+    Returns:
+        Cached enrichment dict or None if not found
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('''
+            SELECT
+                primary_category, subcategory, merchant_clean_name, merchant_type,
+                essential_discretionary, payment_method, payment_method_subtype,
+                payee, purchase_date, confidence_score
+            FROM llm_enrichment_cache
+            WHERE transaction_description = ? AND direction = ?
+            LIMIT 1
+        ''', (description, direction))
+
+        row = c.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+
+def cache_enrichment(
+    description: str,
+    direction: str,
+    enrichment,
+    provider: str,
+    model: str
+) -> bool:
+    """Cache enrichment result for a transaction."""
+    with get_db() as conn:
+        c = conn.cursor()
+        try:
+            c.execute('''
+                INSERT OR REPLACE INTO llm_enrichment_cache (
+                    transaction_description, direction,
+                    primary_category, subcategory, merchant_clean_name, merchant_type,
+                    essential_discretionary, payment_method, payment_method_subtype,
+                    payee, purchase_date, confidence_score, llm_provider, llm_model
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                description, direction,
+                enrichment.primary_category,
+                enrichment.subcategory,
+                enrichment.merchant_clean_name,
+                enrichment.merchant_type,
+                enrichment.essential_discretionary,
+                enrichment.payment_method,
+                enrichment.payment_method_subtype,
+                enrichment.merchant_clean_name,  # Use merchant_clean_name for payee
+                enrichment.purchase_date,
+                enrichment.confidence_score,
+                provider,
+                model
+            ))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error caching enrichment: {e}")
+            return False
+
+
+def log_enrichment_failure(
+    transaction_id,
+    description: str,
+    error_type: str,
+    error_message: str,
+    provider: str
+) -> bool:
+    """Log a failed enrichment attempt."""
+    with get_db() as conn:
+        c = conn.cursor()
+        try:
+            c.execute('''
+                INSERT INTO llm_enrichment_failures (
+                    transaction_id, transaction_description, error_type,
+                    error_message, llm_provider, status
+                )
+                VALUES (?, ?, ?, ?, ?, 'pending_retry')
+            ''', (transaction_id, description, error_type, error_message, provider))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error logging enrichment failure: {e}")
+            return False
+
+
+def update_transaction_with_enrichment(transaction_id: int, enrichment, enrichment_source: str = None) -> bool:
+    """
+    Insert enrichment data for a transaction.
+
+    Args:
+        transaction_id: The transaction ID
+        enrichment: TransactionEnrichment object with enrichment fields
+        enrichment_source: Source of enrichment - 'lookup', 'llm', 'regex', 'manual'
+    """
+    with get_db() as conn:
+        c = conn.cursor()
+        try:
+            c.execute('''
+                INSERT OR REPLACE INTO transaction_enrichments (
+                    transaction_id, primary_category, subcategory,
+                    merchant_clean_name, merchant_type, essential_discretionary,
+                    payment_method, payment_method_subtype, payee, purchase_date,
+                    confidence_score, raw_response, llm_provider, llm_model,
+                    enrichment_source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                transaction_id,
+                enrichment.primary_category,
+                enrichment.subcategory,
+                enrichment.merchant_clean_name,
+                enrichment.merchant_type,
+                enrichment.essential_discretionary,
+                enrichment.payment_method,
+                enrichment.payment_method_subtype,
+                enrichment.merchant_clean_name,  # Use merchant_clean_name for payee
+                enrichment.purchase_date,
+                enrichment.confidence_score,
+                enrichment.raw_response,
+                enrichment.llm_provider,
+                enrichment.llm_model,
+                enrichment_source or getattr(enrichment, 'enrichment_source', None)
+            ))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error storing enrichment for transaction {transaction_id}: {e}")
+            return False
+
+
+def is_transaction_enriched(transaction_id: int) -> bool:
+    """Check if a transaction already has enrichment data."""
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('''
+            SELECT COUNT(*) as count FROM transaction_enrichments
+            WHERE transaction_id = ? AND primary_category IS NOT NULL
+        ''', (transaction_id,))
+        result = c.fetchone()
+        return result['count'] > 0 if result else False
+
+
+def clear_all_enrichments() -> dict:
+    """Clear all enrichment data from transaction_enrichments table."""
+    with get_db() as conn:
+        c = conn.cursor()
+        try:
+            c.execute('DELETE FROM transaction_enrichments')
+            conn.commit()
+            c.execute('SELECT COUNT(*) as count FROM transactions')
+            total_txns = c.fetchone()['count']
+            return {
+                'success': True,
+                'message': 'All enrichment data cleared',
+                'total_transactions': total_txns,
+                'enrichments_cleared': total_txns
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+
+def refresh_lookup_descriptions() -> dict:
+    """Manually refresh lookup_description for all transactions from Amazon/Apple matches."""
+    with get_db() as conn:
+        c = conn.cursor()
+        try:
+            # Clear existing lookup_description values
+            c.execute('UPDATE transactions SET lookup_description = NULL')
+
+            # Update for Amazon matches
+            c.execute('''
+                UPDATE transactions
+                SET lookup_description = (
+                    SELECT product_names FROM amazon_orders
+                    WHERE amazon_orders.id = (
+                        SELECT amazon_order_id FROM amazon_transaction_matches
+                        WHERE amazon_transaction_matches.transaction_id = transactions.id
+                    )
+                )
+                WHERE id IN (
+                    SELECT transaction_id FROM amazon_transaction_matches
+                )
+            ''')
+            amazon_updated = c.rowcount
+
+            # Update for Apple matches
+            c.execute('''
+                UPDATE transactions
+                SET lookup_description = (
+                    SELECT app_names FROM apple_transactions
+                    WHERE apple_transactions.id = (
+                        SELECT apple_transaction_id FROM apple_transaction_matches
+                        WHERE apple_transaction_matches.bank_transaction_id = transactions.id
+                    )
+                )
+                WHERE id IN (
+                    SELECT bank_transaction_id FROM apple_transaction_matches
+                )
+            ''')
+            apple_updated = c.rowcount
+
+            conn.commit()
+            return {
+                'success': True,
+                'message': 'Lookup descriptions refreshed',
+                'amazon_updated': amazon_updated,
+                'apple_updated': apple_updated,
+                'total_updated': amazon_updated + apple_updated
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+
+def get_failed_enrichments(limit: int = 100) -> list:
+    """Get list of failed enrichments pending retry."""
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute('''
+            SELECT
+                id, transaction_id, transaction_description, error_type,
+                error_message, llm_provider, attempted_at, retry_count
+            FROM llm_enrichment_failures
+            WHERE status = 'pending_retry'
+            ORDER BY attempted_at DESC
+            LIMIT ?
+        ''', (limit,))
+        return [dict(row) for row in c.fetchall()]
+
+
+def get_cache_stats() -> dict:
+    """Get statistics about the enrichment cache."""
+    with get_db() as conn:
+        c = conn.cursor()
+
+        c.execute("SELECT COUNT(*) as count FROM llm_enrichment_cache")
+        cache_size = c.fetchone()['count']
+
+        c.execute('''
+            SELECT llm_provider, COUNT(*) as count
+            FROM llm_enrichment_cache
+            GROUP BY llm_provider
+        ''')
+        provider_stats = {row['llm_provider']: row['count'] for row in c.fetchall()}
+
+        c.execute("SELECT COUNT(*) as count FROM llm_enrichment_failures WHERE status = 'pending_retry'")
+        pending_retries = c.fetchone()['count']
+
+        # Estimate cache size in bytes (approximately 500-1000 bytes per cached item)
+        cache_size_bytes = cache_size * 750
+
+        return {
+            'cache_size': cache_size,
+            'provider_breakdown': provider_stats,
+            'pending_retries': pending_retries,
+            'cache_size_bytes': cache_size_bytes,
+        }
+
+
+def get_enrichment_analytics() -> dict:
+    """Get comprehensive enrichment analytics and coverage metrics."""
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Total transactions
+        c.execute("SELECT COUNT(*) as count FROM transactions")
+        total_txns = c.fetchone()['count']
+
+        # Enriched vs unenriched
+        c.execute('''
+            SELECT COUNT(*) as count FROM transaction_enrichments
+            WHERE primary_category IS NOT NULL
+        ''')
+        enriched_txns = c.fetchone()['count']
+        unenriched_txns = total_txns - enriched_txns
+
+        # Enrichment by source
+        c.execute('''
+            SELECT enrichment_source, COUNT(*) as count
+            FROM transaction_enrichments
+            WHERE enrichment_source IS NOT NULL
+            GROUP BY enrichment_source
+        ''')
+        by_source = {row['enrichment_source']: row['count'] for row in c.fetchall()}
+
+        # Enrichment by confidence band
+        c.execute('''
+            SELECT
+                CASE
+                    WHEN confidence_score >= 0.9 THEN 'high'
+                    WHEN confidence_score >= 0.7 THEN 'medium'
+                    ELSE 'low'
+                END as band,
+                COUNT(*) as count
+            FROM transaction_enrichments
+            WHERE confidence_score IS NOT NULL
+            GROUP BY band
+        ''')
+        by_confidence = {row['band']: row['count'] for row in c.fetchall()}
+
+        # Category distribution
+        c.execute('''
+            SELECT primary_category, COUNT(*) as count
+            FROM transaction_enrichments
+            WHERE primary_category IS NOT NULL
+            GROUP BY primary_category
+            ORDER BY count DESC
+        ''')
+        categories = {row['primary_category']: row['count'] for row in c.fetchall()}
+
+        # Essential vs Discretionary
+        c.execute('''
+            SELECT essential_discretionary, COUNT(*) as count
+            FROM transaction_enrichments
+            WHERE essential_discretionary IS NOT NULL
+            GROUP BY essential_discretionary
+        ''')
+        by_class = {row['essential_discretionary']: row['count'] for row in c.fetchall()}
+
+        return {
+            'total_transactions': total_txns,
+            'enriched_transactions': enriched_txns,
+            'unenriched_transactions': unenriched_txns,
+            'enrichment_percentage': round((enriched_txns / total_txns * 100) if total_txns > 0 else 0, 1),
+            'by_source': by_source,
+            'by_confidence_band': by_confidence,
+            'categories': categories,
+            'essential_vs_discretionary': by_class
+        }
+
+
+def get_enrichment_quality_report() -> dict:
+    """Get detailed enrichment quality report with confidence distribution."""
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Confidence score distribution
+        c.execute('''
+            SELECT
+                ROUND(confidence_score, 1) as score_band,
+                COUNT(*) as count
+            FROM transaction_enrichments
+            WHERE confidence_score IS NOT NULL
+            GROUP BY ROUND(confidence_score, 1)
+            ORDER BY score_band DESC
+        ''')
+        confidence_dist = {row['score_band']: row['count'] for row in c.fetchall()}
+
+        # Coverage by category
+        c.execute('''
+            SELECT
+                primary_category,
+                COUNT(*) as enriched_count,
+                ROUND(AVG(confidence_score), 2) as avg_confidence
+            FROM transaction_enrichments
+            WHERE primary_category IS NOT NULL
+            GROUP BY primary_category
+            ORDER BY enriched_count DESC
+        ''')
+        coverage_by_cat = {}
+        for row in c.fetchall():
+            coverage_by_cat[row['primary_category']] = {
+                'count': row['enriched_count'],
+                'avg_confidence': row['avg_confidence']
+            }
+
+        # Failed enrichments summary
+        c.execute('''
+            SELECT error_type, COUNT(*) as count
+            FROM llm_enrichment_failures
+            WHERE status = 'pending_retry'
+            GROUP BY error_type
+        ''')
+        failures_by_type = {row['error_type']: row['count'] for row in c.fetchall()}
+
+        # Overall metrics
+        c.execute("SELECT AVG(confidence_score) as avg, MIN(confidence_score) as min, MAX(confidence_score) as max FROM transaction_enrichments WHERE confidence_score IS NOT NULL")
+        conf_stats = c.fetchone()
+
+        return {
+            'confidence_distribution': confidence_dist,
+            'coverage_by_category': coverage_by_cat,
+            'confidence_metrics': {
+                'average': round(conf_stats['avg'], 3) if conf_stats['avg'] else 0,
+                'minimum': round(conf_stats['min'], 3) if conf_stats['min'] else 0,
+                'maximum': round(conf_stats['max'], 3) if conf_stats['max'] else 0
+            },
+            'failed_enrichments_by_type': failures_by_type
+        }
+
+
+def get_enrichment_cost_tracking(days_back: int = None) -> dict:
+    """Get cost tracking and efficiency metrics for enrichment."""
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Total cost and usage stats
+        c.execute('''
+            SELECT
+                COUNT(DISTINCT transaction_id) as enriched_txns,
+                COUNT(*) as total_entries,
+                SUM(CAST(raw_response as INTEGER)) as token_estimate
+            FROM transaction_enrichments
+            WHERE enriched_at IS NOT NULL AND llm_provider IS NOT NULL
+        ''')
+        usage = c.fetchone()
+
+        # Get cost from cache if available (would need to add cost tracking to cache table)
+        c.execute('''
+            SELECT
+                llm_provider,
+                llm_model,
+                COUNT(*) as queries,
+                COUNT(DISTINCT transaction_description) as unique_descriptions
+            FROM llm_enrichment_cache
+            GROUP BY llm_provider, llm_model
+        ''')
+        provider_usage = {}
+        for row in c.fetchall():
+            key = f"{row['llm_provider']} ({row['llm_model']})"
+            provider_usage[key] = {
+                'queries': row['queries'],
+                'cache_hits': row['unique_descriptions']
+            }
+
+        # Cache efficiency
+        c.execute('''
+            SELECT
+                COUNT(*) as total_cached,
+                COUNT(DISTINCT transaction_description) as unique_descriptions
+            FROM llm_enrichment_cache
+        ''')
+        cache_info = c.fetchone()
+
+        return {
+            'enriched_transactions': usage['enriched_txns'] if usage['enriched_txns'] else 0,
+            'total_enrichment_entries': usage['total_entries'] if usage['total_entries'] else 0,
+            'provider_usage': provider_usage,
+            'cache_stats': {
+                'total_cached_items': cache_info['total_cached'] if cache_info['total_cached'] else 0,
+                'unique_descriptions': cache_info['unique_descriptions'] if cache_info['unique_descriptions'] else 0
+            }
+        }
+
+
+def get_enrichment_by_source() -> dict:
+    """Get data source attribution for enrichment."""
+    with get_db() as conn:
+        c = conn.cursor()
+
+        # Source breakdown
+        c.execute('''
+            SELECT enrichment_source, COUNT(*) as count
+            FROM transaction_enrichments
+            GROUP BY enrichment_source
+        ''')
+        by_source = {}
+        total = 0
+        for row in c.fetchall():
+            source = row['enrichment_source'] or 'unknown'
+            count = row['count']
+            by_source[source] = count
+            total += count
+
+        # Convert to percentages
+        by_source_pct = {}
+        for source, count in by_source.items():
+            by_source_pct[source] = {
+                'count': count,
+                'percentage': round(count / total * 100, 1) if total > 0 else 0
+            }
+
+        # Details for each source
+        c.execute('''
+            SELECT
+                enrichment_source,
+                COUNT(*) as count,
+                AVG(confidence_score) as avg_confidence,
+                MIN(confidence_score) as min_confidence,
+                MAX(confidence_score) as max_confidence
+            FROM transaction_enrichments
+            WHERE enrichment_source IS NOT NULL
+            GROUP BY enrichment_source
+        ''')
+        source_details = {}
+        for row in c.fetchall():
+            source_details[row['enrichment_source']] = {
+                'count': row['count'],
+                'avg_confidence': round(row['avg_confidence'], 2) if row['avg_confidence'] else 0,
+                'min_confidence': round(row['min_confidence'], 2) if row['min_confidence'] else 0,
+                'max_confidence': round(row['max_confidence'], 2) if row['max_confidence'] else 0
+            }
+
+        return {
+            'by_source': by_source_pct,
+            'source_details': source_details,
+            'total_enriched': total
+        }

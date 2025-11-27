@@ -6,14 +6,17 @@ CRITICAL: Excludes Apple Pay payment method transactions.
 
 from datetime import datetime, timedelta
 import database
+import re
 
 
 def is_apple_transaction(description, merchant):
     """
-    Check if transaction is from Apple/App Store, NOT Apple Pay.
+    Check if transaction is from Apple/App Store, NOT Apple Pay as a payment method.
 
-    CRITICAL: This function must exclude "VIA APPLE PAY" transactions which
-    are just payment methods for other merchants (e.g., "TESCO VIA APPLE PAY").
+    CRITICAL: This function must allow genuine Apple transactions (APPLE.COM/BILL,
+    APPLE SERVICES, etc.) even if they mention VIA APPLE PAY as the payment method.
+    It only rejects VIA APPLE PAY when it's a payment method for OTHER merchants
+    (e.g., "TESCO VIA APPLE PAY").
 
     Args:
         description: Transaction description
@@ -25,13 +28,8 @@ def is_apple_transaction(description, merchant):
     # Combine description and merchant for checking
     text = ((description or '') + ' ' + (merchant or '')).upper()
 
-    # CRITICAL: First check for Apple Pay - these must be EXCLUDED
-    # These are payment methods, not actual Apple purchases
-    if any(pattern in text for pattern in ['APPLE PAY', 'APPLEPAY', 'VIA APPLE PAY']):
-        return False
-
-    # Now check for genuine Apple/App Store merchants
-    # These are actual purchases from Apple
+    # First check for genuine Apple/App Store merchants
+    # These are actual purchases from Apple and should be matched regardless of VIA APPLE PAY
     apple_patterns = [
         'APPLE.COM',
         'APPLE COM',
@@ -40,11 +38,59 @@ def is_apple_transaction(description, merchant):
         'ITUNES',
         'APPLE SERVICES',
         'APPLE BILL',
-        # Standalone "APPLE" with space to avoid partial matches
-        ' APPLE ',
     ]
 
-    return any(pattern in text for pattern in apple_patterns)
+    is_apple_merchant = any(pattern in text for pattern in apple_patterns)
+
+    # If it's a genuine Apple merchant, accept it even if it mentions VIA APPLE PAY
+    # (VIA APPLE PAY is just the payment method)
+    if is_apple_merchant:
+        return True
+
+    # CRITICAL: Reject VIA APPLE PAY only for non-Apple merchants
+    # These are payment methods for other merchants, not actual Apple purchases
+    if any(pattern in text for pattern in ['APPLE PAY', 'APPLEPAY', 'VIA APPLE PAY']):
+        return False
+
+    return False
+
+
+def extract_date_from_description(description):
+    """
+    Extract transaction date from description text.
+
+    Looks for patterns like:
+    - "ON 19-09-2025" (DD-MM-YYYY)
+    - "ON 19/09/2025" (DD/MM/YYYY)
+    - "19-09-2025" (DD-MM-YYYY without prefix)
+    - "19/09/2025" (DD/MM/YYYY without prefix)
+
+    Args:
+        description: Transaction description text
+
+    Returns:
+        datetime object if date found, None otherwise
+    """
+    if not description:
+        return None
+
+    # Try patterns with "ON" prefix first
+    patterns = [
+        r'ON\s+(\d{1,2})[/-](\d{1,2})[/-](\d{4})',  # ON 19-09-2025 or ON 19/09/2025
+        r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b',   # 19-09-2025 or 19/09/2025
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, description)
+        if match:
+            try:
+                day, month, year = match.groups()
+                return datetime.strptime(f"{day}-{month}-{year}", '%d-%m-%Y')
+            except ValueError:
+                # Invalid date values, continue to next pattern
+                continue
+
+    return None
 
 
 def match_all_apple_transactions():
@@ -89,14 +135,14 @@ def match_all_apple_transactions():
                 match_result['confidence']
             )
 
-            # Update bank transaction description with app name
-            new_description = apple_txn['app_names']
+            # Populate lookup_description with app name (keep original description)
+            lookup_value = apple_txn['app_names']
             if apple_txn.get('publishers'):
-                new_description += f" ({apple_txn['publishers']})"
+                lookup_value += f" ({apple_txn['publishers']})"
 
-            database.update_transaction_description(
+            database.update_transaction_lookup_description(
                 match_result['transaction']['id'],
-                new_description
+                lookup_value
             )
 
             matched_count += 1
@@ -119,6 +165,9 @@ def find_best_match(apple_txn, bank_transactions):
     """
     Find the best matching bank transaction for an Apple purchase.
 
+    For bank transactions with dates in their description (e.g., "ON 19-09-2025"),
+    uses that extracted date for matching instead of the transaction date field.
+
     Args:
         apple_txn: Apple transaction dictionary
         bank_transactions: List of bank transaction dictionaries (pre-filtered for Apple)
@@ -136,14 +185,24 @@ def find_best_match(apple_txn, bank_transactions):
 
     for bank_txn in bank_transactions:
         try:
-            txn_date = datetime.strptime(bank_txn['date'], '%Y-%m-%d')
             txn_amount = abs(bank_txn['amount'])
         except:
             continue
 
-        # Check date proximity (±3 days)
-        date_diff_days = abs((txn_date - apple_date).days)
-        if date_diff_days > 3:
+        # Try to extract date from description first (e.g., "ON 19-09-2025")
+        description_date = extract_date_from_description(bank_txn.get('description', ''))
+        if description_date:
+            txn_date = description_date
+        else:
+            # Fall back to transaction date field
+            try:
+                txn_date = datetime.strptime(bank_txn['date'], '%Y-%m-%d')
+            except:
+                continue
+
+        # Check date proximity (bank transaction must be 0-2 days AFTER Apple date)
+        date_diff_days = (txn_date - apple_date).days
+        if date_diff_days < 0 or date_diff_days > 2:
             continue
 
         # Check amount match (exact match with tiny tolerance for floating point)
@@ -172,6 +231,7 @@ def find_best_match(apple_txn, bank_transactions):
 def calculate_confidence(txn_date, apple_date, txn_amount, apple_amount):
     """
     Calculate match confidence score.
+    Bank transaction must be 0-2 days AFTER Apple order date.
 
     Args:
         txn_date: Bank transaction date
@@ -191,16 +251,14 @@ def calculate_confidence(txn_date, apple_date, txn_amount, apple_amount):
     if amounts_match(txn_amount, apple_amount):
         confidence += 50
 
-    # Date proximity bonus (replaces base 50 if better)
-    date_diff_days = abs((txn_date - apple_date).days)
+    # Date proximity bonus (only 0-2 days after are possible)
+    date_diff_days = (txn_date - apple_date).days
     if date_diff_days == 0:
-        confidence = max(confidence, 100)  # Perfect match
+        confidence = max(confidence, 100)  # Perfect match (same day)
     elif date_diff_days == 1:
-        confidence = max(confidence, 95)
+        confidence = max(confidence, 95)   # 1 day after
     elif date_diff_days == 2:
-        confidence = max(confidence, 85)
-    elif date_diff_days == 3:
-        confidence = max(confidence, 75)
+        confidence = max(confidence, 85)   # 2 days after
 
     return min(confidence, 100)  # Cap at 100
 
@@ -255,13 +313,13 @@ def match_apple_transaction_on_import(bank_transaction):
             match_result['confidence']
         )
 
-        # Update description
+        # Populate lookup_description with app name (keep original description)
         apple_txn = match_result['apple_txn']
-        new_description = apple_txn['app_names']
+        lookup_value = apple_txn['app_names']
         if apple_txn.get('publishers'):
-            new_description += f" ({apple_txn['publishers']})"
+            lookup_value += f" ({apple_txn['publishers']})"
 
-        database.update_transaction_description(bank_transaction['id'], new_description)
+        database.update_transaction_lookup_description(bank_transaction['id'], lookup_value)
 
         return match_result
 
@@ -272,6 +330,9 @@ def find_best_match_for_single_transaction(bank_txn, apple_transactions):
     """
     Find the best matching Apple transaction for a single bank transaction.
 
+    For bank transactions with dates in their description (e.g., "ON 19-09-2025"),
+    uses that extracted date for matching instead of the transaction date field.
+
     Args:
         bank_txn: Bank transaction dictionary
         apple_transactions: List of Apple transaction dictionaries
@@ -280,10 +341,20 @@ def find_best_match_for_single_transaction(bank_txn, apple_transactions):
         Match dictionary with apple_txn and confidence, or None
     """
     try:
-        txn_date = datetime.strptime(bank_txn['date'], '%Y-%m-%d')
         txn_amount = abs(bank_txn['amount'])
     except:
         return None
+
+    # Try to extract date from description first (e.g., "ON 19-09-2025")
+    description_date = extract_date_from_description(bank_txn.get('description', ''))
+    if description_date:
+        txn_date = description_date
+    else:
+        # Fall back to transaction date field
+        try:
+            txn_date = datetime.strptime(bank_txn['date'], '%Y-%m-%d')
+        except:
+            return None
 
     candidates = []
 
@@ -294,9 +365,9 @@ def find_best_match_for_single_transaction(bank_txn, apple_transactions):
         except:
             continue
 
-        # Check date proximity (±3 days)
-        date_diff_days = abs((txn_date - apple_date).days)
-        if date_diff_days > 3:
+        # Check date proximity (bank transaction must be 0-2 days AFTER Apple date)
+        date_diff_days = (txn_date - apple_date).days
+        if date_diff_days < 0 or date_diff_days > 2:
             continue
 
         # Check amount match

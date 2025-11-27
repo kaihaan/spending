@@ -1,17 +1,62 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import type { Transaction, Category } from '../types';
-import { getCategoryColor, ALL_CATEGORIES } from '../utils/categoryColors';
+import { getCategoryColor } from '../utils/categoryColors';
 import CategoryUpdateModal from './CategoryUpdateModal';
 import {
   loadFilters,
   saveFilters,
   getFilteredTransactions,
   getFilteredCountForCategory,
+  getUniqueCategories,
+  getSubcategoriesForCategory,
   type TransactionFilters
 } from '../utils/filterUtils';
 
 const API_URL = 'http://localhost:5000/api';
+
+interface ColumnVisibility {
+  date: boolean;
+  description: boolean;
+  lookup_details: boolean;
+  amount: boolean;
+  category: boolean;
+  merchant_clean_name: boolean;
+  subcategory: boolean;
+  merchant_type: boolean;
+  essential_discretionary: boolean;
+  payment_method: boolean;
+  payment_method_subtype: boolean;
+  purchase_date: boolean;
+  confidence_score: boolean;
+  enrichment_source: boolean;
+}
+
+const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
+  date: true,
+  description: true,
+  lookup_details: true,
+  amount: true,
+  category: true,
+  merchant_clean_name: true,
+  subcategory: true,
+  merchant_type: false,
+  essential_discretionary: true,
+  payment_method: false,
+  payment_method_subtype: false,
+  purchase_date: false,
+  confidence_score: true,
+  enrichment_source: true
+};
+
+const loadColumnVisibility = (): ColumnVisibility => {
+  const saved = localStorage.getItem('transactionColumnVisibility');
+  return saved ? JSON.parse(saved) : DEFAULT_COLUMN_VISIBILITY;
+};
+
+const saveColumnVisibility = (visibility: ColumnVisibility) => {
+  localStorage.setItem('transactionColumnVisibility', JSON.stringify(visibility));
+};
 
 export default function TransactionList() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -19,6 +64,7 @@ export default function TransactionList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [columnVisibility, setColumnVisibility] = useState<ColumnVisibility>(loadColumnVisibility());
 
   // Load filters from localStorage
   const initialFilters = loadFilters();
@@ -44,6 +90,22 @@ export default function TransactionList() {
   useEffect(() => {
     saveFilters(filters);
   }, [filters]);
+
+  // Save column visibility to localStorage whenever it changes
+  useEffect(() => {
+    saveColumnVisibility(columnVisibility);
+  }, [columnVisibility]);
+
+  const toggleColumnVisibility = (column: keyof ColumnVisibility) => {
+    setColumnVisibility(prev => ({
+      ...prev,
+      [column]: !prev[column]
+    }));
+  };
+
+  const resetColumnVisibility = () => {
+    setColumnVisibility(DEFAULT_COLUMN_VISIBILITY);
+  };
 
   const fetchTransactions = async () => {
     try {
@@ -77,12 +139,18 @@ export default function TransactionList() {
   const filteredTransactions = getFilteredTransactions(transactions, filters);
 
   const updateFilter = (key: keyof TransactionFilters, value: string) => {
-    setFilters(prev => ({ ...prev, [key]: value }));
+    const newFilters = { ...filters, [key]: value };
+    // Clear subcategory when category changes
+    if (key === 'selectedCategory') {
+      newFilters.selectedSubcategory = '';
+    }
+    setFilters(newFilters);
   };
 
   const clearAllFilters = () => {
     setFilters({
       selectedCategory: 'All',
+      selectedSubcategory: '',
       dateFrom: '',
       dateTo: '',
       searchKeyword: ''
@@ -189,26 +257,175 @@ export default function TransactionList() {
       </div>
 
       {/* Category Filter */}
-      <div className="flex flex-wrap gap-2">
-        <button
-          className={`btn btn-sm ${filters.selectedCategory === 'All' ? 'btn-primary' : 'btn-ghost'}`}
+      <div className="flex flex-wrap gap-2 items-center">
+        <span
           onClick={() => updateFilter('selectedCategory', 'All')}
+          className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${
+            filters.selectedCategory === 'All'
+              ? 'badge-primary scale-110'
+              : 'badge-ghost hover:scale-105'
+          }`}
         >
           All ({getFilteredCountForCategory(transactions, filters, 'All')})
-        </button>
-        {ALL_CATEGORIES.map(cat => {
+        </span>
+        {getUniqueCategories(transactions).map(cat => {
           const count = getFilteredCountForCategory(transactions, filters, cat);
           if (count === 0) return null;
           return (
-            <button
+            <span
               key={cat}
-              className={`btn btn-sm ${filters.selectedCategory === cat ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => updateFilter('selectedCategory', cat)}
+              className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${getCategoryColor(cat)} ${
+                filters.selectedCategory === cat ? 'scale-110' : 'hover:scale-105'
+              }`}
             >
               {cat} ({count})
-            </button>
+            </span>
           );
         })}
+      </div>
+
+      {/* Subcategory Filter (shown when a category is selected) */}
+      {filters.selectedCategory !== 'All' && (
+        <div className="flex flex-wrap gap-2 ml-4 items-center">
+          <span className="text-sm font-semibold">Subcategories:</span>
+          <span
+            onClick={() => updateFilter('selectedSubcategory', '')}
+            className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${
+              !filters.selectedSubcategory
+                ? 'badge-primary scale-105'
+                : 'badge-ghost hover:scale-105'
+            }`}
+          >
+            All
+          </span>
+          {getSubcategoriesForCategory(transactions, filters.selectedCategory).map(subcat => {
+            const subcount = transactions.filter(
+              txn =>
+                txn.category === filters.selectedCategory &&
+                txn.subcategory === subcat
+            ).length;
+            if (subcount === 0) return null;
+            return (
+              <span
+                key={subcat}
+                onClick={() => updateFilter('selectedSubcategory', subcat)}
+                className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${
+                  getCategoryColor(filters.selectedCategory)
+                } ${filters.selectedSubcategory === subcat ? 'scale-105' : 'hover:scale-105'}`}
+              >
+                {subcat} ({subcount})
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Column Visibility Toggle */}
+      <div className="flex flex-wrap gap-2">
+        <div className="ml-auto dropdown dropdown-end">
+          <label tabIndex={0} className="btn btn-sm btn-outline">
+            ⚙️ Columns
+          </label>
+          <ul
+            tabIndex={0}
+            className="dropdown-content z-[1] menu p-3 shadow bg-base-200 rounded-box w-56 space-y-1"
+          >
+            <li className="menu-title"><span>Transaction Info</span></li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.date} onChange={() => toggleColumnVisibility('date')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Date</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.description} onChange={() => toggleColumnVisibility('description')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Description</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.lookup_details} onChange={() => toggleColumnVisibility('lookup_details')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Lookup Details (Amazon/Apple)</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.amount} onChange={() => toggleColumnVisibility('amount')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Amount</span>
+              </label>
+            </li>
+
+            <li className="menu-title mt-3"><span>LLM Enrichment</span></li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.category} onChange={() => toggleColumnVisibility('category')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Primary Category</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.subcategory} onChange={() => toggleColumnVisibility('subcategory')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Subcategory</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.merchant_clean_name} onChange={() => toggleColumnVisibility('merchant_clean_name')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Clean Merchant</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.merchant_type} onChange={() => toggleColumnVisibility('merchant_type')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Merchant Type</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.essential_discretionary} onChange={() => toggleColumnVisibility('essential_discretionary')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Essential/Discretionary</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.payment_method} onChange={() => toggleColumnVisibility('payment_method')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Payment Method</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.payment_method_subtype} onChange={() => toggleColumnVisibility('payment_method_subtype')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Payment Subtype</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.purchase_date} onChange={() => toggleColumnVisibility('purchase_date')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Purchase Date</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.confidence_score} onChange={() => toggleColumnVisibility('confidence_score')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Confidence Score</span>
+              </label>
+            </li>
+            <li>
+              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                <input type="checkbox" checked={columnVisibility.enrichment_source} onChange={() => toggleColumnVisibility('enrichment_source')} className="checkbox checkbox-sm" />
+                <span className="text-sm">Enrichment Source</span>
+              </label>
+            </li>
+            <li className="divider my-1"></li>
+            <li>
+              <button className="btn btn-ghost btn-xs w-full" onClick={resetColumnVisibility}>
+                Reset to Default
+              </button>
+            </li>
+          </ul>
+        </div>
       </div>
 
       {/* Transactions Table */}
@@ -216,77 +433,101 @@ export default function TransactionList() {
         <table className="table table-zebra">
           <thead>
             <tr>
-              <th>Date</th>
-              <th>Description</th>
-              <th>Amount</th>
-              <th>Category</th>
-              <th>Merchant</th>
-              <th>Huququllah</th>
+              {columnVisibility.date && <th>Date</th>}
+              {columnVisibility.description && <th>Description</th>}
+              {columnVisibility.lookup_details && <th>Lookup Details</th>}
+              {columnVisibility.amount && <th>Amount</th>}
+              {columnVisibility.category && <th>Primary Category</th>}
+              {columnVisibility.subcategory && <th>Subcategory</th>}
+              {columnVisibility.merchant_clean_name && <th>Clean Merchant</th>}
+              {columnVisibility.merchant_type && <th>Merchant Type</th>}
+              {columnVisibility.essential_discretionary && <th>Essential/Discretionary</th>}
+              {columnVisibility.payment_method && <th>Payment Method</th>}
+              {columnVisibility.payment_method_subtype && <th>Payment Subtype</th>}
+              {columnVisibility.purchase_date && <th>Purchase Date</th>}
+              {columnVisibility.confidence_score && <th>Confidence</th>}
+              {columnVisibility.enrichment_source && <th>Enrichment Source</th>}
             </tr>
           </thead>
           <tbody>
             {filteredTransactions.map((txn) => (
               <tr key={txn.id}>
-                <td>{txn.date}</td>
-                <td className="max-w-md truncate">{txn.description}</td>
-                <td className={txn.amount < 0 ? 'text-error font-semibold' : 'text-success font-semibold'}>
-                  £{Math.abs(txn.amount).toFixed(2)}
-                </td>
-                <td>
-                  <span
-                    className={`badge ${getCategoryColor(txn.category)} cursor-pointer hover:badge-outline`}
-                    onClick={() => setEditingTransaction(txn)}
-                    title="Click to change category"
-                  >
-                    {txn.category}
-                  </span>
-                </td>
-                <td className="text-sm text-base-content/70">{txn.merchant || '-'}</td>
-                <td>
-                  {txn.amount < 0 ? (
-                    <div className="dropdown dropdown-end">
-                      <label
-                        tabIndex={0}
-                        className={`badge cursor-pointer hover:badge-outline ${
-                          txn.huququllah_classification === 'essential'
-                            ? 'badge-success'
-                            : txn.huququllah_classification === 'discretionary'
-                            ? 'badge-secondary'
-                            : 'badge-ghost'
-                        }`}
-                        title="Click to change classification"
-                      >
-                        {txn.huququllah_classification === 'essential'
-                          ? 'Essential'
-                          : txn.huququllah_classification === 'discretionary'
-                          ? 'Discretionary'
-                          : 'Unclassified'}
-                      </label>
-                      <ul
-                        tabIndex={0}
-                        className="dropdown-content z-[1] menu p-2 shadow bg-base-200 rounded-box w-52 mt-2"
-                      >
-                        <li>
-                          <a onClick={() => handleClassificationChange(txn.id, 'essential')}>
-                            ✓ Essential
-                          </a>
-                        </li>
-                        <li>
-                          <a onClick={() => handleClassificationChange(txn.id, 'discretionary')}>
-                            💰 Discretionary
-                          </a>
-                        </li>
-                        <li>
-                          <a onClick={() => handleClassificationChange(txn.id, null)}>
-                            Clear
-                          </a>
-                        </li>
-                      </ul>
-                    </div>
-                  ) : (
-                    <span className="badge badge-ghost">N/A (Income)</span>
-                  )}
-                </td>
+                {columnVisibility.date && <td>{txn.date}</td>}
+                {columnVisibility.description && (
+                  <td className="text-sm whitespace-normal break-words" title={txn.description}>{txn.description}</td>
+                )}
+                {columnVisibility.lookup_details && (
+                  <td className="text-sm whitespace-normal break-words" title={txn.lookup_description || ''}>
+                    {txn.lookup_description ? (
+                      <span className="text-base-content font-medium italic">{txn.lookup_description}</span>
+                    ) : (
+                      <span className="text-base-content/30">-</span>
+                    )}
+                  </td>
+                )}
+                {columnVisibility.amount && (
+                  <td className={txn.amount < 0 ? 'text-error font-semibold' : 'text-success font-semibold'}>
+                    £{Math.abs(txn.amount).toFixed(2)}
+                  </td>
+                )}
+                {columnVisibility.category && (
+                  <td className="text-sm">
+                    <span className={`badge ${getCategoryColor(txn.category)}`}>
+                      {txn.category || '-'}
+                    </span>
+                  </td>
+                )}
+                {columnVisibility.subcategory && (
+                  <td className="text-sm text-base-content/70">{txn.subcategory || '-'}</td>
+                )}
+                {columnVisibility.merchant_clean_name && (
+                  <td className="text-sm text-base-content/70 font-medium">{txn.merchant_clean_name || '-'}</td>
+                )}
+                {columnVisibility.merchant_type && (
+                  <td className="text-sm text-base-content/70">{txn.merchant_type || '-'}</td>
+                )}
+                {columnVisibility.essential_discretionary && (
+                  <td className="text-sm text-center">
+                    {txn.essential_discretionary ? (
+                      <span className={`badge ${txn.essential_discretionary === 'Essential' ? 'badge-success' : 'badge-secondary'}`}>
+                        {txn.essential_discretionary}
+                      </span>
+                    ) : <span className="text-base-content/40">-</span>}
+                  </td>
+                )}
+                {columnVisibility.payment_method && (
+                  <td className="text-sm text-base-content/70">{txn.payment_method || '-'}</td>
+                )}
+                {columnVisibility.payment_method_subtype && (
+                  <td className="text-sm text-base-content/70">{txn.payment_method_subtype || '-'}</td>
+                )}
+                {columnVisibility.purchase_date && (
+                  <td className="text-sm text-base-content/70">{txn.purchase_date || '-'}</td>
+                )}
+                {columnVisibility.confidence_score && (
+                  <td className="text-sm text-center">
+                    {txn.confidence_score ? (
+                      <span className={`badge ${txn.confidence_score >= 0.9 ? 'badge-success' : txn.confidence_score >= 0.7 ? 'badge-warning' : 'badge-error'}`}>
+                        {(txn.confidence_score * 100).toFixed(0)}%
+                      </span>
+                    ) : <span className="text-base-content/40">-</span>}
+                  </td>
+                )}
+                {columnVisibility.enrichment_source && (
+                  <td className="text-sm text-center">
+                    {txn.enrichment_source ? (
+                      <span className={`badge badge-sm ${
+                        txn.enrichment_source === 'llm' ? 'badge-info' :
+                        txn.enrichment_source === 'lookup' ? 'badge-primary' :
+                        txn.enrichment_source === 'regex' ? 'badge-warning' :
+                        txn.enrichment_source === 'manual' ? 'badge-success' :
+                        'badge-ghost'
+                      }`}>
+                        {txn.enrichment_source}
+                      </span>
+                    ) : <span className="text-base-content/40">-</span>}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
