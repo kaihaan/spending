@@ -1851,6 +1851,131 @@ def fetch_transactions_on_demand():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/truelayer/import/plan', methods=['POST'])
+def plan_import():
+    """Plan an import job and provide estimates."""
+    try:
+        from mcp.truelayer_import_manager import create_import_job
+
+        data = request.json
+        user_id = data.get('user_id', 1)
+        connection_id = data.get('connection_id')
+        from_date = data.get('from_date')
+        to_date = data.get('to_date')
+        account_ids = data.get('account_ids', [])
+        auto_enrich = data.get('auto_enrich', True)
+        batch_size = data.get('batch_size', 50)
+
+        if not connection_id:
+            return jsonify({'error': 'connection_id required'}), 400
+        if not from_date or not to_date:
+            return jsonify({'error': 'from_date and to_date required'}), 400
+
+        # Validate date format (handle both string and date object)
+        try:
+            from datetime import datetime, date
+            # Convert to string if it's a date object
+            if isinstance(from_date, date):
+                from_date = from_date.isoformat()
+            if isinstance(to_date, date):
+                to_date = to_date.isoformat()
+            # Validate format
+            datetime.strptime(from_date, '%Y-%m-%d')
+            datetime.strptime(to_date, '%Y-%m-%d')
+        except (ValueError, TypeError) as e:
+            return jsonify({'error': f'Invalid date format. Use YYYY-MM-DD (error: {str(e)})'}), 400
+
+        # Create job
+        job = create_import_job(
+            user_id=user_id,
+            connection_id=connection_id,
+            from_date=from_date,
+            to_date=to_date,
+            account_ids=account_ids or None,
+            auto_enrich=auto_enrich,
+            batch_size=batch_size
+        )
+
+        # Plan import
+        plan = job.plan()
+
+        return jsonify(plan), 201
+
+    except Exception as e:
+        print(f"❌ Plan import error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/import/start', methods=['POST'])
+def start_import():
+    """Start an import job (executes synchronously for Phase 1)."""
+    try:
+        from mcp.truelayer_import_manager import ImportJob
+
+        data = request.json
+        job_id = data.get('job_id')
+
+        if not job_id:
+            return jsonify({'error': 'job_id required'}), 400
+
+        job = ImportJob(job_id)
+
+        # Execute import (Phase 1: synchronous, Phase 2: async via Celery)
+        result = job.execute(use_parallel=True, max_workers=3)
+
+        # Broadcast progress (Phase 2 will use WebSocket)
+        print(f"✅ Import job {job_id} completed")
+
+        return jsonify(result), 200
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        print(f"❌ Start import error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/import/status/<int:job_id>', methods=['GET'])
+def get_import_status(job_id):
+    """Get current import job status and progress."""
+    try:
+        from mcp.truelayer_import_manager import ImportJob
+
+        job = ImportJob(job_id)
+        status = job.get_status()
+
+        return jsonify(status), 200
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        print(f"❌ Get import status error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/truelayer/import/history', methods=['GET'])
+def get_import_history():
+    """Get import job history for user."""
+    try:
+        user_id = request.args.get('user_id', 1, type=int)
+        limit = request.args.get('limit', 50, type=int)
+
+        history = database.get_user_import_history(user_id, limit=limit)
+
+        return jsonify({
+            'user_id': user_id,
+            'imports': history
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Get import history error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/truelayer/webhook', methods=['POST'])
 @app.route('/api/truelayer/webhook', methods=['POST'])
 def handle_truelayer_webhook():
     """Handle incoming TrueLayer webhook events."""

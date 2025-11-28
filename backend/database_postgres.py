@@ -1854,5 +1854,217 @@ def delete_oauth_state(state):
             conn.commit()
 
 
+# ============================================================================
+# TrueLayer Import Job Management Functions (Phase 1)
+# ============================================================================
+
+def create_import_job(user_id, connection_id=None, job_type='date_range',
+                     from_date=None, to_date=None, account_ids=None,
+                     card_ids=None, auto_enrich=True, batch_size=50):
+    """
+    Create new import job and return job_id.
+
+    Args:
+        user_id: User ID
+        connection_id: Bank connection ID
+        job_type: 'date_range', 'incremental', or 'full_sync'
+        from_date: Start date (YYYY-MM-DD)
+        to_date: End date (YYYY-MM-DD)
+        account_ids: List of account IDs to sync
+        card_ids: List of card IDs to sync
+        auto_enrich: Whether to auto-enrich after import
+        batch_size: Transactions per batch
+
+    Returns:
+        job_id (int)
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO truelayer_import_jobs
+                (user_id, connection_id, job_type, from_date, to_date,
+                 account_ids, card_ids, auto_enrich, batch_size, job_status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+                RETURNING id
+            ''', (user_id, connection_id, job_type, from_date, to_date,
+                  account_ids or [], card_ids or [], auto_enrich, batch_size))
+            job_id = cursor.fetchone()[0]
+            conn.commit()
+            return job_id
+
+
+def get_import_job(job_id):
+    """Get import job details by ID."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT * FROM truelayer_import_jobs WHERE id = %s
+            ''', (job_id,))
+            return cursor.fetchone()
+
+
+def update_import_job_status(job_id, status, estimated_completion=None, error_message=None):
+    """
+    Update job status.
+
+    Args:
+        job_id: Job ID
+        status: 'pending', 'running', 'completed', 'failed', 'enriching'
+        estimated_completion: ISO datetime string
+        error_message: Error details if failed
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            if status == 'running':
+                cursor.execute('''
+                    UPDATE truelayer_import_jobs
+                    SET job_status = %s, started_at = CURRENT_TIMESTAMP,
+                        estimated_completion = %s
+                    WHERE id = %s
+                ''', (status, estimated_completion, job_id))
+            elif status in ('completed', 'failed'):
+                cursor.execute('''
+                    UPDATE truelayer_import_jobs
+                    SET job_status = %s, completed_at = CURRENT_TIMESTAMP,
+                        error_message = %s
+                    WHERE id = %s
+                ''', (status, error_message, job_id))
+            else:
+                cursor.execute('''
+                    UPDATE truelayer_import_jobs
+                    SET job_status = %s
+                    WHERE id = %s
+                ''', (status, job_id))
+            conn.commit()
+
+
+def add_import_progress(job_id, account_id, synced, duplicates, errors, error_msg=None):
+    """Record per-account progress."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO truelayer_import_progress
+                (job_id, account_id, progress_status, synced_count, duplicates_count,
+                 errors_count, error_message)
+                VALUES (%s, %s, 'completed', %s, %s, %s, %s)
+                ON CONFLICT (job_id, account_id) DO UPDATE SET
+                  progress_status = 'completed',
+                  synced_count = EXCLUDED.synced_count,
+                  duplicates_count = EXCLUDED.duplicates_count,
+                  errors_count = EXCLUDED.errors_count,
+                  error_message = EXCLUDED.error_message,
+                  completed_at = CURRENT_TIMESTAMP,
+                  updated_at = CURRENT_TIMESTAMP
+            ''', (job_id, account_id, synced, duplicates, errors, error_msg))
+            conn.commit()
+
+
+def get_import_progress(job_id):
+    """Get all per-account progress for a job."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT
+                    p.*,
+                    a.display_name,
+                    a.account_id,
+                    a.account_type,
+                    a.currency
+                FROM truelayer_import_progress p
+                LEFT JOIN truelayer_accounts a ON p.account_id = a.id
+                WHERE p.job_id = %s
+                ORDER BY p.created_at
+            ''', (job_id,))
+            return cursor.fetchall()
+
+
+def mark_job_completed(job_id, total_synced, total_duplicates, total_errors):
+    """Mark job as completed with final counts."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                UPDATE truelayer_import_jobs
+                SET job_status = 'completed',
+                    completed_at = CURRENT_TIMESTAMP,
+                    total_transactions_synced = %s,
+                    total_transactions_duplicates = %s,
+                    total_transactions_errors = %s
+                WHERE id = %s
+            ''', (total_synced, total_duplicates, total_errors, job_id))
+            conn.commit()
+
+
+def get_user_import_history(user_id, limit=50):
+    """Get recent import jobs for user."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT
+                    j.*,
+                    COUNT(DISTINCT p.account_id) FILTER (WHERE p.progress_status = 'completed')
+                        as completed_accounts,
+                    COUNT(DISTINCT p.account_id) as total_accounts
+                FROM truelayer_import_jobs j
+                LEFT JOIN truelayer_import_progress p ON p.job_id = j.id
+                WHERE j.user_id = %s
+                GROUP BY j.id
+                ORDER BY j.created_at DESC
+                LIMIT %s
+            ''', (user_id, limit))
+            return cursor.fetchall()
+
+
+def get_job_transaction_ids(job_id):
+    """Get all transaction IDs that were imported in a job."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT ARRAY_AGG(DISTINCT id)
+                FROM truelayer_transactions
+                WHERE import_job_id = %s
+            ''', (job_id,))
+            result = cursor.fetchone()
+            return result[0] or [] if result else []
+
+
+def create_enrichment_job(user_id, import_job_id=None, transaction_ids=None):
+    """Create enrichment job and return job_id."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO truelayer_enrichment_jobs
+                (user_id, import_job_id, transaction_ids, job_status, total_transactions)
+                VALUES (%s, %s, %s, 'pending', %s)
+                RETURNING id
+            ''', (user_id, import_job_id, transaction_ids or [], len(transaction_ids or [])))
+            job_id = cursor.fetchone()[0]
+            conn.commit()
+            return job_id
+
+
+def update_enrichment_job(job_id, status, successful=None, failed=None, cost=None, tokens=None):
+    """Update enrichment job progress."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            if status == 'running':
+                cursor.execute('''
+                    UPDATE truelayer_enrichment_jobs
+                    SET job_status = %s, started_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                ''', (status, job_id))
+            elif status in ('completed', 'failed'):
+                cursor.execute('''
+                    UPDATE truelayer_enrichment_jobs
+                    SET job_status = %s,
+                        completed_at = CURRENT_TIMESTAMP,
+                        successful_enrichments = %s,
+                        failed_enrichments = %s,
+                        total_cost = %s,
+                        total_tokens = %s
+                    WHERE id = %s
+                ''', (status, successful, failed, cost, tokens, job_id))
+            conn.commit()
+
+
 # Initialize connection pool on import
 init_pool()

@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { ImportWizard } from './TrueLayer/ImportWizard';
+import { ImportProgressBar } from './TrueLayer/ImportProgressBar';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -33,6 +35,8 @@ export default function TrueLayerIntegration() {
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus[]>([]);
+  const [showImportWizard, setShowImportWizard] = useState(false);
+  const [selectedConnection, setSelectedConnection] = useState<TrueLayerConnection | null>(null);
 
   useEffect(() => {
     fetchConnections();
@@ -258,6 +262,15 @@ export default function TrueLayerIntegration() {
                       )}
                     </button>
                     <button
+                      className="btn btn-sm btn-primary btn-outline"
+                      onClick={() => {
+                        setSelectedConnection(connection);
+                        setShowImportWizard(true);
+                      }}
+                    >
+                      📥 Advanced Import
+                    </button>
+                    <button
                       className="btn btn-sm btn-ghost text-error"
                       onClick={() => handleDisconnect(connection.id)}
                     >
@@ -336,6 +349,19 @@ export default function TrueLayerIntegration() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Import Wizard Modal */}
+        {showImportWizard && selectedConnection && (
+          <ImportWizard
+            connection={selectedConnection}
+            onImportComplete={(jobId) => {
+              console.log('Import job completed:', jobId);
+              window.dispatchEvent(new Event('transactions-updated'));
+              setShowImportWizard(false);
+            }}
+            onClose={() => setShowImportWizard(false)}
+          />
         )}
       </div>
     </div>
