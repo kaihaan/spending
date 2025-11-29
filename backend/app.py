@@ -519,7 +519,12 @@ def enrich_transactions_stream():
         mode = data.get('mode', 'unenriched')  # 'limit', 'all', 'unenriched'
         limit = data.get('limit')
         direction = data.get('direction', 'out')  # 'out', 'in', 'both'
-        force_refresh = data.get('force_refresh', '').lower() == 'true'  # Convert string to bool for GET
+        # Handle force_refresh as either string (GET) or bool (POST JSON)
+        force_refresh_raw = data.get('force_refresh', False)
+        if isinstance(force_refresh_raw, str):
+            force_refresh = force_refresh_raw.lower() == 'true'
+        else:
+            force_refresh = bool(force_refresh_raw)
 
         # Convert limit to integer if provided
         if limit:
