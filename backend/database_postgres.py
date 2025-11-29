@@ -2066,5 +2066,45 @@ def update_enrichment_job(job_id, status, successful=None, failed=None, cost=Non
             conn.commit()
 
 
+def get_unenriched_truelayer_transactions():
+    """Get all TrueLayer transactions without enrichment."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT t.*
+                FROM truelayer_transactions t
+                LEFT JOIN transaction_enrichments e ON t.id = e.transaction_id
+                WHERE e.id IS NULL
+                ORDER BY t.timestamp DESC
+            ''')
+            return cursor.fetchall()
+
+
+def get_transaction_enrichment(transaction_id):
+    """Get enrichment data for a specific transaction."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT *
+                FROM transaction_enrichments
+                WHERE transaction_id = %s
+                LIMIT 1
+            ''', (transaction_id,))
+            return cursor.fetchone()
+
+
+def count_enriched_truelayer_transactions():
+    """Count TrueLayer transactions that have been enriched."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT COUNT(DISTINCT t.id) as count
+                FROM truelayer_transactions t
+                INNER JOIN transaction_enrichments e ON t.id = e.transaction_id
+            ''')
+            result = cursor.fetchone()
+            return result[0] if result else 0
+
+
 # Initialize connection pool on import
 init_pool()

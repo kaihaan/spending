@@ -218,11 +218,14 @@ class ImportJob:
         logger.info(f"   Syncing: {display_name}")
 
         try:
-            # Get connection to decrypt token
+            # Get connection and refresh token if needed
+            from .truelayer_sync import refresh_token_if_needed
             connection = database.get_connection(self.connection_id)
             if not connection:
                 raise ValueError(f"Connection {self.connection_id} not found")
 
+            # Refresh token if expired before making API calls
+            connection = refresh_token_if_needed(self.connection_id, connection)
             access_token = decrypt_token(connection.get('access_token'))
 
             # Sync with custom date range

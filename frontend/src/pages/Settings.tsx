@@ -6,6 +6,7 @@ import AppleTransactions from '../components/AppleTransactions';
 import LookupDescriptionRefresh from '../components/LookupDescriptionRefresh';
 import LLMEnrichmentSettings from '../components/LLMEnrichmentSettings';
 import TrueLayerIntegration from '../components/TrueLayerIntegration';
+import TestingDashboard from '../components/TestingDashboard';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -475,6 +476,11 @@ export default function Settings() {
 
       {/* LLM Enrichment Section */}
       <LLMEnrichmentSettings />
+
+      {/* Testing Dashboard Section */}
+      <div className="mt-8">
+        <TestingDashboard />
+      </div>
 
       {/* Add Mapping Dialog */}
       {showAddDialog && (

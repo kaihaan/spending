@@ -6,6 +6,7 @@ import os
 import json
 import threading
 import logging
+from datetime import datetime
 from config import llm_config
 from mcp.merchant_normalizer import detect_account_pattern
 from dotenv import load_dotenv
@@ -31,6 +32,33 @@ def health():
     return jsonify({'status': 'ok', 'message': 'Backend is running'})
 
 
+def normalize_transaction(txn):
+    """Normalize transaction field names to match frontend expectations.
+
+    Converts:
+    - timestamp → date
+    - transaction_category → category
+    - merchant_name → merchant
+    """
+    normalized = {**txn}  # Create a copy
+
+    # Map TrueLayer field names to expected frontend field names
+    if 'timestamp' in normalized and 'date' not in normalized:
+        normalized['date'] = normalized.pop('timestamp')
+
+    if 'transaction_category' in normalized and 'category' not in normalized:
+        normalized['category'] = normalized.pop('transaction_category')
+
+    if 'merchant_name' in normalized and 'merchant' not in normalized:
+        normalized['merchant'] = normalized.pop('merchant_name')
+
+    # Ensure category defaults to 'Other' if missing
+    if 'category' not in normalized or not normalized['category']:
+        normalized['category'] = 'Other'
+
+    return normalized
+
+
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
     """Get all transactions (both imported and TrueLayer synced)."""
@@ -39,12 +67,15 @@ def get_transactions():
         regular_transactions = database.get_all_transactions() or []
         truelayer_transactions = database.get_all_truelayer_transactions() or []
 
-        # Combine both lists (frontend will handle display)
+        # Combine both lists
         all_transactions = regular_transactions + truelayer_transactions
+
+        # Normalize field names for frontend consistency
+        all_transactions = [normalize_transaction(t) for t in all_transactions]
 
         # Sort by date descending (most recent first)
         # Convert to string for consistent sorting across date/datetime types
-        all_transactions.sort(key=lambda t: str(t.get('date') or t.get('timestamp', '')), reverse=True)
+        all_transactions.sort(key=lambda t: str(t.get('date', '')), reverse=True)
 
         return jsonify(all_transactions)
     except Exception as e:
@@ -85,163 +116,514 @@ def get_categories():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/files', methods=['GET'])
-def get_files():
-    """Get all available Excel files in the data folder."""
+@app.route('/api/enrichment/config', methods=['GET'])
+def get_enrichment_config():
+    """Get enrichment configuration."""
     try:
-        from mcp.file_manager import list_excel_files
-        files = list_excel_files()
-        return jsonify(files)
+        # Try to load LLM config from environment variables
+        from config.llm_config import load_llm_config
+
+        llm_cfg = None
+        try:
+            llm_cfg = load_llm_config()
+        except Exception as e:
+            pass
+
+        if llm_cfg:
+            return jsonify({
+                'configured': True,
+                'config': {
+                    'provider': llm_cfg.provider.value,
+                    'model': llm_cfg.model,
+                    'cache_enabled': llm_cfg.cache_enabled,
+                    'batch_size': llm_cfg.batch_size_override or llm_cfg.batch_size_initial
+                }
+            }), 200
+        else:
+            return jsonify({
+                'configured': False,
+                'message': 'LLM enrichment is not configured. Set the LLM_PROVIDER and LLM_API_KEY environment variables to enable this feature.'
+            }), 200
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/import', methods=['POST'])
-def import_file():
-    """Import transactions from selected Excel file."""
+@app.route('/api/enrichment/cache/stats', methods=['GET'])
+def get_enrichment_cache_stats():
+    """Get enrichment cache statistics."""
     try:
-        data = request.json
+        # Query the llm_enrichment_cache table for statistics
+        from database_postgres import get_db
+        from psycopg2.extras import RealDictCursor
 
-        if 'filename' not in data:
-            return jsonify({'error': 'Missing filename'}), 400
+        with get_db() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Get total cached entries
+                cursor.execute('SELECT COUNT(*) as total FROM llm_enrichment_cache')
+                total = cursor.fetchone()['total']
 
-        filename = data['filename']
+                # Get cache size in bytes (approximate)
+                cursor.execute('''
+                    SELECT COALESCE(SUM(LENGTH(enrichment_data::text)), 0) as size_bytes
+                    FROM llm_enrichment_cache
+                ''')
+                size_bytes = cursor.fetchone()['size_bytes']
 
-        # Get file path
-        from mcp.file_manager import get_file_path
-        file_path = get_file_path(filename)
+                return jsonify({
+                    'total_cached': total,
+                    'providers': {},
+                    'pending_retries': 0,
+                    'cache_size_bytes': size_bytes
+                }), 200
 
-        # Parse Excel file
-        from mcp.excel_parser import parse_santander_excel
-        transactions = parse_santander_excel(str(file_path))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-        # Check if file has already been imported
-        from mcp.file_manager import check_if_imported
-        if check_if_imported(filename):
+
+@app.route('/api/enrichment/failed', methods=['GET'])
+def get_failed_enrichments():
+    """Get failed enrichment records."""
+    try:
+        limit = request.args.get('limit', 20, type=int)
+
+        # Return empty list for now - enrichment failures would be logged elsewhere
+        return jsonify({
+            'failed_enrichments': []
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/estimate', methods=['POST'])
+def estimate_enrichment_cost():
+    """Estimate cost for enriching unenriched TrueLayer transactions."""
+    try:
+        data = request.get_json() or {}
+        transaction_ids = data.get('transaction_ids')
+        force_refresh = data.get('force_refresh', False)
+
+        # Check if LLM configured
+        from config.llm_config import load_llm_config
+        llm_cfg = load_llm_config()
+        if not llm_cfg:
             return jsonify({
-                'error': 'File already imported',
-                'message': f'{filename} has already been imported. Delete existing transactions first if you want to re-import.'
-            }), 400
+                'configured': False,
+                'error': 'LLM enrichment not configured'
+            }), 503
 
-        # Auto-categorize transactions
-        from mcp.categorizer import categorize_transactions
-        transactions = categorize_transactions(transactions)
+        # Get transactions to estimate
+        if transaction_ids:
+            transactions = [database.get_truelayer_transaction_by_id(tid) for tid in transaction_ids if database.get_truelayer_transaction_by_id(tid)]
+        else:
+            transactions = database.get_unenriched_truelayer_transactions() or []
 
-        # Extract pattern data from descriptions
-        from mcp.pattern_extractor import extract_and_update
-        for txn in transactions:
-            extracted = extract_and_update(txn['description'])
-            txn.update(extracted)
-
-        # Insert transactions into database
-        imported_count = 0
-        imported_transaction_ids = []
-        date_range = {'min': None, 'max': None}
+        # Count cached vs API calls needed
+        cached_count = 0
+        requires_api = []
 
         for txn in transactions:
-            try:
-                txn_id = database.add_transaction(
-                    date=txn['date'],
-                    description=txn['description'],
-                    amount=txn['amount'],
-                    category=txn.get('category', 'Other'),
-                    source_file=txn['source_file'],
-                    merchant=txn['merchant'],
-                    provider=txn.get('provider'),
-                    variant=txn.get('variant'),
-                    payee=txn.get('payee'),
-                    reference=txn.get('reference'),
-                    mandate_number=txn.get('mandate_number'),
-                    branch=txn.get('branch'),
-                    entity=txn.get('entity'),
-                    trip_date=txn.get('trip_date'),
-                    sender=txn.get('sender'),
-                    rate=txn.get('rate'),
-                    tax=txn.get('tax'),
-                    payment_count=txn.get('payment_count'),
-                    extraction_confidence=txn.get('extraction_confidence')
-                )
-                imported_count += 1
-                imported_transaction_ids.append(txn_id)
-
-                # Track date range
-                if date_range['min'] is None or txn['date'] < date_range['min']:
-                    date_range['min'] = txn['date']
-                if date_range['max'] is None or txn['date'] > date_range['max']:
-                    date_range['max'] = txn['date']
-
-            except Exception as e:
-                print(f"Error importing transaction: {e}")
+            if not txn:
                 continue
+            direction = 'out' if txn.get('amount', 0) < 0 else 'in'
+            cached = database.get_enrichment_from_cache(txn.get('description', ''), direction)
+            if cached:
+                cached_count += 1
+            else:
+                requires_api.append(txn)
 
-        # Auto-match Amazon transactions
-        from mcp.amazon_matcher import match_all_amazon_transactions
-        match_results = match_all_amazon_transactions()
+        # Calculate cost (assume 150 input + 50 output tokens per transaction)
+        from config.llm_config import get_provider_cost_info
+        cost_info = get_provider_cost_info(llm_cfg.provider)
 
-        # Check Amazon coverage for this date range
-        coverage_warning = None
-        if date_range['min'] and date_range['max']:
-            coverage = database.check_amazon_coverage(date_range['min'], date_range['max'])
-
-            if coverage['amazon_transactions'] > 0 and not coverage['has_coverage']:
-                coverage_warning = {
-                    'message': f"Found {coverage['amazon_transactions']} Amazon transactions but no order history available for this period.",
-                    'date_from': date_range['min'],
-                    'date_to': date_range['max'],
-                    'amazon_transaction_count': coverage['amazon_transactions']
-                }
-            elif coverage['amazon_transactions'] > 0 and coverage['match_rate'] < 100:
-                coverage_warning = {
-                    'message': f"Only {coverage['match_rate']:.0f}% of Amazon transactions could be matched. Consider importing more Amazon order history.",
-                    'date_from': date_range['min'],
-                    'date_to': date_range['max'],
-                    'amazon_transaction_count': coverage['amazon_transactions'],
-                    'matched_count': coverage['matched_count']
-                }
-
-        # Auto-enrich with LLM (automatic, unless disabled with skip_enrichment)
-        llm_enrichment_stats = None
-        skip_enrichment = data.get('skip_enrichment', False)
-
-        if not skip_enrichment and imported_transaction_ids:
-            try:
-                from mcp.llm_enricher import get_enricher
-                enricher = get_enricher()
-
-                if enricher:
-                    # Enrich only the newly imported transactions
-                    enrichment_direction = 'out' if any(t['amount'] < 0 for t in transactions) else 'in'
-                    stats = enricher.enrich_transactions(
-                        transaction_ids=imported_transaction_ids,
-                        direction=enrichment_direction,
-                        force_refresh=False
-                    )
-                    llm_enrichment_stats = {
-                        'successful': stats.successful_enrichments,
-                        'failed': stats.failed_enrichments,
-                        'cached_hits': stats.cached_hits,
-                        'api_calls': stats.api_calls_made,
-                        'total_cost': stats.total_cost
-                    }
-            except Exception as e:
-                print(f"LLM enrichment during import failed: {e}")
-                import traceback
-                traceback.print_exc()
-                # Don't fail the import if enrichment fails
+        estimated_tokens = len(requires_api) * 200
+        estimated_cost = (
+            (len(requires_api) * 150 / 1000 * cost_info.get('cost_per_1k_input_tokens', 0)) +
+            (len(requires_api) * 50 / 1000 * cost_info.get('cost_per_1k_output_tokens', 0))
+        )
 
         return jsonify({
-            'success': True,
-            'imported': imported_count,
-            'filename': filename,
-            'amazon_matching': match_results,
-            'coverage_warning': coverage_warning,
-            'llm_enrichment': llm_enrichment_stats
-        }), 201
+            'total_transactions': len(transactions),
+            'cached_available': cached_count,
+            'requires_api_call': len(requires_api),
+            'estimated_tokens': estimated_tokens,
+            'estimated_cost': round(estimated_cost, 6),
+            'currency': 'USD',
+            'provider': llm_cfg.provider.value,
+            'model': llm_cfg.model
+        }), 200
 
-    except FileNotFoundError as e:
-        return jsonify({'error': str(e)}), 404
     except Exception as e:
-        return jsonify({'error': f'Import failed: {str(e)}'}), 500
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/trigger', methods=['POST'])
+def trigger_enrichment():
+    """Start enrichment job (requires cost confirmation)."""
+    try:
+        data = request.get_json() or {}
+
+        # Require cost confirmation
+        if not data.get('confirm_cost'):
+            return jsonify({
+                'error': 'Cost confirmation required. Set confirm_cost=true to proceed.'
+            }), 400
+
+        # Check LLM configured
+        from config.llm_config import load_llm_config
+        if not load_llm_config():
+            return jsonify({
+                'configured': False,
+                'error': 'LLM enrichment not configured'
+            }), 503
+
+        # Start Celery task
+        from tasks.enrichment_tasks import enrich_transactions_task
+
+        transaction_ids = data.get('transaction_ids')
+        force_refresh = data.get('force_refresh', False)
+
+        task = enrich_transactions_task.apply_async(
+            args=[transaction_ids, force_refresh]
+        )
+
+        return jsonify({
+            'job_id': task.id,
+            'status': 'running',
+            'message': 'Enrichment job started',
+            'started_at': datetime.now().isoformat()
+        }), 202
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/status/<job_id>', methods=['GET'])
+def get_enrichment_status(job_id):
+    """Get enrichment job status by Celery task ID."""
+    try:
+        from celery.result import AsyncResult
+        from celery_app import celery_app
+
+        task = AsyncResult(job_id, app=celery_app)
+
+        if task.state == 'PENDING':
+            return jsonify({
+                'job_id': job_id,
+                'status': 'pending',
+                'message': 'Job not found or not started'
+            }), 404
+
+        elif task.state == 'PROGRESS':
+            return jsonify({
+                'job_id': job_id,
+                'status': 'running',
+                'current': task.info.get('current', 0),
+                'total': task.info.get('total', 0),
+                'progress_percentage': round(
+                    (task.info.get('current', 0) / max(task.info.get('total', 1), 1)) * 100, 1
+                )
+            }), 200
+
+        elif task.state == 'SUCCESS':
+            result = task.result
+            if isinstance(result, dict) and 'stats' in result:
+                return jsonify({
+                    'job_id': job_id,
+                    'status': 'completed',
+                    **result.get('stats', {})
+                }), 200
+            return jsonify(result), 200
+
+        elif task.state == 'FAILURE':
+            return jsonify({
+                'job_id': job_id,
+                'status': 'failed',
+                'error': str(task.info)
+            }), 200
+
+        else:
+            return jsonify({
+                'job_id': job_id,
+                'status': task.state.lower()
+            }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/stats', methods=['GET'])
+def get_enrichment_stats():
+    """Get overall enrichment statistics for TrueLayer transactions."""
+    try:
+        # Count total TrueLayer transactions
+        all_transactions = database.get_all_truelayer_transactions() or []
+        total_transactions = len(all_transactions)
+
+        # Count enriched
+        enriched_count = database.count_enriched_truelayer_transactions()
+
+        # Count unenriched
+        unenriched_count = total_transactions - enriched_count
+
+        # Cache stats
+        with database.get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute('SELECT COUNT(*) as count FROM llm_enrichment_cache')
+                cache_count = cursor.fetchone()[0]
+
+        return jsonify({
+            'total_transactions': total_transactions,
+            'enriched_count': enriched_count,
+            'unenriched_count': unenriched_count,
+            'enrichment_percentage': round(
+                (enriched_count / max(total_transactions, 1) * 100),
+                1
+            ),
+            'cache_stats': {
+                'total_cached': cache_count
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/retry', methods=['POST'])
+def retry_failed_enrichments():
+    """Retry failed enrichments."""
+    try:
+        data = request.get_json() or {}
+        transaction_ids = data.get('transaction_ids')
+
+        # Get failed transaction IDs if not specified
+        if not transaction_ids:
+            with database.get_db() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT DISTINCT transaction_id
+                        FROM llm_enrichment_failures
+                        WHERE retry_count < 3
+                    """)
+                    transaction_ids = [row[0] for row in cursor.fetchall()]
+
+        # Start retry task
+        from tasks.enrichment_tasks import enrich_transactions_task
+        task = enrich_transactions_task.apply_async(
+            args=[transaction_ids, True]  # force_refresh=True
+        )
+
+        return jsonify({
+            'job_id': task.id,
+            'status': 'running',
+            'total_transactions': len(transaction_ids),
+            'message': 'Retry job started'
+        }), 202
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/llm/available-models', methods=['GET'])
+def get_available_models():
+    """Get list of available models for all LLM providers."""
+    try:
+        from config.llm_config import load_llm_config, get_provider_info, LLMProvider
+
+        # Check if LLM is configured
+        llm_cfg = load_llm_config()
+        current_provider = llm_cfg.provider.value if llm_cfg else None
+
+        # Build response with all providers and their models
+        all_models_response = {
+            'current_provider': current_provider,
+            'all_models': {}
+        }
+
+        # Get models for each provider
+        for provider in LLMProvider:
+            provider_info = get_provider_info(provider)
+            supported_models = provider_info.get('supported_models', [])
+
+            # Build model list for this provider
+            model_list = []
+            for model in supported_models:
+                model_list.append({
+                    'name': model,
+                    'selected': llm_cfg and llm_cfg.model == model
+                })
+
+            # Initialize provider models structure
+            all_models_response['all_models'][provider.value] = {
+                'provider': provider.value,
+                'selected': llm_cfg.model if llm_cfg and llm_cfg.provider == provider else None,
+                'built_in': model_list,
+                'custom': []  # No custom models support yet
+            }
+
+        return jsonify(all_models_response), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/enrichment/validate', methods=['POST'])
+def validate_enrichment_config():
+    """Validate LLM enrichment configuration."""
+    try:
+        from config.llm_config import load_llm_config
+
+        llm_cfg = load_llm_config()
+        if not llm_cfg:
+            return jsonify({
+                'valid': False,
+                'message': 'LLM enrichment is not configured'
+            }), 200
+
+        return jsonify({
+            'valid': True,
+            'message': f'LLM enrichment configured with {llm_cfg.provider.value} ({llm_cfg.model})'
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            'valid': False,
+            'message': str(e)
+        }), 500
+
+
+@app.route('/api/enrichment/enrich-stream', methods=['GET', 'POST'])
+def enrich_transactions_stream():
+    """Start enrichment and stream progress via Server-Sent Events."""
+    import traceback
+    try:
+        logger.info(f"enrich-stream endpoint called with method {request.method}")
+        # Handle both GET (query params) and POST (JSON body) requests
+        if request.method == 'POST':
+            data = request.get_json() or {}
+        else:
+            # GET request - use query parameters
+            data = request.args.to_dict()
+
+        # Check LLM configured
+        from config.llm_config import load_llm_config
+        if not load_llm_config():
+            return jsonify({
+                'configured': False,
+                'error': 'LLM enrichment not configured'
+            }), 503
+
+        # Get transaction selection parameters
+        transaction_ids = data.get('transaction_ids')
+        mode = data.get('mode', 'unenriched')  # 'limit', 'all', 'unenriched'
+        limit = data.get('limit')
+        direction = data.get('direction', 'out')  # 'out', 'in', 'both'
+        force_refresh = data.get('force_refresh', '').lower() == 'true'  # Convert string to bool for GET
+
+        # Convert limit to integer if provided
+        if limit:
+            try:
+                limit = int(limit)
+            except (ValueError, TypeError):
+                limit = None
+
+        # If specific transaction IDs aren't provided, query based on mode
+        if not transaction_ids:
+            try:
+                all_transactions = database.get_all_truelayer_transactions() or []
+            except Exception as e:
+                import traceback
+                logger.error(f"Error fetching transactions: {str(e)}")
+                logger.error(traceback.format_exc())
+                return jsonify({
+                    'error': f'Failed to fetch transactions: {str(e)}'
+                }), 500
+
+            # Filter by direction
+            if direction == 'out':
+                all_transactions = [t for t in all_transactions if t.get('amount', 0) < 0]
+            elif direction == 'in':
+                all_transactions = [t for t in all_transactions if t.get('amount', 0) > 0]
+            # 'both' keeps all transactions
+
+            # Filter by enrichment status and limit
+            if mode == 'unenriched':
+                # Only unenriched transactions
+                all_transactions = [t for t in all_transactions if not t.get('is_enriched')]
+            elif mode == 'limit' and limit:
+                # First N transactions
+                all_transactions = all_transactions[:limit]
+            # 'all' keeps all transactions
+
+            transaction_ids = [t.get('id') for t in all_transactions if t.get('id')]
+
+        # Start Celery task
+        from tasks.enrichment_tasks import enrich_transactions_task
+        from celery.result import AsyncResult
+        from celery_app import celery_app
+
+        task = enrich_transactions_task.apply_async(
+            args=[transaction_ids, force_refresh]
+        )
+
+        def generate_progress_stream():
+            """Generate Server-Sent Events for enrichment progress."""
+            import time
+
+            # Send initial event
+            yield f"data: {json.dumps({'status': 'started', 'job_id': task.id})}\n\n"
+
+            # Poll task status every 500ms
+            while True:
+                try:
+                    task_result = AsyncResult(task.id, app=celery_app)
+
+                    if task_result.state == 'PROGRESS':
+                        progress_data = task_result.info or {}
+                        yield f"data: {json.dumps({'status': 'running', **progress_data})}\n\n"
+
+                    elif task_result.state == 'SUCCESS':
+                        result = task_result.result or {}
+                        if isinstance(result, dict) and 'stats' in result:
+                            stats = result.get('stats', {})
+                            yield f"data: {json.dumps({'status': 'completed', **stats})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'status': 'completed', 'result': result})}\n\n"
+                        break
+
+                    elif task_result.state == 'FAILURE':
+                        yield f"data: {json.dumps({'status': 'failed', 'error': str(task_result.info)})}\n\n"
+                        break
+
+                    else:
+                        # Still pending or in unknown state
+                        yield f"data: {json.dumps({'status': task_result.state.lower()})}\n\n"
+
+                except Exception as e:
+                    yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n"
+                    break
+
+                time.sleep(0.5)
+
+        return Response(
+            stream_with_context(generate_progress_stream()),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no'  # Disable Nginx buffering
+            }
+        )
+
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Enrich-stream endpoint error: {str(e)}")
+        logger.error(f"Traceback: {error_trace}")
+        print(f"ERROR in enrich-stream: {str(e)}")
+        print(f"TRACEBACK: {error_trace}")
+        return jsonify({'error': str(e), 'details': error_trace}), 500
 
 
 @app.route('/api/transactions/<int:transaction_id>/category', methods=['PUT'])
@@ -1975,7 +2357,96 @@ def get_import_history():
         print(f"❌ Get import history error: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/truelayer/webhook', methods=['POST'])
+
+@app.route('/api/testing/clear', methods=['POST'])
+def clear_testing_data():
+    """Clear selected data types for testing purposes.
+
+    Query parameter: types (comma-separated list of data type names)
+    Allowed types: truelayer_transactions, legacy_transactions, amazon_orders,
+                   amazon_matches, apple_transactions, apple_matches,
+                   enrichment_cache, import_history, category_rules
+
+    Returns: JSON with success status and counts per data type
+    """
+    try:
+        # Get and validate types parameter
+        types_str = request.args.get('types', '').strip()
+
+        if not types_str:
+            return jsonify({
+                'success': False,
+                'error': 'No data types specified. At least one type must be selected.'
+            }), 400
+
+        # Define allowed types and their corresponding tables
+        allowed_types = {
+            'truelayer_transactions': 'DELETE FROM truelayer_transactions',
+            'legacy_transactions': 'DELETE FROM transactions',
+            'amazon_orders': 'DELETE FROM amazon_orders',
+            'amazon_matches': 'DELETE FROM amazon_transaction_matches',
+            'apple_transactions': 'DELETE FROM apple_transactions',
+            'apple_matches': 'DELETE FROM apple_transaction_matches',
+            'enrichment_cache': 'DELETE FROM llm_enrichment_cache',
+            'import_history': 'DELETE FROM truelayer_import_jobs',
+            'category_rules': 'DELETE FROM category_keywords'
+        }
+
+        # Parse and validate types
+        types_list = [t.strip() for t in types_str.split(',') if t.strip()]
+
+        invalid_types = [t for t in types_list if t not in allowed_types]
+        if invalid_types:
+            return jsonify({
+                'success': False,
+                'error': f"Invalid data type: {invalid_types[0]}. Allowed types: {', '.join(allowed_types.keys())}"
+            }), 400
+
+        # Execute clearing operations with fail-fast behavior
+        cleared_counts = {t: 0 for t in allowed_types.keys()}
+
+        try:
+            from database_postgres import get_db
+
+            with get_db() as conn:
+                with conn.cursor() as cursor:
+                    for data_type in types_list:
+                        try:
+                            delete_sql = allowed_types[data_type]
+                            cursor.execute(delete_sql)
+                            row_count = cursor.rowcount
+                            cleared_counts[data_type] = row_count
+                            conn.commit()
+
+                        except Exception as e:
+                            # Fail-fast: stop on first error
+                            conn.rollback()
+                            return jsonify({
+                                'success': False,
+                                'error': f"Failed to clear {data_type}: {str(e)}"
+                            }), 500
+
+            # Return success with all counts
+            return jsonify({
+                'success': True,
+                'cleared': cleared_counts
+            }), 200
+
+        except Exception as e:
+            print(f"❌ Clear testing data error: {e}")
+            return jsonify({
+                'success': False,
+                'error': f"Error during clearing: {str(e)}"
+            }), 500
+
+    except Exception as e:
+        print(f"❌ Clear testing data error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @app.route('/api/truelayer/webhook', methods=['POST'])
 def handle_truelayer_webhook():
     """Handle incoming TrueLayer webhook events."""
@@ -2013,4 +2484,4 @@ if __name__ == '__main__':
     print("💡 Test health: http://localhost:5000/api/health")
     print("="*50 + "\n")
 
-    app.run(debug=True, port=5000)
+    app.run(debug=False, use_reloader=False, port=5000)

@@ -70,7 +70,10 @@ def sync_account_transactions(
     db_account_id: int,
     access_token: str,
     days_back: int = 90,
-    use_incremental: bool = True
+    use_incremental: bool = True,
+    from_date = None,
+    to_date = None,
+    import_job_id: int = None
 ) -> dict:
     """
     Sync transactions from TrueLayer for a specific account.
@@ -82,6 +85,9 @@ def sync_account_transactions(
         access_token: Valid OAuth access token
         days_back: Number of days to fetch (fallback if no last_synced_at)
         use_incremental: Use incremental sync based on last_synced_at
+        from_date: Start date for explicit date range (YYYY-MM-DD or date object)
+        to_date: End date for explicit date range (YYYY-MM-DD or date object)
+        import_job_id: Import job ID to track progress
 
     Returns:
         Dictionary with sync results
@@ -93,7 +99,21 @@ def sync_account_transactions(
 
         # Determine the sync window
         sync_days = days_back
-        if use_incremental:
+
+        # If explicit date range provided (from Advanced Import), use that instead
+        if from_date and to_date:
+            from datetime import datetime as dt, date
+            # Convert date objects to ISO strings if needed
+            from_date_str = from_date.isoformat() if isinstance(from_date, date) else from_date
+            to_date_str = to_date.isoformat() if isinstance(to_date, date) else to_date
+
+            # Parse dates and calculate days
+            from_dt = dt.strptime(from_date_str, '%Y-%m-%d')
+            to_dt = dt.strptime(to_date_str, '%Y-%m-%d')
+            days_span = (to_dt - from_dt).days
+            sync_days = max(1, days_span)
+            print(f"   📅 Explicit date range: {from_date_str} to {to_date_str} ({sync_days} days)")
+        elif use_incremental:
             # Get the connection's last sync timestamp
             connection = database.get_connection(connection_id)
             last_synced_at = connection.get('last_synced_at') if connection else None

@@ -19,7 +19,12 @@
       "WebFetch(domain:docs.truelayer.com)",
       "Bash(PGPASSWORD=\"aC0_Xbvulrw8ldPgU6sa\" psql:*)",
       "WebSearch",
-      "Bash(python -m py_compile:*)"
+      "Bash(python -m py_compile:*)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_console_messages",
+      "mcp__playwright__browser_close",
+      "Bash(lsof:*)"
     ],
     "deny": [],
     "ask": []

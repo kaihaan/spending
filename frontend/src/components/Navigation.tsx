@@ -20,7 +20,6 @@ export default function Navigation() {
     { path: '/', label: 'Dashboard', icon: '📊' },
     { path: '/transactions', label: 'Transactions', icon: '💳' },
     { path: '/huququllah', label: 'Huququllah', icon: '💝' },
-    { path: '/import', label: 'Import', icon: '📂' },
     { path: '/settings', label: 'Settings', icon: '🔧' },
     { path: '/auth/callback', label: 'OAuth Callback', icon: '🔐', hidden: true },
   ];

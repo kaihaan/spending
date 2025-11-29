@@ -4,7 +4,6 @@ export interface Transaction {
   description: string;
   amount: number;
   category: string;
-  source_file: string | null;
   merchant: string | null;
   huququllah_classification: 'essential' | 'discretionary' | null;
   lookup_description: string | null;
@@ -31,23 +30,6 @@ export interface Category {
   rule_pattern: string | null;
   ai_suggested: boolean;
 }
-
-export interface ExcelFile {
-  name: string;
-  size: number;
-  size_mb: number;
-  modified: number;
-  modified_readable: string;
-  imported: boolean;
-  path: string;
-}
-
-export interface ImportResponse {
-  success: boolean;
-  imported: number;
-  filename: string;
-}
-
 
 export interface HuququllahSuggestion {
   suggested_classification: 'essential' | 'discretionary' | null;

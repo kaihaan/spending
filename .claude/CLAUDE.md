@@ -1,313 +1,320 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## ⛔ MANDATORY BEHAVIORS (READ FIRST)
+
+### 1. STOP AND ASK - Never Assume
+
+**Before implementing ANY change, Claude MUST verify requirements are clear.**
+
+If there is ANY ambiguity about what the user wants, **STOP and ask clarifying questions**. Do not guess, infer, or "be helpful" by making assumptions.
+
+**Examples requiring clarification:**
+
+| User Says | Problem | Ask Instead |
+|-----------|---------|-------------|
+| "Fix the import" | Which import? What's broken? | "Which import is failing? What error are you seeing? What should the expected behavior be?" |
+| "Add validation" | What fields? What rules? | "Which fields need validation? What are the validation rules? What error messages should be shown?" |
+| "Improve performance" | Where? How measured? | "Which endpoint or component? What's the current performance? What's the target?" |
+| "Update the schema" | Which table? What changes? | "Which table needs updating? What columns are being added/changed? What are the data types and constraints?" |
+| "Make it work like X" | Undefined behavior | "Can you describe specifically what behavior you want? What should happen when...?" |
+
+**Rule: When in doubt, ASK. A 30-second clarification prevents hours of rework.**
+
+---
+
+### 2. DOCUMENTATION-FIRST - Never Hallucinate
+
+**Before writing ANY code that touches database, API, or features, Claude MUST consult the authoritative documentation.**
+
+#### Required Documentation Checks:
+
+| Working On | MUST Read First | Location |
+|------------|-----------------|----------|
+| Database schemas, columns, tables | `DATABASE_SCHEMA.md` | `.claude/docs/database/DATABASE_SCHEMA.md` |
+| Database code patterns | `SCHEMA_ENFORCEMENT.md` | `.claude/docs/database/SCHEMA_ENFORCEMENT.md` |
+| TrueLayer integration | `TRUELAYER_INTEGRATION.md` | `.claude/docs/architecture/TRUELAYER_INTEGRATION.md` |
+| TrueLayer API specifics | TrueLayer API JSON specs | `.claude/docs/api/True Layer API/` |
+| Feature requirements | Feature spec | `.claude/docs/requirements/[feature].md` |
+
+#### Anti-Hallucination Rules:
+
+1. **Database columns** → MUST match `DATABASE_SCHEMA.md` exactly. Never guess column names, types, or constraints.
+2. **API responses** → MUST match documented schemas. Never assume response structure.
+3. **TrueLayer fields** → MUST match the JSON specs in `.claude/docs/api/True Layer API/`. Fields like `running_balance` return objects, not scalars.
+4. **Function signatures** → Check actual code, not memory.
+
+**If documentation is missing or outdated:**
+- STOP and tell the user: "The documentation for [X] appears to be missing/outdated. Should I update it first before proceeding?"
+- Update documentation BEFORE writing code that depends on it.
+
+---
+
+### 3. REQUIREMENTS-FIRST - No Spec, No Code
+
+**Before implementing any feature, Claude MUST verify documented requirements exist.**
+
+#### Workflow:
+
+```
+User requests feature
+        ↓
+Check .claude/docs/requirements/ for spec
+        ↓
+    ┌───┴───┐
+    │ Found │ → Read spec → Ask clarifying questions → Get approval → Implement
+    └───┬───┘
+        │
+    Not Found
+        ↓
+STOP and ask: "I don't have documented requirements for [feature]. 
+Please provide specifications, or should I create a requirements 
+document for your approval first?"
+        ↓
+Create requirements doc → Get user approval → THEN implement
+```
+
+#### Requirements Template Location:
+`.claude/docs/requirements/_TEMPLATE.md`
+
+---
 
 ## CRITICAL DEVELOPMENT RULES
 
 ### 🔴 ALWAYS Follow These Rules:
 
-1. **Python Development**: ALWAYS activate the Python virtual environment before running any Python commands or starting the backend server:
+1. **Python Development**: ALWAYS activate the Python virtual environment before running any Python commands:
    ```bash
    source /mnt/c/dev/spending/backend/venv/bin/activate
    ```
 
 2. **Database Configuration**:
-   - **Primary DB:** PostgreSQL (via Docker) - production ready
-   - **Legacy DB:** SQLite (finance.db) - no longer used
-   - **Switching:** Use `DB_TYPE=postgres` or `DB_TYPE=sqlite` in `.env`
-   - **Default:** Configured for PostgreSQL
+   - **Primary DB:** PostgreSQL (via Docker)
+   - **Schema Reference:** `.claude/docs/database/DATABASE_SCHEMA.md` ← **AUTHORITATIVE SOURCE**
+   - **Enforcement Rules:** `.claude/docs/database/SCHEMA_ENFORCEMENT.md`
 
-3. **Transaction Data Source**: Transactions MUST ONLY come from imported Santander Excel bank statements or TrueLayer API. NEVER create UI components or API endpoints that allow users to manually add, edit, or create transactions. This is a hard requirement for data integrity.
+3. **Transaction Data Source**: Transactions MUST ONLY come from TrueLayer API integration. NEVER create UI components or API endpoints for manual transaction entry.
 
-4. **TypeScript**: The frontend is built with TypeScript. All new components and files must use TypeScript (.tsx/.ts), not JavaScript (.jsx/.js).
+4. **TypeScript**: Frontend uses TypeScript. All new files must be `.tsx/.ts`.
 
-5. **Backend Server**: When starting the backend, use absolute paths and activate venv:
+5. **Backend Server**: 
    ```bash
    source /mnt/c/dev/spending/backend/venv/bin/activate && cd /mnt/c/dev/spending/backend && python app.py
    ```
 
-6. **Docker**: PostgreSQL database runs in Docker. Must be started before running backend:
+6. **Docker**: PostgreSQL runs in Docker. Start before backend:
    ```bash
-   cd /mnt/c/dev/spending
-   docker-compose up -d
+   cd /mnt/c/dev/spending && docker-compose up -d
    ```
 
-7. **Truelayer API reference**
-   Refer to this source when planning True Layer API integrations: https://docs.truelayer.com/reference/welcome-api-reference
+7. **TrueLayer API**: 
+   - External docs: https://docs.truelayer.com/reference/welcome-api-reference
+   - Local specs: `.claude/docs/api/True Layer API/` ← **USE THESE FOR IMPLEMENTATION**
+   - Architecture: `.claude/docs/architecture/TRUELAYER_INTEGRATION.md`
 
-8. **Documentation**
+---
 
-Claude must store all documentation in `.claude/docs/` using this structure:
+## Documentation Structure
 
-- project/
-- architecture/
-- design/
-- database/
-- containers/
-- development/
-- operations/
-- reference/
-- releases/
+```
+.claude/docs/
+├── database/
+│   ├── DATABASE_SCHEMA.md        ← AUTHORITATIVE schema reference
+│   ├── SCHEMA_ENFORCEMENT.md     ← Code patterns & rules
+│   ├── SCHEMA_CRITICAL_FIXES.md  ← Past bugs to avoid
+│   └── POSTGRES_MIGRATION.md
+├── api/
+│   ├── True Layer API/           ← TrueLayer JSON specs
+│   ├── TRUELAYER_CARD_API_GUIDE.md
+│   └── BANK_INTEGRATION_TROUBLESHOOTING.md
+├── requirements/
+│   ├── _TEMPLATE.md              ← Template for new features
+│   ├── brief.md                  ← Project brief
+│   └── enrichment.md             ← Enrichment feature spec
+├── architecture/
+│   ├── TRUELAYER_INTEGRATION.md  ← Integration architecture
+│   └── TRUELAYER_*.md            ← Other architecture docs
+└── development/
+    └── setup/
+        └── QUICK_START_POSTGRES.md
+```
 
-Claude should file documents into the most specific folder.
-If the document concerns:
-- Database schemas, ERDs, migrations → database/
-- Containers, Docker, container images → containers/
-- Local development environment setup → development/setup/
+### Documentation Rules:
 
-Claude should never create workflow-based folders (draft, final, generated).
+1. **File into most specific folder** - Database docs → `database/`, API docs → `api/`
+2. **Never create workflow folders** - No `draft/`, `final/`, `generated/`
+3. **Update after code changes** - Schema change = immediate doc update
+4. **Requirements before features** - No spec = no implementation
 
-9. **Planning & documentation maintainence**
-
-1. When planning always consult existing documentation first
-2. Always update documentation after completing material code changes
-
+---
 
 ## Project Overview
 
-This is a **privacy-first local personal finance analysis service** that parses Santander Excel bank statements, categorizes transactions using AI (via Claude MCP), provides spending insights through a web dashboard, and integrates with TrueLayer for real-time bank synchronization.
+**Privacy-first local personal finance analysis service** integrating with TrueLayer for real-time bank synchronization.
 
 Key principles:
-- All data processing is **local-only** (no cloud uploads of raw data)
-- Uses Claude via MCP for AI-assisted transaction categorization
-- Built with **TypeScript** + React + Tailwind + daisyUI frontend and Python backend
-- Data stored in **PostgreSQL** (production) or SQLite (legacy)
-- **Transactions only imported from bank statements or TrueLayer API - no manual entry allowed**
-- Support for multiple data sources: Santander Excel, Amazon orders, Apple transactions, TrueLayer banks
+- All data processing is **local-only**
+- Uses Claude via MCP for AI-assisted categorization
+- **TypeScript** + React + Tailwind + daisyUI frontend
+- Python Flask backend
+- **PostgreSQL** (production) via Docker
+- **Transactions only from TrueLayer API - no manual entry**
 
-## System Architecture
+### Core Backend Components
 
-### MCP Components (Model Context Protocol)
-The backend is structured around MCP components that expose capabilities:
+| Component | Purpose |
+|-----------|---------|
+| `truelayer_auth` | OAuth2 authentication and token management |
+| `truelayer_client` | API client for accounts and transactions |
+| `truelayer_sync` | Synchronization logic |
+| `categorizer` | Rule-based and AI classification |
+| `llm_enricher` | Transaction metadata enrichment |
+| `merchant_normalizer` | Merchant name normalization |
 
-1. **`excel_parser`** - Parses Santander-specific Excel format into normalized transactions
-2. **`file_manager`** - Scans local folder for available Excel files
-3. **`categorizer`** - Applies rule-based and AI-assisted transaction classification
-4. **`analytics_engine`** - Aggregates transactions and computes spending trends
-5. **`ui_server`** - Serves REST API and frontend assets
+---
 
-### Data Flow
-1. User uploads Santander `.xlsx` file through web UI
-2. `excel_parser` extracts transactions (date, description, amount, balance)
-3. `categorizer` assigns categories (groceries, transport, etc.) using rules + Claude AI
-4. Transactions stored in local database
-5. `analytics_engine` generates insights (trends, top categories, savings opportunities)
-6. Dashboard displays charts and AI-generated recommendations
+## Database Schema
 
-### Database Schema
+> ⚠️ **DO NOT use the summary below for implementation.**
+> 
+> **ALWAYS consult:** `.claude/docs/database/DATABASE_SCHEMA.md`
+> 
+> The file above contains complete column definitions, data types, constraints, relationships, and a change log.
 
-**transactions table:**
-- id (INTEGER, PK)
-- date (DATE)
-- description (TEXT) - Original transaction text
-- amount (REAL) - Negative for expenses, positive for income
-- category (TEXT)
-- source_file (TEXT) - Excel filename
-- merchant (TEXT) - Extracted merchant name
+Quick reference only (may be outdated):
+- `transactions` - Santander Excel imports (LEGACY - NO LONGER USED)
+- `truelayer_transactions` - TrueLayer API transactions  
+- `truelayer_accounts` - Connected bank accounts
+- `truelayer_connections` - OAuth connections
+- `amazon_orders`, `apple_transactions` - Linked data sources
 
-**categories table:**
-- name (TEXT)
-- rule_pattern (TEXT) - Regex or keyword matching rule
-- ai_suggested (BOOLEAN)
+**For actual column names and types → READ THE DOCS**
 
-## Development Commands
-
-### Prerequisites (Run First)
-```bash
-# Start PostgreSQL database
-cd /mnt/c/dev/spending
-docker-compose up -d
-
-# Verify container is running
-docker-compose ps
-```
-
-### Backend (Python + Flask)
-```bash
-# Always activate venv first!
-source /mnt/c/dev/spending/backend/venv/bin/activate
-cd /mnt/c/dev/spending/backend
-
-# Set database type (default: postgres)
-export DB_TYPE=postgres
-
-# Run backend
-python app.py
-# Backend runs on http://localhost:5000
-```
-
-### Frontend (TypeScript + React + Vite)
-```bash
-cd /mnt/c/dev/spending/frontend
-npm run dev
-# Frontend runs on http://localhost:5173
-```
-
-### Database Administration
-```bash
-# Access PostgreSQL shell
-docker exec -it spending-postgres psql -U spending_user -d spending_db
-
-# Check database health
-docker-compose logs postgres
-
-# Backup database
-docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
-
-# Stop/start database (keeps data)
-docker-compose down
-docker-compose up -d
-```
-
-### Important Notes:
-- PostgreSQL MUST be running before starting backend
-- Backend MUST be started with venv activated and DB_TYPE=postgres
-- Frontend is fully TypeScript - no JavaScript files
-- See `docs/POSTGRES_MIGRATION.md` for migration procedures
+---
 
 ## API Endpoints
 
-- `GET /api/files` - List available Excel files in data folder
-- `POST /api/import` - Parse and import selected Excel file
-- `GET /api/categories` - Return all categories and classification rules
-- `GET /api/summary` - Aggregated spending summary
-- `GET /api/trends` - Timeseries spending data
+> ⚠️ **For implementation details, check actual Flask routes in `backend/app.py`**
+
+Core endpoints:
+- `GET /api/transactions` - All transactions
+- `GET /api/truelayer/connections` - TrueLayer connections
+- `POST /api/truelayer/authorize` - OAuth flow
+- `POST /api/truelayer/import/plan` - Plan batch import
+- `POST /api/truelayer/import/start` - Start import job
+- `GET /api/truelayer/import/status/<job_id>` - Job status
+- `GET /api/enrichment/config` - LLM enrichment config
+- `GET /api/summary` - Spending summary
+- `GET /api/trends` - Timeseries data
+
+---
+
+## Development Commands
+
+### Prerequisites
+```bash
+# Start PostgreSQL
+cd /mnt/c/dev/spending && docker-compose up -d
+
+# Verify running
+docker-compose ps
+```
+
+### Backend
+```bash
+source /mnt/c/dev/spending/backend/venv/bin/activate
+cd /mnt/c/dev/spending/backend
+export DB_TYPE=postgres
+python app.py
+# → http://localhost:5000
+```
+
+### Frontend
+```bash
+cd /mnt/c/dev/spending/frontend
+npm run dev
+# → http://localhost:5173
+```
+
+### Database Admin
+```bash
+# PostgreSQL shell
+docker exec -it spending-postgres psql -U spending_user -d spending_db
+
+# Backup
+docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
+```
+
+---
+
+## Workflow Checklists
+
+### Before ANY Database Work:
+- [ ] Read `.claude/docs/database/DATABASE_SCHEMA.md`
+- [ ] Check `.claude/docs/database/SCHEMA_ENFORCEMENT.md` for patterns
+- [ ] Review `.claude/docs/database/SCHEMA_CRITICAL_FIXES.md` for past bugs
+- [ ] Verify column names match documentation exactly
+
+### Before ANY TrueLayer Work:
+- [ ] Read `.claude/docs/architecture/TRUELAYER_INTEGRATION.md`
+- [ ] Check relevant JSON spec in `.claude/docs/api/True Layer API/`
+- [ ] Review troubleshooting guide if debugging
+
+### Before ANY Feature Implementation:
+- [ ] Check `.claude/docs/requirements/` for spec
+- [ ] If no spec exists, create one and get approval
+- [ ] Clarify any ambiguous requirements with user
+- [ ] Only then begin implementation
+
+### After Completing Work:
+- [ ] Update relevant documentation if schema/API changed
+- [ ] Add entry to schema change log if applicable
+- [ ] Verify code matches documentation
+
+---
 
 ## Frontend Structure
 
-Built with **TypeScript** + React + Vite, styled with Tailwind CSS v4 + daisyUI.
+Built with **TypeScript** + React + Vite + Tailwind CSS v4 + daisyUI.
 
-**Current components:**
-- `<TransactionList />` - Display imported transactions from bank statements
+**Pages:**
+- Dashboard - Spending overview
+- Transactions - List and filtering
+- Settings - TrueLayer, LLM enrichment, Huququllah
+- Huququllah - Islamic financial categorization
 
-**Planned components:**
-- `<FileList />` - Lists `.xlsx` files and import status
-- `<SpendingChart />` - Monthly spending visualization
-- `<CategoryBreakdown />` - Pie chart by category
-- `<InsightsPanel />` - Claude-generated savings suggestions
+**IMPORTANT**: Never create components for manual transaction entry.
 
-**IMPORTANT**: Never create components for manual transaction entry. All transactions come from Excel imports only.
+---
 
-## Claude MCP Integration
+## Privacy & Security
 
-When implementing categorization logic:
-1. Identify ambiguous transactions without clear rule matches
-2. Send transaction context to Claude MCP: `{"transaction": "TESCO STORES 1234", "amount": -42.75, "date": "2025-07-05"}`
-3. Claude returns: `{"category": "Groceries", "confidence": 0.93}`
-4. Store category assignment and optionally create new rule for similar transactions
+- All operations are **local** - no cloud upload
+- Claude MCP interactions use anonymized data only
+- Optional offline mode available
+- Data folder: `~/FinanceData/` (configurable)
 
-Example insight generation:
-> "Your average grocery spending in the past 3 months increased by 12%. You could save ~£45/month by reducing supermarket frequency."
-
-## Santander Excel Format
-
-Expected column structure:
-- Date
-- Description (merchant/transaction text)
-- Debit (expenses)
-- Credit (income)
-- Balance
-
-Parser must handle UK number formats (£ symbol, comma thousands separator).
-
-## Privacy & Security Considerations
-
-- Never transmit raw bank data to external services
-- Claude MCP interactions should only include anonymized transaction descriptions and amounts
-- Support optional offline mode (disable AI categorization)
-- Data folder location: `~/FinanceData/` (configurable)
+---
 
 ## Repository Structure
 
 ```
-/backend/          Backend service (Go or Python)
-  /mcp/            MCP component implementations
-  /db/             Database migrations and schemas
-  /api/            HTTP handlers and routing
-/frontend/         React + Vite + Tailwind UI
+/backend/
+  /mcp/            MCP components
+  /migrations/     Database migrations
+  app.py           Main Flask application
+/frontend/
   /src/
     /components/   Reusable UI components
-    /pages/        Main views (Dashboard, Transactions, Files, Insights)
-/data/             Local Excel statement files (not in git)
-  /FinanceData/
+    /pages/        Main views
+/.claude/
+  /docs/           All documentation (AUTHORITATIVE)
+  CLAUDE.md        This file
 ```
 
-## Database Layer
+---
 
-### Database Module Selection
-The application uses conditional imports to switch between SQLite and PostgreSQL:
+## Summary: The Three Rules
 
-```python
-# In app.py or any backend file:
-import database_init as database
-
-# Then use database functions:
-transactions = database.get_all_transactions()
-database.add_transaction(date, description, amount, category, source_file, merchant)
-```
-
-The correct database is automatically selected based on `DB_TYPE` environment variable:
-- `DB_TYPE=postgres` → Uses `database_postgres.py` (production, Docker)
-- `DB_TYPE=sqlite` → Uses `database.py` (legacy, local file)
-
-### Database Functions Available
-
-**Transaction Management:**
-- `get_all_transactions()` - Get all transactions
-- `add_transaction()` - Add single transaction
-- `get_transaction_by_id()` - Get by ID
-- `update_transaction_category()` - Update category
-- `update_merchant()` - Update merchant name
-
-**Amazon Integration:**
-- `import_amazon_orders()` - Bulk import
-- `get_amazon_orders()` - Get with filters
-- `match_amazon_transaction()` - Record match
-- `get_amazon_statistics()` - Get stats
-
-**Apple Integration:**
-- `import_apple_transactions()` - Bulk import
-- `get_apple_transactions()` - Get with filters
-- `match_apple_transaction()` - Record match
-- `get_apple_statistics()` - Get stats
-
-**Huququllah Classification:**
-- `update_transaction_huququllah()` - Classify transaction
-- `get_unclassified_transactions()` - Get unclassified
-- `get_huququllah_summary()` - Get summary stats
-
-See `backend/database_postgres.py` for complete function signatures.
-
-### Migration from SQLite to PostgreSQL
-
-To migrate existing SQLite data:
-
-```bash
-cd /mnt/c/dev/spending
-
-# 1. Start PostgreSQL
-docker-compose up -d
-
-# 2. Run migration script
-cd backend
-source venv/bin/activate
-python migrate_to_postgres.py
-
-# 3. Update .env
-# DB_TYPE=postgres (default in .env.example)
-
-# 4. Restart backend
-# Backend will now use PostgreSQL
-```
-
-See `docs/POSTGRES_MIGRATION.md` for detailed instructions.
-
-## Future Extensions
-
-- Support for PDF and CSV formats
-- Multi-bank support (TrueLayer integration)
-- Budget and goal tracking
-- Encrypted data store
-- Export reports (PDF/CSV)
-- Machine learning for category predictions
-- Duplicate transaction detection
+1. **STOP AND ASK** - If requirements are unclear, ask before coding
+2. **READ THE DOCS** - Consult `.claude/docs/` before any database/API/feature work  
+3. **REQUIREMENTS FIRST** - No spec = no implementation; create spec first if missing
