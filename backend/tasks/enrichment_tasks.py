@@ -1,12 +1,10 @@
 """Celery tasks for transaction enrichment."""
 
-from celery_app import celery_app
 from mcp.llm_enricher import get_enricher
 import database_postgres as db
 from datetime import datetime
 
 
-@celery_app.task(bind=True)
 def enrich_transactions_task(self, transaction_ids=None, force_refresh=False):
     """
     Celery task to enrich TrueLayer transactions.

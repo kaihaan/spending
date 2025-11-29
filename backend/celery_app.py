@@ -2,6 +2,10 @@
 
 from celery import Celery
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Initialize Celery
 celery_app = Celery(
@@ -22,3 +26,9 @@ celery_app.conf.update(
     task_soft_time_limit=270,  # 4.5 minutes soft limit (sends warning)
     result_expires=3600,  # Keep results for 1 hour
 )
+
+# Register tasks
+from tasks import enrichment_tasks
+
+# Decorate the task function
+celery_app.task(bind=True)(enrichment_tasks.enrich_transactions_task)
