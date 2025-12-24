@@ -4,7 +4,6 @@ import { useState } from 'react';
 interface NavLink {
   path: string;
   label: string;
-  icon: string;
   hidden?: boolean;
 }
 
@@ -17,15 +16,15 @@ export default function Navigation() {
   };
 
   const navLinks = [
-    { path: '/', label: 'Dashboard', icon: '📊' },
-    { path: '/transactions', label: 'Transactions', icon: '💳' },
-    { path: '/huququllah', label: 'Huququllah', icon: '💝' },
-    { path: '/settings', label: 'Settings', icon: '🔧' },
-    { path: '/auth/callback', label: 'OAuth Callback', icon: '🔐', hidden: true },
+    { path: '/', label: 'Dashboard' },
+    { path: '/transactions', label: 'Transactions' },
+    { path: '/huququllah', label: 'Huququllah' },
+    { path: '/settings', label: 'Settings' },
+    { path: '/auth/callback', label: 'OAuth Callback', hidden: true },
   ];
 
   return (
-    <div className="navbar bg-base-300 shadow-lg sticky top-0 z-50">
+    <div className="navbar bg-base-300 shadow-lg">
       <div className="navbar-start">
         <div className="dropdown">
           <label
@@ -33,9 +32,7 @@ export default function Navigation() {
             className="btn btn-ghost lg:hidden"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h8m-8 6h16" />
-            </svg>
+            Menu
           </label>
           {mobileMenuOpen && (
             <ul
@@ -49,7 +46,6 @@ export default function Navigation() {
                     to={link.path}
                     className={isActive(link.path) ? 'active' : ''}
                   >
-                    <span className="mr-2">{link.icon}</span>
                     {link.label}
                   </Link>
                 </li>
@@ -58,7 +54,7 @@ export default function Navigation() {
           )}
         </div>
         <Link to="/" className="btn btn-ghost text-xl">
-          💰 Personal Finance Tracker
+          Personal Finance Tracker
         </Link>
       </div>
 
@@ -68,9 +64,10 @@ export default function Navigation() {
             <li key={link.path}>
               <Link
                 to={link.path}
-                className={isActive(link.path) ? 'active' : ''}
+                className={isActive(link.path)
+                  ? 'border-b-2 border-primary'
+                  : 'border-b-2 border-transparent'}
               >
-                <span className="mr-2">{link.icon}</span>
                 {link.label}
               </Link>
             </li>

@@ -210,20 +210,7 @@ export default function BankIntegrationDetails() {
                   Refreshing...
                 </>
               ) : (
-                <>
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    className="w-4 h-4"
-                  >
-                    <path d="M1 4v6h6M23 20v-6h-6" />
-                    <path d="M20.49 9A9 9 0 0 0 5.64 5.64M3.51 15A9 9 0 0 0 18.36 18.36" />
-                  </svg>
-                  Refresh Accounts & Cards
-                </>
+                'Refresh Accounts & Cards'
               )}
             </button>
           </div>

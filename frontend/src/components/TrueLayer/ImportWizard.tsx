@@ -69,7 +69,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({
   const DateRangeStep = () => (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Select Date Range</h2>
-      <p className="text-gray-600">Choose when to import transactions from</p>
+      <p className="text-base-content/70">Choose when to import transactions from</p>
 
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-2">
@@ -165,7 +165,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({
   const AccountSelectionStep = () => (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Select Accounts</h2>
-      <p className="text-gray-600">Choose which accounts to import</p>
+      <p className="text-base-content/70">Choose which accounts to import</p>
 
       <div className="space-y-3">
         <label className="label cursor-pointer gap-3">
@@ -193,7 +193,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({
           >
             <div className="flex-1">
               <div className="font-medium">{account.display_name}</div>
-              <div className="text-sm text-gray-500">
+              <div className="text-sm text-base-content/60">
                 {account.account_type} • {account.currency}
                 {account.last_synced_at && (
                   <span> • Last synced: {new Date(account.last_synced_at).toLocaleDateString()}</span>
@@ -241,7 +241,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({
   const ConfigurationStep = () => (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Import Settings</h2>
-      <p className="text-gray-600">Configure import options</p>
+      <p className="text-base-content/70">Configure import options</p>
 
       <div className="space-y-4">
         <label className="label cursor-pointer gap-3">
@@ -276,7 +276,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({
             onChange={(e) => setBatchSize(parseInt(e.target.value))}
             className="range"
           />
-          <div className="flex justify-between text-xs text-gray-500 px-2">
+          <div className="flex justify-between text-xs text-base-content/60 px-2">
             <span>10 (safer)</span>
             <span>200 (faster)</span>
           </div>
@@ -333,7 +333,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({
 
             <div className="card bg-base-200">
               <div className="card-body">
-                <h3 className="card-title text-lg">📊 Transactions</h3>
+                <h3 className="card-title text-lg">Transactions</h3>
                 <p className="text-sm">~{plan.estimated_transactions} transactions</p>
               </div>
             </div>

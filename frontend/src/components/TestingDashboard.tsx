@@ -17,14 +17,13 @@ interface ClearResponse {
 
 const DATA_TYPE_GROUPS = {
   'Bank Data': [
-    { id: 'truelayer_transactions', label: 'TrueLayer Transactions' },
-    { id: 'legacy_transactions', label: 'Legacy Transactions' }
+    { id: 'truelayer_transactions', label: 'TrueLayer Transactions' }
   ],
   'Linked Data': [
     { id: 'amazon_orders', label: 'Amazon Orders' },
-    { id: 'amazon_matches', label: 'Amazon Matches' },
+    { id: 'truelayer_amazon_matches', label: 'Amazon Transaction Matches' },
     { id: 'apple_transactions', label: 'Apple Transactions' },
-    { id: 'apple_matches', label: 'Apple Matches' }
+    { id: 'truelayer_apple_matches', label: 'Apple Transaction Matches' }
   ],
   'Metadata': [
     { id: 'enrichment_cache', label: 'LLM Enrichment Cache' },
@@ -46,7 +45,6 @@ export default function TestingDashboard() {
   });
 
   // UI state
-  const [isExpanded, setIsExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -134,11 +132,10 @@ export default function TestingDashboard() {
   const formatDataTypeName = (dataType: string): string => {
     const labelMap: Record<string, string> = {
       'truelayer_transactions': 'TrueLayer Transactions',
-      'legacy_transactions': 'Legacy Transactions',
       'amazon_orders': 'Amazon Orders',
-      'amazon_matches': 'Amazon Matches',
+      'truelayer_amazon_matches': 'Amazon Transaction Matches',
       'apple_transactions': 'Apple Transactions',
-      'apple_matches': 'Apple Matches',
+      'truelayer_apple_matches': 'Apple Transaction Matches',
       'enrichment_cache': 'LLM Enrichment Cache',
       'import_history': 'Import Job History',
       'category_rules': 'Category Rules'
@@ -148,85 +145,71 @@ export default function TestingDashboard() {
 
   return (
     <div className="mb-8">
-      <div className="collapse collapse-arrow border border-base-300 bg-base-100">
-        <input
-          type="checkbox"
-          checked={isExpanded}
-          onChange={(e) => setIsExpanded(e.target.checked)}
-        />
-        <div className="collapse-title text-xl font-medium">
-          Dev Tools
+      <div className="border border-black/10 rounded-lg bg-base-100 p-4">
+        <h3 className="text-xl font-medium mb-4">Dev Tools</h3>
+
+        {/* Warning message */}
+        <div className="alert alert-warning mb-4">
+          <span>
+            Warning: Clearing data is permanent and cannot be undone. Use for testing only.
+          </span>
         </div>
-        <div className="collapse-content">
-          {/* Warning message */}
-          <div className="alert alert-warning mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 shrink-0 stroke-current" fill="none" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4v2m0 0v2m0-6v2m0-6v2m0-6v2M7 20h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v11a2 2 0 002 2z" />
-            </svg>
-            <span>
-              Warning: Clearing data is permanent and cannot be undone. Use for testing only.
-            </span>
+
+        {/* Error message */}
+        {error && (
+          <div className="alert alert-error mb-4">
+            <span>{error}</span>
           </div>
+        )}
 
-          {/* Error message */}
-          {error && (
-            <div className="alert alert-error mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 shrink-0 stroke-current" fill="none" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 14l-2-2m0 0l-2-2m2 2l2-2m-2 2l-2 2m2-2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span>{error}</span>
-            </div>
-          )}
-
-          {/* Checkbox groups */}
-          <div className="space-y-4">
-            {Object.entries(DATA_TYPE_GROUPS).map(([groupName, items]) => (
-              <div key={groupName}>
-                <h4 className="font-semibold text-sm mb-2">{groupName}</h4>
-                <div className="space-y-2 pl-4">
-                  {items.map(item => (
-                    <label key={item.id} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="checkbox checkbox-sm"
-                        checked={checkboxes[item.id]}
-                        onChange={() => handleCheckboxChange(item.id)}
-                        disabled={loading}
-                      />
-                      <span className="text-sm">{item.label}</span>
-                    </label>
-                  ))}
-                </div>
+        {/* Checkbox groups */}
+        <div className="space-y-4">
+          {Object.entries(DATA_TYPE_GROUPS).map(([groupName, items]) => (
+            <div key={groupName}>
+              <h4 className="font-semibold text-sm mb-2">{groupName}</h4>
+              <div className="space-y-2 pl-4">
+                {items.map(item => (
+                  <label key={item.id} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={checkboxes[item.id]}
+                      onChange={() => handleCheckboxChange(item.id)}
+                      disabled={loading}
+                    />
+                    <span className="text-sm">{item.label}</span>
+                  </label>
+                ))}
               </div>
-            ))}
-          </div>
-
-          {/* Clear button */}
-          <div className="mt-6 flex gap-2">
-            <button
-              className={`btn btn-error ${!isButtonEnabled || loading ? 'btn-disabled' : ''}`}
-              onClick={() => setShowConfirmDialog(true)}
-              disabled={!isButtonEnabled || loading}
-            >
-              {loading ? (
-                <>
-                  <span className="loading loading-spinner loading-sm"></span>
-                  Clearing...
-                </>
-              ) : (
-                'Clear Selected Data'
-              )}
-            </button>
-          </div>
-
-          {/* Loading message */}
-          {loading && (
-            <div className="mt-4 flex items-center gap-2 text-sm text-base-content/70">
-              <span className="loading loading-spinner loading-sm"></span>
-              Clearing in progress...
             </div>
-          )}
+          ))}
         </div>
+
+        {/* Clear button */}
+        <div className="mt-6 flex gap-2">
+          <button
+            className={`btn btn-sm btn-error ${!isButtonEnabled || loading ? 'btn-disabled' : ''}`}
+            onClick={() => setShowConfirmDialog(true)}
+            disabled={!isButtonEnabled || loading}
+          >
+            {loading ? (
+              <>
+                <span className="loading loading-spinner loading-sm"></span>
+                Clearing...
+              </>
+            ) : (
+              'Clear Selected Data'
+            )}
+          </button>
+        </div>
+
+        {/* Loading message */}
+        {loading && (
+          <div className="mt-4 flex items-center gap-2 text-sm text-base-content/70">
+            <span className="loading loading-spinner loading-sm"></span>
+            Clearing in progress...
+          </div>
+        )}
       </div>
 
       {/* Confirmation Dialog */}
@@ -247,14 +230,14 @@ export default function TestingDashboard() {
             </p>
             <div className="modal-action">
               <button
-                className="btn btn-ghost"
+                className="btn btn-sm btn-ghost"
                 onClick={() => setShowConfirmDialog(false)}
                 disabled={loading}
               >
                 Cancel
               </button>
               <button
-                className="btn btn-error"
+                className="btn btn-sm btn-error"
                 onClick={handleClearData}
                 disabled={loading}
               >
@@ -299,7 +282,7 @@ export default function TestingDashboard() {
             )}
             <div className="modal-action">
               <button
-                className="btn btn-primary"
+                className="btn btn-sm btn-primary"
                 onClick={() => setShowSuccessModal(false)}
               >
                 Close

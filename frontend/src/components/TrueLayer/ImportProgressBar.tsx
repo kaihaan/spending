@@ -50,13 +50,13 @@ const getStatusBadgeColor = (status: string): string => {
 const getStatusIcon = (status: string): string => {
   switch (status) {
     case 'completed':
-      return '✓';
+      return 'Done';
     case 'syncing':
-      return '⟳';
+      return 'Syncing';
     case 'failed':
-      return '✗';
+      return 'Failed';
     default:
-      return '○';
+      return 'Pending';
   }
 };
 
@@ -131,7 +131,7 @@ export const ImportProgressBar: React.FC<ImportProgressBarProps> = ({ jobId, onC
           <div className="flex justify-between items-center mb-3">
             <div>
               <h3 className="font-semibold">Overall Progress</h3>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-base-content/60">
                 {jobStatus.progress.completed_accounts} of {jobStatus.progress.total_accounts} accounts
               </p>
             </div>
@@ -150,21 +150,21 @@ export const ImportProgressBar: React.FC<ImportProgressBarProps> = ({ jobId, onC
         <div className="card bg-success/10 border border-success/30">
           <div className="card-body p-4">
             <div className="text-2xl font-bold text-success">{jobStatus.total_so_far.synced}</div>
-            <div className="text-xs text-gray-600">Transactions Synced</div>
+            <div className="text-xs text-base-content/70">Transactions Synced</div>
           </div>
         </div>
 
         <div className="card bg-warning/10 border border-warning/30">
           <div className="card-body p-4">
             <div className="text-2xl font-bold text-warning">{jobStatus.total_so_far.duplicates}</div>
-            <div className="text-xs text-gray-600">Duplicates Skipped</div>
+            <div className="text-xs text-base-content/70">Duplicates Skipped</div>
           </div>
         </div>
 
         <div className="card bg-error/10 border border-error/30">
           <div className="card-body p-4">
             <div className="text-2xl font-bold text-error">{jobStatus.total_so_far.errors}</div>
-            <div className="text-xs text-gray-600">Errors</div>
+            <div className="text-xs text-base-content/70">Errors</div>
           </div>
         </div>
       </div>
@@ -181,7 +181,7 @@ export const ImportProgressBar: React.FC<ImportProgressBarProps> = ({ jobId, onC
             <div className="flex justify-between items-start mb-2">
               <div className="flex-1">
                 <div className="font-medium">{account.display_name}</div>
-                <div className="text-xs text-gray-500">{account.account_id}</div>
+                <div className="text-xs text-base-content/60">{account.account_id}</div>
               </div>
               <div className={`badge ${getStatusBadgeColor(account.progress_status)}`}>
                 {getStatusIcon(account.progress_status)} {account.progress_status}
@@ -191,16 +191,13 @@ export const ImportProgressBar: React.FC<ImportProgressBarProps> = ({ jobId, onC
             {/* Account stats */}
             <div className="grid grid-cols-3 gap-2 text-sm mb-2">
               <div className="flex items-center gap-1">
-                <span className="text-success">✓</span>
-                <span>{account.synced_count} synced</span>
+                <span className="text-success">{account.synced_count} synced</span>
               </div>
               <div className="flex items-center gap-1">
-                <span className="text-warning">↻</span>
-                <span>{account.duplicates_count} dupes</span>
+                <span className="text-warning">{account.duplicates_count} dupes</span>
               </div>
               <div className="flex items-center gap-1">
-                <span className="text-error">✗</span>
-                <span>{account.errors_count} errors</span>
+                <span className="text-error">{account.errors_count} errors</span>
               </div>
             </div>
 
@@ -217,7 +214,7 @@ export const ImportProgressBar: React.FC<ImportProgressBarProps> = ({ jobId, onC
         <div className="card-body">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <div className="text-gray-600">Est. Completion</div>
+              <div className="text-base-content/70">Est. Completion</div>
               <div className="font-mono">
                 {jobStatus.estimated_completion
                   ? formatTime(jobStatus.estimated_completion)
@@ -225,7 +222,7 @@ export const ImportProgressBar: React.FC<ImportProgressBarProps> = ({ jobId, onC
               </div>
             </div>
             <div>
-              <div className="text-gray-600">Current Status</div>
+              <div className="text-base-content/70">Current Status</div>
               <div className="font-mono capitalize">{jobStatus.status}</div>
             </div>
           </div>
@@ -235,19 +232,19 @@ export const ImportProgressBar: React.FC<ImportProgressBarProps> = ({ jobId, onC
       {/* Status messages */}
       {jobStatus.status === 'completed' && (
         <div className="alert alert-success">
-          <span>✓ Import completed successfully!</span>
+          <span>Import completed successfully!</span>
         </div>
       )}
 
       {jobStatus.status === 'failed' && (
         <div className="alert alert-error">
-          <span>✗ Import failed. Please try again.</span>
+          <span>Import failed. Please try again.</span>
         </div>
       )}
 
       {jobStatus.status === 'enriching' && (
         <div className="alert alert-info">
-          <span>⟳ Auto-enriching transactions with AI...</span>
+          <span>Auto-enriching transactions with AI...</span>
         </div>
       )}
 

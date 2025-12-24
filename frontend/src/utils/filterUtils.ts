@@ -6,6 +6,10 @@ export interface TransactionFilters {
   dateFrom: string;
   dateTo: string;
   searchKeyword: string;
+  showInbound: boolean;  // Show CREDIT transactions (incoming/refunds)
+  showOutbound: boolean; // Show DEBIT transactions (outgoing/spending)
+  showEssential: boolean;     // Show only essential (Huququllah)
+  showDiscretionary: boolean; // Show only discretionary (Huququllah)
 }
 
 export const DEFAULT_FILTERS: TransactionFilters = {
@@ -13,7 +17,11 @@ export const DEFAULT_FILTERS: TransactionFilters = {
   selectedSubcategory: '',
   dateFrom: '',
   dateTo: '',
-  searchKeyword: ''
+  searchKeyword: '',
+  showInbound: true,
+  showOutbound: true,
+  showEssential: false,
+  showDiscretionary: false
 };
 
 /**
@@ -74,6 +82,34 @@ export const applyFilters = (txn: Transaction, filters: TransactionFilters): boo
     const matchesAmount = Math.abs(txn.amount).toFixed(2).includes(lower);
 
     if (!matchesDescription && !matchesMerchant && !matchesAmount) {
+      return false;
+    }
+  }
+
+  // Direction filter (inbound/outbound toggles)
+  // Only filter if toggles differ - both on or both off shows all
+  if (filters.showInbound !== filters.showOutbound) {
+    if (filters.showInbound && !filters.showOutbound) {
+      // Show only CREDIT (inbound) transactions
+      if (txn.transaction_type !== 'CREDIT') {
+        return false;
+      }
+    } else if (filters.showOutbound && !filters.showInbound) {
+      // Show only DEBIT (outbound) transactions
+      if (txn.transaction_type !== 'DEBIT') {
+        return false;
+      }
+    }
+  }
+
+  // Huququllah filter (mutually exclusive toggles)
+  // Both OFF or both ON = show all
+  if (filters.showEssential && !filters.showDiscretionary) {
+    if (txn.huququllah_classification !== 'essential') {
+      return false;
+    }
+  } else if (filters.showDiscretionary && !filters.showEssential) {
+    if (txn.huququllah_classification !== 'discretionary') {
       return false;
     }
   }

@@ -74,7 +74,7 @@ export default function EnrichmentProgressModal({
       <div className="modal-box w-11/12 max-w-md">
         {isComplete ? (
           <>
-            <h3 className="font-bold text-lg text-success mb-4">✓ Enrichment Complete</h3>
+            <h3 className="font-bold text-lg text-success mb-4">Enrichment Complete</h3>
             <div className="space-y-3">
               <p>
                 Successfully enriched{' '}
@@ -95,7 +95,7 @@ export default function EnrichmentProgressModal({
           </>
         ) : isFailed ? (
           <>
-            <h3 className="font-bold text-lg text-error mb-4">✗ Enrichment Failed</h3>
+            <h3 className="font-bold text-lg text-error mb-4">Enrichment Failed</h3>
             <p className="text-sm mb-4">{status?.error || 'Unknown error occurred'}</p>
             <div className="alert alert-error">
               <span>Please try again or check the logs for more details.</span>

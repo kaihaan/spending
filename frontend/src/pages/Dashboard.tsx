@@ -1,130 +1,176 @@
-import { useState, useEffect } from 'react';
-import axios from 'axios';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import type { Transaction, Category } from '../types';
-import { getCategoryColor } from '../utils/categoryColors';
-import {
-  loadFilters,
-  saveFilters,
-  getFilteredTransactions,
-  getFilteredCountForCategory,
-  getUniqueCategories,
-  getSubcategoriesForCategory,
-  type TransactionFilters
-} from '../utils/filterUtils';
-
-const API_URL = 'http://localhost:5000/api';
+import { useState } from 'react';
+import { useFilters } from '../contexts/FilterContext';
+import { getSubcategoriesForCategory } from '../utils/filterUtils';
+import D3BarChart from '../components/charts/D3BarChart';
+import D3LineChart from '../components/charts/D3LineChart';
+import MonthSelector, { type MonthKey } from '../components/MonthSelector';
 
 type ChartView = 'category' | 'timeline';
 
 export default function Dashboard() {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { filters, updateFilter, filteredTransactions, transactions, loading, error, uniqueCategories } = useFilters();
   const [chartView, setChartView] = useState<ChartView>('category');
-  const [huququllahFilter, setHuququllahFilter] = useState<'all' | 'essential' | 'discretionary'>('all');
+  const [selectedMonth, setSelectedMonth] = useState<MonthKey | null>('average');
 
-  // Load filters from localStorage
-  const initialFilters = loadFilters();
-  const [filters, setFilters] = useState<TransactionFilters>(initialFilters);
-
-  useEffect(() => {
-    fetchTransactions();
-  }, []);
-
-  // Save filters to localStorage whenever they change
-  useEffect(() => {
-    saveFilters(filters);
-  }, [filters]);
-
-  const fetchTransactions = async () => {
-    try {
-      setLoading(true);
-      const response = await axios.get<Transaction[]>(`${API_URL}/transactions`);
-      setTransactions(response.data);
-      setError(null);
-    } catch (err) {
-      setError('Failed to fetch transactions');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const updateFilter = (key: keyof TransactionFilters, value: string) => {
-    const newFilters = { ...filters, [key]: value };
-    // Clear subcategory when category changes
-    if (key === 'selectedCategory') {
-      newFilters.selectedSubcategory = '';
-    }
-    setFilters(newFilters);
-  };
-
-  const clearAllFilters = () => {
-    setFilters({
-      selectedCategory: 'All',
-      selectedSubcategory: '',
-      dateFrom: '',
-      dateTo: '',
-      searchKeyword: ''
-    });
-  };
-
-  // Apply filters
-  let filteredTransactions = getFilteredTransactions(transactions, filters);
-
-  // Apply Huququllah filter
-  if (huququllahFilter !== 'all') {
-    filteredTransactions = filteredTransactions.filter(
-      txn => txn.huququllah_classification === huququllahFilter
-    );
-  }
-
-  // Get all unique categories from transactions
-  const uniqueCategories = getUniqueCategories(transactions);
+  const isAverageMode = selectedMonth === 'average';
 
   // Process data for category bar chart
   const categoryData = uniqueCategories
     .map(category => {
       const categoryTransactions = filteredTransactions.filter(
-        txn => txn.category === category && txn.amount < 0
+        txn => txn.category === category
       );
-      const total = categoryTransactions.reduce((sum, txn) => sum + Math.abs(txn.amount), 0);
+      const total = categoryTransactions.reduce((sum, txn) => sum + parseFloat(String(txn.amount)), 0);
 
       return {
-        category,
-        total: parseFloat(total.toFixed(2)),
-        count: categoryTransactions.length
+        label: category,
+        value: parseFloat(total.toFixed(2))
       };
     })
-    .filter(item => item.total > 0)
-    .sort((a, b) => b.total - a.total);
+    .filter(item => item.value > 0)
+    .sort((a, b) => b.value - a.value);
+
+  // Process data for subcategory bar chart (when a category is selected)
+  const subcategoryData = (() => {
+    if (filters.selectedCategory === 'All') {
+      return [];
+    }
+
+    const subcategories = getSubcategoriesForCategory(transactions, filters.selectedCategory);
+
+    return subcategories
+      .map(subcategory => {
+        const subcategoryTransactions = filteredTransactions.filter(
+          txn => txn.category === filters.selectedCategory &&
+                 txn.subcategory === subcategory
+        );
+
+        const total = subcategoryTransactions.reduce(
+          (sum, txn) => sum + parseFloat(String(txn.amount)),
+          0
+        );
+
+        return {
+          label: subcategory,
+          value: parseFloat(total.toFixed(2))
+        };
+      })
+      .filter(item => item.value > 0)
+      .sort((a, b) => b.value - a.value);
+  })();
+
+  // Calculate average monthly spending by category
+  const calculateAverageCategoryData = () => {
+    // Group all transactions by month and category
+    const monthlyTotals: Record<string, Record<string, number>> = {};
+
+    filteredTransactions.forEach(txn => {
+      const monthKey = txn.date.substring(0, 7); // "2024-12"
+      if (!monthlyTotals[monthKey]) monthlyTotals[monthKey] = {};
+      if (!monthlyTotals[monthKey][txn.category]) monthlyTotals[monthKey][txn.category] = 0;
+      monthlyTotals[monthKey][txn.category] += parseFloat(String(txn.amount));
+    });
+
+    // Calculate average per category
+    const monthCount = Object.keys(monthlyTotals).length || 1;
+    const categoryTotals: Record<string, number> = {};
+
+    Object.values(monthlyTotals).forEach(monthData => {
+      Object.entries(monthData).forEach(([category, total]) => {
+        categoryTotals[category] = (categoryTotals[category] || 0) + total;
+      });
+    });
+
+    return Object.entries(categoryTotals)
+      .map(([label, total]) => ({ label, value: parseFloat((total / monthCount).toFixed(2)) }))
+      .filter(item => item.value > 0)
+      .sort((a, b) => b.value - a.value);
+  };
+
+  // Calculate average monthly spending by subcategory (when a category is selected)
+  const calculateAverageSubcategoryData = () => {
+    if (filters.selectedCategory === 'All') return [];
+
+    const monthlyTotals: Record<string, Record<string, number>> = {};
+
+    filteredTransactions.forEach(txn => {
+      if (txn.category !== filters.selectedCategory) return;
+      const monthKey = txn.date.substring(0, 7);
+      const subcategory = txn.subcategory || 'Uncategorized';
+      if (!monthlyTotals[monthKey]) monthlyTotals[monthKey] = {};
+      if (!monthlyTotals[monthKey][subcategory]) monthlyTotals[monthKey][subcategory] = 0;
+      monthlyTotals[monthKey][subcategory] += parseFloat(String(txn.amount));
+    });
+
+    const monthCount = Object.keys(monthlyTotals).length || 1;
+    const subcategoryTotals: Record<string, number> = {};
+
+    Object.values(monthlyTotals).forEach(monthData => {
+      Object.entries(monthData).forEach(([subcategory, total]) => {
+        subcategoryTotals[subcategory] = (subcategoryTotals[subcategory] || 0) + total;
+      });
+    });
+
+    return Object.entries(subcategoryTotals)
+      .map(([label, total]) => ({ label, value: parseFloat((total / monthCount).toFixed(2)) }))
+      .filter(item => item.value > 0)
+      .sort((a, b) => b.value - a.value);
+  };
+
+  // Determine which chart data to use
+  const barChartData = isAverageMode
+    ? (filters.selectedCategory !== 'All' ? calculateAverageSubcategoryData() : calculateAverageCategoryData())
+    : (filters.selectedCategory !== 'All' ? subcategoryData : categoryData);
+
+  const chartTitle = isAverageMode
+    ? (filters.selectedCategory !== 'All'
+        ? `Average Monthly Spending: ${filters.selectedCategory} Subcategories`
+        : 'Average Monthly Spending by Category')
+    : (filters.selectedCategory !== 'All' ? `Spending by Subcategory: ${filters.selectedCategory}` : undefined);
 
   // Process data for timeline chart
   const timelineData = (() => {
     const dailySpending: Record<string, number> = {};
 
-    filteredTransactions
-      .filter(txn => txn.amount < 0)
-      .forEach(txn => {
-        if (!dailySpending[txn.date]) {
-          dailySpending[txn.date] = 0;
-        }
-        dailySpending[txn.date] += Math.abs(txn.amount);
-      });
+    filteredTransactions.forEach(txn => {
+      if (!dailySpending[txn.date]) {
+        dailySpending[txn.date] = 0;
+      }
+      dailySpending[txn.date] += parseFloat(String(txn.amount));
+    });
 
     return Object.entries(dailySpending)
       .map(([date, total]) => ({
         date,
-        total: parseFloat(total.toFixed(2))
+        value: parseFloat(total.toFixed(2))
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
   })();
 
-  // Calculate total spending
-  const totalSpending = filteredTransactions
-    .filter(txn => txn.amount < 0)
-    .reduce((sum, txn) => sum + Math.abs(txn.amount), 0);
+  // Handle month selection
+  const handleMonthSelect = (month: MonthKey) => {
+    // Toggle off if clicking active month
+    if (month === selectedMonth) {
+      setSelectedMonth(null);
+      return;
+    }
+
+    setSelectedMonth(month);
+
+    if (month === 'average') {
+      // Keep current filter range for average calculation
+      return;
+    }
+
+    // Calculate first and last day of selected month
+    const now = new Date();
+    const monthsBack = month === 'current' ? 0 : parseInt(month.split('-')[1]);
+    const firstDay = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
+    const lastDay = new Date(firstDay.getFullYear(), firstDay.getMonth() + 1, 0);
+
+    updateFilter('dateFrom', firstDay.toISOString().split('T')[0]);
+    updateFilter('dateTo', lastDay.toISOString().split('T')[0]);
+  };
 
   if (loading) {
     return (
@@ -154,181 +200,30 @@ export default function Dashboard() {
     <div className="container mx-auto p-4 space-y-4">
       <div className="card bg-base-200 shadow-xl">
         <div className="card-body">
-          <h2 className="card-title text-2xl">📊 Dashboard</h2>
-          <p className="text-sm text-base-content/70 mb-4">
-            Visual spending analysis with interactive filters
-          </p>
-
-          {/* Filters Section */}
-          <div className="space-y-4 mb-6">
-            {/* Search Filter */}
+          {/* Chart View Toggle and Month Selector */}
+          <div className="flex justify-between items-center mb-4">
             <div className="flex gap-2">
-              <div className="flex-1">
-                <input
-                  type="text"
-                  placeholder="🔍 Search transactions (description, merchant, amount)..."
-                  className="input input-bordered w-full"
-                  value={filters.searchKeyword}
-                  onChange={(e) => updateFilter('searchKeyword', e.target.value)}
-                />
-              </div>
-              {filters.searchKeyword && (
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => updateFilter('searchKeyword', '')}
-                >
-                  Clear Search
-                </button>
-              )}
-            </div>
-
-            {/* Date Range Filter */}
-            <div className="flex flex-wrap gap-2 items-center">
-              <span className="text-sm font-semibold">Date Range:</span>
-              <input
-                type="date"
-                className="input input-bordered input-sm"
-                value={filters.dateFrom}
-                onChange={(e) => updateFilter('dateFrom', e.target.value)}
-                placeholder="From"
-              />
-              <span className="text-sm">to</span>
-              <input
-                type="date"
-                className="input input-bordered input-sm"
-                value={filters.dateTo}
-                onChange={(e) => updateFilter('dateTo', e.target.value)}
-                placeholder="To"
-              />
-              {(filters.dateFrom || filters.dateTo) && (
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => {
-                    updateFilter('dateFrom', '');
-                    updateFilter('dateTo', '');
-                  }}
-                >
-                  Clear Dates
-                </button>
-              )}
-              {(filters.selectedCategory !== 'All' || filters.dateFrom || filters.dateTo || filters.searchKeyword) && (
-                <button
-                  className="btn btn-error btn-sm ml-auto"
-                  onClick={clearAllFilters}
-                >
-                  Clear All Filters
-                </button>
-              )}
-            </div>
-
-            {/* Category Filter */}
-            <div className="flex flex-wrap gap-2 items-center">
-              <span
-                onClick={() => updateFilter('selectedCategory', 'All')}
-                className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${filters.selectedCategory === 'All'
-                    ? 'badge-primary scale-110'
-                    : 'badge-ghost hover:scale-105'
-                  }`}
+              <button
+                className={`btn btn-sm ${chartView === 'category' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setChartView('category')}
               >
-                All ({getFilteredCountForCategory(transactions, filters, 'All')})
-              </span>
-              {uniqueCategories.map(cat => {
-                const count = getFilteredCountForCategory(transactions, filters, cat);
-                if (count === 0) return null;
-                return (
-                  <span
-                    key={cat}
-                    onClick={() => updateFilter('selectedCategory', cat)}
-                    className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${getCategoryColor(cat)} ${filters.selectedCategory === cat ? 'scale-110' : 'hover:scale-105'
-                      }`}
-                  >
-                    {cat} ({count})
-                  </span>
-                );
-              })}
+                By Category
+              </button>
+              <button
+                className={`btn btn-sm ${chartView === 'timeline' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setChartView('timeline')}
+              >
+                Timeline
+              </button>
             </div>
 
-            {/* Subcategory Filter (shown when a category is selected) */}
-            {filters.selectedCategory !== 'All' && (
-              <div className="flex flex-wrap gap-2 ml-4 items-center">
-                <span className="text-sm font-semibold">Subcategories:</span>
-                <span
-                  onClick={() => updateFilter('selectedSubcategory', '')}
-                  className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${!filters.selectedSubcategory
-                      ? 'badge-primary scale-105'
-                      : 'badge-ghost hover:scale-105'
-                    }`}
-                >
-                  All
-                </span>
-                {getSubcategoriesForCategory(transactions, filters.selectedCategory).map(subcat => {
-                  const subcount = transactions.filter(
-                    txn =>
-                      txn.category === filters.selectedCategory &&
-                      txn.subcategory === subcat
-                  ).length;
-                  if (subcount === 0) return null;
-                  return (
-                    <span
-                      key={subcat}
-                      onClick={() => updateFilter('selectedSubcategory', subcat)}
-                      className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${getCategoryColor(filters.selectedCategory)
-                        } ${filters.selectedSubcategory === subcat ? 'scale-105' : 'hover:scale-105'}`}
-                    >
-                      {subcat} ({subcount})
-                    </span>
-                  );
-                })}
-              </div>
+            {/* Month Selector - only show for category view */}
+            {chartView === 'category' && (
+              <MonthSelector
+                selectedMonth={selectedMonth}
+                onMonthSelect={handleMonthSelect}
+              />
             )}
-          </div>
-
-          {/* Chart View Toggle */}
-          <div className="flex gap-2 mb-4">
-            <button
-              className={`btn btn-sm ${chartView === 'category' ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setChartView('category')}
-            >
-              📊 By Category
-            </button>
-            <button
-              className={`btn btn-sm ${chartView === 'timeline' ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setChartView('timeline')}
-            >
-              📈 Timeline
-            </button>
-          </div>
-
-          {/* Huququllah Filter */}
-          <div className="flex gap-2 mb-4">
-            <span className="text-sm font-semibold mr-2">Huququllah Filter:</span>
-            <button
-              className={`btn btn-sm ${huququllahFilter === 'all' ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setHuququllahFilter('all')}
-            >
-              All Spending
-            </button>
-            <button
-              className={`btn btn-sm ${huququllahFilter === 'essential' ? 'btn-success' : 'btn-ghost'}`}
-              onClick={() => setHuququllahFilter('essential')}
-            >
-              Essential Only
-            </button>
-            <button
-              className={`btn btn-sm ${huququllahFilter === 'discretionary' ? 'btn-secondary' : 'btn-ghost'}`}
-              onClick={() => setHuququllahFilter('discretionary')}
-            >
-              Discretionary Only
-            </button>
-          </div>
-
-          {/* Summary Stats */}
-          <div className="stats shadow mb-6">
-            <div className="stat">
-              <div className="stat-title">Total Spending</div>
-              <div className="stat-value text-error">£{totalSpending.toFixed(2)}</div>
-              <div className="stat-desc">{filteredTransactions.filter(t => t.amount < 0).length} transactions</div>
-            </div>
           </div>
 
           {/* Chart Display */}
@@ -338,68 +233,61 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="bg-base-100 p-4 rounded-lg">
-              {chartView === 'category' && categoryData.length > 0 && (
-                <ResponsiveContainer width="100%" height={400}>
-                  <BarChart data={categoryData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="category"
-                      angle={-45}
-                      textAnchor="end"
-                      height={100}
-                      interval={0}
-                    />
-                    <YAxis
-                      label={{ value: 'Amount (£)', angle: -90, position: 'insideLeft' }}
-                    />
-                    <Tooltip
-                      formatter={(value: number) => `£${value.toFixed(2)}`}
-                      contentStyle={{ backgroundColor: 'var(--fallback-b1,oklch(var(--b1)/1))' }}
-                    />
-                    <Legend />
-                    <Bar
-                      dataKey="total"
-                      fill="#f87171"
-                      name="Spending"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+              {chartView === 'category' && barChartData.length > 0 && (
+                <div className="space-y-2">
+                  {/* Subcategory view: show back button + title */}
+                  {filters.selectedCategory !== 'All' && (
+                    <div className="flex items-center justify-between">
+                      <button
+                        className="btn btn-sm btn-ghost gap-1"
+                        onClick={() => {
+                          updateFilter('selectedCategory', 'All');
+                          updateFilter('selectedSubcategory', '');
+                        }}
+                      >
+                        ← Back to Categories
+                      </button>
+                      <h3 className="text-lg font-semibold">
+                        {chartTitle}
+                      </h3>
+                      <div className="w-[140px]"></div> {/* Spacer for centering */}
+                    </div>
+                  )}
+                  {/* Category view: centered title only */}
+                  {filters.selectedCategory === 'All' && chartTitle && (
+                    <h3 className="text-lg font-semibold text-center">
+                      {chartTitle}
+                    </h3>
+                  )}
+                  <D3BarChart
+                    data={barChartData}
+                    height={400}
+                    onBarClick={(label) => {
+                      if (filters.selectedCategory === 'All') {
+                        // Clicking a category bar → filter to that category
+                        updateFilter('selectedCategory', label);
+                        updateFilter('selectedSubcategory', '');
+                      } else {
+                        // Clicking a subcategory bar → filter to that subcategory
+                        updateFilter('selectedSubcategory', label);
+                      }
+                    }}
+                  />
+                </div>
               )}
 
               {chartView === 'timeline' && timelineData.length > 0 && (
-                <ResponsiveContainer width="100%" height={400}>
-                  <LineChart data={timelineData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="date"
-                      angle={-45}
-                      textAnchor="end"
-                      height={100}
-                      interval={Math.floor(timelineData.length / 10)}
-                    />
-                    <YAxis
-                      label={{ value: 'Daily Spending (£)', angle: -90, position: 'insideLeft' }}
-                    />
-                    <Tooltip
-                      formatter={(value: number) => `£${value.toFixed(2)}`}
-                      contentStyle={{ backgroundColor: 'var(--fallback-b1,oklch(var(--b1)/1))' }}
-                    />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="total"
-                      stroke="#f87171"
-                      strokeWidth={2}
-                      name="Daily Spending"
-                      dot={{ r: 3 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                <D3LineChart data={timelineData} height={400} />
               )}
 
-              {chartView === 'category' && categoryData.length === 0 && (
+              {chartView === 'category' && barChartData.length === 0 && (
                 <div className="alert alert-info">
-                  <span>No spending data for selected filters</span>
+                  <span>
+                    {filters.selectedCategory !== 'All'
+                      ? `No subcategory spending data for ${filters.selectedCategory}`
+                      : 'No spending data for selected filters'
+                    }
+                  </span>
                 </div>
               )}
 
@@ -410,11 +298,6 @@ export default function Dashboard() {
               )}
             </div>
           )}
-
-          {/* Footer Info */}
-          <div className="text-sm text-base-content/60 mt-4">
-            Showing {filteredTransactions.length} of {transactions.length} transactions
-          </div>
         </div>
       </div>
     </div>

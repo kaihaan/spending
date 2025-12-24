@@ -12,7 +12,7 @@ export default function EnrichmentStatusIndicator({
   if (!isEnriched) {
     return (
       <div className="tooltip" data-tip="Not enriched">
-        <span className="text-gray-400 text-lg">—</span>
+        <span className="text-base-content/50 text-lg">—</span>
       </div>
     );
   }
@@ -28,7 +28,7 @@ export default function EnrichmentStatusIndicator({
   if (isHighConfidence) {
     return (
       <div className="tooltip" data-tip={tooltipText}>
-        <span className="text-success text-lg font-bold">✓</span>
+        <span className="badge badge-success badge-sm">High</span>
       </div>
     );
   }
@@ -36,7 +36,7 @@ export default function EnrichmentStatusIndicator({
   if (isLowConfidence) {
     return (
       <div className="tooltip" data-tip={tooltipText}>
-        <span className="text-warning text-lg">⚠</span>
+        <span className="badge badge-warning badge-sm">Low</span>
       </div>
     );
   }
@@ -44,7 +44,7 @@ export default function EnrichmentStatusIndicator({
   // Very low confidence (< 0.5)
   return (
     <div className="tooltip" data-tip={tooltipText}>
-      <span className="text-error text-lg">✗</span>
+      <span className="badge badge-error badge-sm">Poor</span>
     </div>
   );
 }

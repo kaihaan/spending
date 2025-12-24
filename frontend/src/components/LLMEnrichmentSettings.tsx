@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import AddOllamaModel from './AddOllamaModel';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -57,28 +56,20 @@ interface ProgressUpdate {
   error?: string;
 }
 
-interface ModelInfo {
-  name: string;
-  selected?: boolean;
+interface ProviderAccountInfo {
+  available: boolean;
+  balance?: number | null;
+  subscription_tier?: string | null;
+  usage_this_month?: number | null;
+  error?: string | null;
+  extra?: Record<string, any> | null;
 }
 
-interface AllModelsResponse {
-  current_provider: string;
-  all_models: {
-    anthropic: AvailableModels;
-    openai: AvailableModels;
-    google: AvailableModels;
-    deepseek: AvailableModels;
-    ollama: AvailableModels;
-  };
-}
-
-interface AvailableModels {
-  provider: string;
-  selected?: string;
-  built_in: ModelInfo[];
-  custom: ModelInfo[];
-  available?: Array<{ name: string; installed: boolean }>;
+interface AccountInfoResponse {
+  configured: boolean;
+  provider?: string;
+  account?: ProviderAccountInfo;
+  error?: string;
 }
 
 export default function LLMEnrichmentSettings() {
@@ -89,35 +80,25 @@ export default function LLMEnrichmentSettings() {
   const [enriching, setEnriching] = useState(false);
   const [validating, setValidating] = useState(false);
   const [showFailedDetails, setShowFailedDetails] = useState(false);
-  const [clearing, setClearing] = useState(false);
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   // Progress tracking
   const [progress, setProgress] = useState<ProgressUpdate | null>(null);
 
+  // Account info
+  const [accountInfo, setAccountInfo] = useState<ProviderAccountInfo | null>(null);
+  const [loadingAccountInfo, setLoadingAccountInfo] = useState(false);
+
   // Enrichment options
-  const [enrichmentDirection, setEnrichmentDirection] = useState('out');
+  const [enrichmentMode, setEnrichmentMode] = useState<'required' | 'unenriched' | 'all'>('required');
+  const [transactionLimit, setTransactionLimit] = useState<number | null>(null);
   const [forceRefresh, setForceRefresh] = useState(false);
   const [lastStats, setLastStats] = useState<EnrichmentStats | null>(null);
-  const [transactionCount, setTransactionCount] = useState<number | null>(null);
-  const [transactionCountMode, setTransactionCountMode] = useState<'all' | 'unenriched' | 'limit'>('unenriched');
-
-  // Model management
-  const [allModels, setAllModels] = useState<AllModelsResponse | null>(null);
-  const [loadingModels, setLoadingModels] = useState(false);
-  const [showAddModel, setShowAddModel] = useState(false);
 
   useEffect(() => {
     fetchConfig();
     fetchCacheStats();
     fetchFailedEnrichments();
   }, []);
-
-  useEffect(() => {
-    if (config?.configured) {
-      fetchAvailableModels();
-    }
-  }, [config?.configured]);
 
   const fetchConfig = async () => {
     try {
@@ -154,64 +135,19 @@ export default function LLMEnrichmentSettings() {
     }
   };
 
-  const fetchAvailableModels = async () => {
+  const fetchAccountInfo = async () => {
+    setLoadingAccountInfo(true);
     try {
-      setLoadingModels(true);
-      const response = await axios.get<AllModelsResponse>(`${API_URL}/llm/available-models`);
-      setAllModels(response.data);
+      const response = await axios.get<AccountInfoResponse>(`${API_URL}/enrichment/account-info`);
+      if (response.data.account) {
+        setAccountInfo(response.data.account);
+      }
     } catch (err) {
-      console.error('Failed to fetch available models:', err);
+      console.error('Failed to fetch account info:', err);
+      setAccountInfo({ available: false, error: 'Failed to fetch account info' });
     } finally {
-      setLoadingModels(false);
+      setLoadingAccountInfo(false);
     }
-  };
-
-  const handleSetModel = async (modelName: string) => {
-    try {
-      // Find which provider this model belongs to
-      let selectedProvider = '';
-      for (const [provider, models] of Object.entries(allModels.all_models)) {
-        const builtInMatch = models.built_in?.some(m => m.name === modelName);
-        const customMatch = models.custom?.some(m => m.name === modelName);
-        if (builtInMatch || customMatch) {
-          selectedProvider = provider;
-          break;
-        }
-      }
-
-      const response = await axios.post(`${API_URL}/llm/set-model`, {
-        model_name: modelName,
-        provider: selectedProvider,
-      });
-
-      if (response.data.success) {
-        // Update config to reflect new model
-        if (config?.config) {
-          setConfig({
-            ...config,
-            config: {
-              ...config.config,
-              model: modelName,
-              provider: selectedProvider,
-            },
-          });
-        }
-        alert(`✅ Model switched to ${modelName}`);
-        fetchAvailableModels(); // Refresh model list
-      } else {
-        alert(`❌ ${response.data.message || 'Failed to set model'}`);
-      }
-    } catch (err: any) {
-      alert(`❌ Error setting model: ${err.response?.data?.error || err.message}`);
-    }
-  };
-
-  const handleModelAdded = (modelName: string) => {
-    // Refresh available models and switch to new model
-    setTimeout(() => {
-      fetchAvailableModels();
-      handleSetModel(modelName);
-    }, 500);
   };
 
   const handleValidateConfig = async () => {
@@ -233,45 +169,31 @@ export default function LLMEnrichmentSettings() {
   };
 
   const handleEnrichAllTransactions = async () => {
-    // Build confirmation message based on mode
-    let confirmMsg = 'Enrich transactions with LLM?\n\nThis will use your configured API and may incur costs.';
-    if (transactionCountMode === 'limit' && transactionCount) {
-      confirmMsg = `Enrich first ${transactionCount} transactions with LLM?\n\nThis will use your configured API and may incur costs.`;
-    } else if (transactionCountMode === 'all') {
-      confirmMsg = 'Enrich ALL transactions with LLM?\n\nThis will use your configured API and may incur costs.';
-    } else if (transactionCountMode === 'unenriched') {
-      confirmMsg = 'Enrich only unenriched transactions with LLM?\n\nThis will use your configured API and may incur costs.';
+    // Build confirmation message based on options
+    const modeLabels = {
+      required: 'marked as required',
+      unenriched: 'unenriched',
+      all: 'ALL'
+    };
+    let confirmMsg = `Enrich ${modeLabels[enrichmentMode]} transactions with LLM?`;
+    if (transactionLimit) {
+      confirmMsg = `Enrich up to ${transactionLimit} ${modeLabels[enrichmentMode]} transactions with LLM?`;
     }
+    confirmMsg += '\n\nThis will use your configured API and may incur costs.';
 
     if (!confirm(confirmMsg)) {
       return;
     }
 
-    // Validate limit if in limit mode
-    if (transactionCountMode === 'limit' && (!transactionCount || transactionCount < 1)) {
-      alert('Please enter a valid transaction count (minimum 1)');
-      return;
-    }
+    // Create abort controller with 15-minute timeout for long enrichment jobs
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15 * 60 * 1000);
 
     try {
       setEnriching(true);
       setProgress(null);
 
-      const eventSource = new EventSource(`${API_URL}/enrichment/enrich-stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          transaction_ids: null, // null means use mode filtering
-          direction: enrichmentDirection,
-          force_refresh: forceRefresh,
-          mode: transactionCountMode,
-          limit: transactionCountMode === 'limit' ? transactionCount : undefined
-        })
-      } as any);
-
-      // For browsers that don't support POST with EventSource, use fetch instead
+      // Use fetch for POST with EventSource-style streaming
       const response = await fetch(`${API_URL}/enrichment/enrich-stream`, {
         method: 'POST',
         headers: {
@@ -279,11 +201,11 @@ export default function LLMEnrichmentSettings() {
         },
         body: JSON.stringify({
           transaction_ids: null,
-          direction: enrichmentDirection,
           force_refresh: forceRefresh,
-          mode: transactionCountMode,
-          limit: transactionCountMode === 'limit' ? transactionCount : undefined
-        })
+          mode: enrichmentMode,
+          limit: transactionLimit || undefined
+        }),
+        signal: controller.signal
       });
 
       const reader = response.body?.getReader();
@@ -335,9 +257,15 @@ export default function LLMEnrichmentSettings() {
         }
       }
     } catch (err: any) {
-      alert(`❌ Enrichment failed: ${err.message}`);
+      // Check if this was a timeout abort
+      if (err.name === 'AbortError') {
+        alert(`❌ Enrichment timed out after 15 minutes. The process may still be running on the server. Check back in a few minutes.`);
+      } else {
+        alert(`❌ Enrichment failed: ${err.message}`);
+      }
       setProgress(null);
     } finally {
+      clearTimeout(timeoutId);
       setEnriching(false);
     }
   };
@@ -355,7 +283,6 @@ export default function LLMEnrichmentSettings() {
     try {
       setEnriching(true);
       const response = await axios.post<{ stats: EnrichmentStats }>(`${API_URL}/enrichment/retry-failed`, {
-        direction: enrichmentDirection,
         limit: 50
       });
 
@@ -377,33 +304,6 @@ export default function LLMEnrichmentSettings() {
     }
   };
 
-  const handleClearEnrichment = async () => {
-    try {
-      setClearing(true);
-      const response = await axios.post(`${API_URL}/enrichment/clear`);
-      const { success, message, enrichments_cleared } = response.data;
-
-      if (success) {
-        alert(`✅ ${message}\n\nCleared enrichment data for ${enrichments_cleared} transactions.`);
-
-        // Refresh cache stats and failed enrichments
-        fetchCacheStats();
-        fetchFailedEnrichments();
-        setLastStats(null);
-
-        // Dispatch event to refresh transactions list
-        window.dispatchEvent(new Event('transactions-updated'));
-      } else {
-        alert(`❌ Failed to clear enrichment data`);
-      }
-    } catch (err: any) {
-      alert(`❌ Error: ${err.response?.data?.error || err.message}`);
-    } finally {
-      setClearing(false);
-      setShowClearConfirm(false);
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex justify-center items-center p-8">
@@ -421,588 +321,281 @@ export default function LLMEnrichmentSettings() {
   }
 
   return (
-    <div className="mb-8">
-      {/* Header */}
-      <div className="flex justify-between items-start mb-4">
-        <div>
-          <h2 className="text-xl font-semibold">LLM Enrichment</h2>
-          <p className="text-sm text-base-content/70">
-            Use AI to automatically enrich and categorize transactions
-          </p>
-        </div>
-      </div>
+    <div className="mb-6">
+      <h3 className="text-lg font-semibold mb-4">LLM Enrichment</h3>
 
       {/* Configuration Status */}
       {!config.configured ? (
-        <div className="alert alert-warning mb-6">
+        <div className="alert alert-warning mb-4">
           <span>
-            LLM enrichment is not configured. Set the <code>LLM_PROVIDER</code> and <code>LLM_API_KEY</code> environment variables to enable this feature.
-            <br />
-            <a href="/settings#ollama-setup" className="link link-primary text-sm mt-2 block">See LLM Setup Guide</a>
+            Not configured. Set <code>LLM_PROVIDER</code> and <code>LLM_API_KEY</code> environment variables.
           </span>
         </div>
       ) : (
-        <div className="card bg-base-200 shadow mb-6">
-          <div className="card-body">
-            <h3 className="card-title text-lg">Configuration Status</h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-              <div className="bg-base-100 p-4 rounded">
-                <div className="text-sm text-base-content/70">Provider</div>
-                <div className="text-lg font-semibold">{config.config?.provider || 'Unknown'}</div>
-              </div>
-              <div className="bg-base-100 p-4 rounded">
-                <div className="text-sm text-base-content/70">Model</div>
-                <div className="text-lg font-semibold">{config.config?.model || 'Unknown'}</div>
-              </div>
-              <div className="bg-base-100 p-4 rounded">
-                <div className="text-sm text-base-content/70">Cache Status</div>
-                <div className="text-lg font-semibold">
-                  {config.config?.cache_enabled ? (
-                    <span className="badge badge-success">Enabled</span>
-                  ) : (
-                    <span className="badge badge-ghost">Disabled</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <button
-              className="btn btn-outline btn-sm"
-              onClick={handleValidateConfig}
-              disabled={validating}
-            >
-              {validating ? (
-                <>
-                  <span className="loading loading-spinner loading-sm"></span>
-                  Validating...
-                </>
-              ) : (
-                '🔍 Validate Configuration'
-              )}
-            </button>
-
-            {/* Ollama-specific help */}
-            {config.config?.provider === 'ollama' && (
-              <div className="alert alert-info mt-4">
-                <div>
-                  <h4 className="font-semibold mb-2">💻 Running Ollama Locally</h4>
-                  <ul className="text-sm space-y-1 list-disc list-inside">
-                    <li>Make sure Ollama is running: <code className="bg-base-300 px-2 py-1 rounded text-xs">ollama serve</code></li>
-                    <li>Verify your model is available: <code className="bg-base-300 px-2 py-1 rounded text-xs">ollama list</code></li>
-                    <li>If model missing, pull it: <code className="bg-base-300 px-2 py-1 rounded text-xs">ollama pull {config.config?.model || 'mistral:7b'}</code></li>
-                    <li>No API key needed - all processing happens locally!</li>
-                    <li>Batch size can be adjusted in <code className="bg-base-300 px-2 py-1 rounded text-xs">.env</code> to optimize for your hardware</li>
-                  </ul>
-                  <p className="text-xs mt-3">
-                    <a href="https://github.com/ollama/ollama" target="_blank" rel="noopener noreferrer" className="link link-primary">View Ollama docs →</a>
-                  </p>
-                </div>
-              </div>
+        <div className="border border-base-300 rounded-lg p-4 mb-4">
+          <div className="flex items-center gap-2 mb-3 text-sm">
+            <span className="font-medium">Provider:</span> <span>{config.config?.provider}</span>
+            <span className="text-base-content/50">|</span>
+            <span className="font-medium">Model:</span> <span>{config.config?.model}</span>
+            <span className="text-base-content/50">|</span>
+            <span className="font-medium">Cache:</span>
+            {config.config?.cache_enabled ? (
+              <span className="badge badge-success badge-sm">Enabled</span>
+            ) : (
+              <span className="badge badge-ghost badge-sm">Disabled</span>
             )}
           </div>
+
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={handleValidateConfig}
+            disabled={validating}
+          >
+            {validating ? (
+              <>
+                <span className="loading loading-spinner loading-sm"></span>
+                Validating...
+              </>
+            ) : (
+              'Validate Config'
+            )}
+          </button>
+
         </div>
       )}
 
-      {/* Model Selection Card */}
-      {config.configured && allModels && (
-        <div className="card bg-base-200 shadow mb-6">
-          <div className="card-body">
-            <h3 className="card-title text-lg">🔧 Model Selection</h3>
-
-            {/* Model Selector - All Providers */}
-            <div className="form-control">
-              <label className="label">
-                <span className="label-text font-semibold">Active Model (All Providers)</span>
-              </label>
-              <select
-                className="select select-bordered"
-                value={config.config?.model || ''}
-                onChange={(e) => handleSetModel(e.target.value)}
-                disabled={loadingModels}
-              >
-                <option value="" disabled>
-                  Select a model...
-                </option>
-                {/* Anthropic Models */}
-                {allModels.all_models.anthropic?.built_in?.length > 0 && (
-                  <optgroup label="🤖 Anthropic Claude">
-                    {allModels.all_models.anthropic.built_in.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                    {allModels.all_models.anthropic.custom?.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} (custom) {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {/* OpenAI Models */}
-                {allModels.all_models.openai?.built_in?.length > 0 && (
-                  <optgroup label="🔴 OpenAI GPT">
-                    {allModels.all_models.openai.built_in.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                    {allModels.all_models.openai.custom?.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} (custom) {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {/* Google Models */}
-                {allModels.all_models.google?.built_in?.length > 0 && (
-                  <optgroup label="🔵 Google Gemini">
-                    {allModels.all_models.google.built_in.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                    {allModels.all_models.google.custom?.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} (custom) {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {/* Deepseek Models */}
-                {allModels.all_models.deepseek?.built_in?.length > 0 && (
-                  <optgroup label="⚡ Deepseek">
-                    {allModels.all_models.deepseek.built_in.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                    {allModels.all_models.deepseek.custom?.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} (custom) {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {/* Ollama Models */}
-                {allModels.all_models.ollama?.built_in?.length > 0 && (
-                  <optgroup label="💻 Ollama (Local)">
-                    {allModels.all_models.ollama.built_in.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                    {allModels.all_models.ollama.custom?.map((model) => (
-                      <option value={model.name} key={model.name}>
-                        {model.name} (custom) {model.selected ? '✓' : ''}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            </div>
-
-            {/* Add Model Button (Ollama only) */}
-            {config.config?.provider === 'ollama' && (
-              <button
-                className="btn btn-outline btn-sm mt-4"
-                onClick={() => setShowAddModel(true)}
-              >
-                ➕ Add New Ollama Model
-              </button>
-            )}
-
-            {/* Available Models List (Ollama) */}
-            {config.config?.provider === 'ollama' && allModels.all_models.ollama?.available && allModels.all_models.ollama.available.length > 0 && (
-              <div className="mt-4">
-                <label className="label">
-                  <span className="label-text text-sm">Installed in Ollama:</span>
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {allModels.all_models.ollama.available.map((model) => (
-                    <span
-                      key={model.name}
-                      className={`badge ${model.installed ? 'badge-success' : 'badge-warning'}`}
-                    >
-                      {model.name} {model.installed ? '✓' : '⏳'}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Provider Info */}
-            <div className="alert alert-info text-sm mt-4">
-              <div>
-                <p className="font-semibold mb-2">💡 About Model Selection</p>
-                <ul className="text-xs space-y-1 list-disc list-inside">
-                  <li>Select any model from any provider to switch immediately</li>
-                  <li>Models are grouped by provider for easy browsing</li>
-                  <li>For Ollama, add new models with the "Add New Ollama Model" button</li>
-                  <li>Switching models doesn't require backend restart</li>
-                </ul>
-              </div>
-            </div>
+      {/* Account Info */}
+      {config?.configured && (
+        <div className="border border-base-300 rounded-lg p-4 mb-4">
+          <div className="flex justify-between items-center mb-3">
+            <h4 className="font-semibold">Account</h4>
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={fetchAccountInfo}
+              disabled={loadingAccountInfo}
+            >
+              {loadingAccountInfo ? (
+                <span className="loading loading-spinner loading-xs"></span>
+              ) : (
+                'Refresh'
+              )}
+            </button>
           </div>
+
+          {accountInfo === null ? (
+            <p className="text-sm text-base-content/60">Click Refresh to load account info</p>
+          ) : !accountInfo.available ? (
+            <div className="text-sm text-warning">{accountInfo.error}</div>
+          ) : (
+            <div className="flex flex-wrap gap-4 text-sm">
+              {accountInfo.subscription_tier && (
+                <span>
+                  <span className="font-medium">Tier:</span>{' '}
+                  <span className="badge badge-outline badge-sm">{accountInfo.subscription_tier}</span>
+                </span>
+              )}
+              {accountInfo.balance !== undefined && accountInfo.balance !== null && (
+                <span><span className="font-medium">Balance:</span> ${accountInfo.balance.toFixed(2)}</span>
+              )}
+              {accountInfo.usage_this_month !== undefined && accountInfo.usage_this_month !== null && (
+                <span><span className="font-medium">This Month:</span> ${accountInfo.usage_this_month.toFixed(2)}</span>
+              )}
+              {/* Ollama-specific: show system metrics */}
+              {accountInfo.extra?.vram_used_gb !== undefined && (
+                <span><span className="font-medium">VRAM:</span> {accountInfo.extra.vram_used_gb} GB</span>
+              )}
+              {accountInfo.extra?.running_models !== undefined && (
+                <span><span className="font-medium">Models Loaded:</span> {accountInfo.extra.running_models}</span>
+              )}
+              {accountInfo.extra?.available_models !== undefined && (
+                <span><span className="font-medium">Available:</span> {accountInfo.extra.available_models}</span>
+              )}
+              {accountInfo.extra?.organization && (
+                <span><span className="font-medium">Org:</span> {accountInfo.extra.organization}</span>
+              )}
+            </div>
+          )}
+
+          {/* Anthropic Admin Key hint */}
+          {config.config?.provider === 'anthropic' && accountInfo?.error?.includes('Admin API key') && (
+            <p className="text-xs text-base-content/50 mt-2">
+              Set <code className="bg-base-200 px-1 rounded">ANTHROPIC_ADMIN_API_KEY</code> environment variable for billing data.
+            </p>
+          )}
         </div>
       )}
 
       {/* Enrichment Controls */}
       {config.configured && (
-        <div className="card bg-base-200 shadow mb-6">
-          <div className="card-body">
-            <h3 className="card-title text-lg">Enrich Transactions</h3>
+        <div className="border border-base-300 rounded-lg p-4 mb-4">
+          <h4 className="font-semibold mb-3">Enrich Transactions</h4>
 
-            <div className="space-y-4">
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text">Transaction Direction</span>
-                </label>
-                <select
-                  className="select select-bordered"
-                  value={enrichmentDirection}
-                  onChange={(e) => setEnrichmentDirection(e.target.value)}
-                >
-                  <option value="out">Expenses (Out)</option>
-                  <option value="in">Income (In)</option>
-                </select>
-              </div>
-
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text">Transactions to Enrich</span>
-                </label>
-                <select
-                  className="select select-bordered"
-                  value={transactionCountMode}
-                  onChange={(e) => {
-                    setTransactionCountMode(e.target.value as 'all' | 'unenriched' | 'limit');
-                    if (e.target.value !== 'limit') {
-                      setTransactionCount(null);
-                    }
-                  }}
-                >
-                  <option value="unenriched">Only Unenriched Transactions (default)</option>
-                  <option value="all">All Transactions</option>
-                  <option value="limit">First N Transactions</option>
-                </select>
-                <label className="label">
-                  <span className="label-text-alt">
-                    {transactionCountMode === 'unenriched' && 'Skip transactions that already have enrichment data'}
-                    {transactionCountMode === 'all' && 'Enrich all transactions (may re-enrich already-enriched ones)'}
-                    {transactionCountMode === 'limit' && 'Specify a maximum number of transactions to enrich'}
-                  </span>
-                </label>
-              </div>
-
-              {transactionCountMode === 'limit' && (
-                <div className="form-control">
-                  <label className="label">
-                    <span className="label-text">Limit to First</span>
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="number"
-                      className="input input-bordered flex-1"
-                      placeholder="e.g., 50"
-                      value={transactionCount ?? ''}
-                      onChange={(e) => setTransactionCount(e.target.value ? parseInt(e.target.value) : null)}
-                      min="1"
-                      max="10000"
-                    />
-                    <span className="input input-bordered input-disabled flex-1 flex items-center">
-                      transactions
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              <div className="form-control">
-                <label className="label cursor-pointer">
-                  <span className="label-text">Force Refresh</span>
-                  <input
-                    type="checkbox"
-                    className="checkbox"
-                    checked={forceRefresh}
-                    onChange={(e) => setForceRefresh(e.target.checked)}
-                  />
-                </label>
-                <label className="label">
-                  <span className="label-text-alt">
-                    Bypass cache and re-query LLM for all transactions
-                  </span>
-                </label>
-              </div>
-
-              {/* Batch size info for Ollama */}
-              {config.config?.provider === 'ollama' && (
-                <div className="alert alert-info">
-                  <div>
-                    <p className="text-sm mb-2">
-                      <strong>💡 Performance Tip:</strong> Adjust batch size in <code className="bg-base-300 px-1 rounded text-xs">LLM_BATCH_SIZE</code> to find optimal performance:
-                    </p>
-                    <ul className="text-xs space-y-1 list-disc list-inside">
-                      <li>Small batches (1-3): Slower but use less memory, good for testing</li>
-                      <li>Medium batches (5-10): Balanced performance and memory usage</li>
-                      <li>Large batches (15+): Faster but requires more memory</li>
-                    </ul>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-2 pt-4">
-              <button
-                className="btn btn-primary flex-1"
-                onClick={handleEnrichAllTransactions}
-                disabled={enriching || !config.configured}
+          {/* Controls Row */}
+          <div className="flex items-center gap-6 mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm">Mode:</span>
+              <select
+                className="select select-sm select-bordered"
+                value={enrichmentMode}
+                onChange={(e) => setEnrichmentMode(e.target.value as 'required' | 'unenriched' | 'all')}
               >
-                {enriching ? (
-                  <>
-                    <span className="loading loading-spinner loading-sm"></span>
-                    Enriching...
-                  </>
-                ) : (
-                  '✨ Enrich All Transactions'
-                )}
-              </button>
-
-              {failedEnrichments.length > 0 && (
-                <button
-                  className="btn btn-warning"
-                  onClick={handleRetryFailed}
-                  disabled={enriching}
-                >
-                  🔄 Retry {failedEnrichments.length}
-                </button>
-              )}
+                <option value="required">All Required</option>
+                <option value="unenriched">All Unenriched</option>
+                <option value="all">All Transactions</option>
+              </select>
             </div>
 
-            {/* Live Progress Display */}
-            {progress && progress.type !== 'complete' && (
-              <div className="alert alert-info mt-4">
-                <div className="w-full">
-                  <h4 className="font-semibold mb-2">
-                    {progress.type === 'start' ? '📊 Starting enrichment...' : '⚙️ Enriching transactions...'}
-                  </h4>
+            <div className="flex items-center gap-2">
+              <span className="text-sm">Limit:</span>
+              <input
+                type="number"
+                className="input input-sm input-bordered w-20"
+                placeholder="—"
+                value={transactionLimit ?? ''}
+                onChange={(e) => setTransactionLimit(e.target.value ? parseInt(e.target.value) : null)}
+                min="1"
+                max="10000"
+              />
+            </div>
 
-                  {progress.processed && progress.total && (
-                    <>
-                      <div className="mb-2">
-                        <div className="flex justify-between text-sm mb-1">
-                          <span>Progress: {progress.processed}/{progress.total} transactions</span>
-                          <span className="font-mono">{progress.percentage}%</span>
-                        </div>
-                        <progress
-                          className="progress progress-primary w-full"
-                          value={progress.processed}
-                          max={progress.total}
-                        ></progress>
-                      </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                className="checkbox checkbox-sm"
+                checked={forceRefresh}
+                onChange={(e) => setForceRefresh(e.target.checked)}
+              />
+              <span className="text-sm">Force Refresh</span>
+            </label>
+          </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-                        <div className="bg-base-300 p-2 rounded">
-                          <div className="text-xs text-base-content/70">Tokens Used</div>
-                          <div className="font-mono font-semibold">{progress.tokens_used?.toLocaleString() || 0}</div>
-                        </div>
-                        <div className="bg-base-300 p-2 rounded">
-                          <div className="text-xs text-base-content/70">Cost</div>
-                          <div className="font-mono font-semibold">${progress.cost?.toFixed(4) || '0.0000'}</div>
-                        </div>
-                        <div className="bg-base-300 p-2 rounded">
-                          <div className="text-xs text-base-content/70">Successful</div>
-                          <div className="font-mono font-semibold text-success">{progress.successful || 0}</div>
-                        </div>
-                        <div className="bg-base-300 p-2 rounded">
-                          <div className="text-xs text-base-content/70">Failed</div>
-                          <div className="font-mono font-semibold text-error">{progress.failed || 0}</div>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
+          {/* Buttons Row */}
+          <div className="flex gap-2">
+            <button
+              className="btn btn-sm btn-primary px-4"
+              onClick={handleEnrichAllTransactions}
+              disabled={enriching || !config.configured}
+            >
+              {enriching ? (
+                <>
+                  <span className="loading loading-spinner loading-sm"></span>
+                  Enriching...
+                </>
+              ) : (
+                'Enrich Transactions'
+              )}
+            </button>
 
-            {lastStats && (
-              <div className="alert alert-info mt-4">
-                <div>
-                  <h4 className="font-semibold mb-2">Last Enrichment Results:</h4>
-                  <ul className="text-sm space-y-1">
-                    <li>✅ Successful: {lastStats.successful_enrichments}</li>
-                    <li>❌ Failed: {lastStats.failed_enrichments}</li>
-                    <li>💾 Cached: {lastStats.cached_hits}</li>
-                    <li>📡 API Calls: {lastStats.api_calls_made}</li>
-                    <li>🔤 Total Tokens: {lastStats.total_tokens_used.toLocaleString()}</li>
-                    <li>💰 Cost: ${lastStats.total_cost.toFixed(4)}</li>
-                  </ul>
-                </div>
-              </div>
+            {failedEnrichments.length > 0 && (
+              <button
+                className="btn btn-sm btn-warning"
+                onClick={handleRetryFailed}
+                disabled={enriching}
+              >
+                Retry {failedEnrichments.length}
+              </button>
             )}
           </div>
+
+          {/* Live Progress Display */}
+          {progress && progress.type !== 'complete' && (
+            <div className="alert alert-info mt-3">
+              <div className="w-full">
+                <div className="flex justify-between text-sm mb-2">
+                  <span>{progress.processed}/{progress.total}</span>
+                  <span className="font-mono">{progress.percentage}%</span>
+                </div>
+                <progress
+                  className="progress progress-primary w-full mb-2"
+                  value={progress.processed}
+                  max={progress.total}
+                ></progress>
+                <div className="flex items-center gap-3 text-xs">
+                  <span>Tokens: {progress.tokens_used?.toLocaleString() || 0}</span>
+                  <span>Cost: ${progress.cost?.toFixed(4) || '0.0000'}</span>
+                  <span className="text-success">OK: {progress.successful || 0}</span>
+                  <span className="text-error">Err: {progress.failed || 0}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {lastStats && (
+            <div className="text-xs text-base-content/70 mt-3 flex items-center gap-3">
+              <span>Last: OK {lastStats.successful_enrichments}</span>
+              <span>Failed {lastStats.failed_enrichments}</span>
+              <span>Tokens {lastStats.total_tokens_used.toLocaleString()}</span>
+              <span>Cost ${lastStats.total_cost.toFixed(4)}</span>
+            </div>
+          )}
         </div>
       )}
 
       {/* Cache Statistics */}
       {cacheStats && (
-        <div className="card bg-base-200 shadow mb-6">
-          <div className="card-body">
-            <h3 className="card-title text-lg">Cache Statistics</h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-              <div className="bg-base-100 p-4 rounded">
-                <div className="text-sm text-base-content/70">Cached Results</div>
-                <div className="text-2xl font-bold">{cacheStats.total_cached}</div>
-              </div>
-              <div className="bg-base-100 p-4 rounded">
-                <div className="text-sm text-base-content/70">Cache Size</div>
-                <div className="text-lg font-semibold">
-                  {(cacheStats.cache_size_bytes / 1024).toFixed(2)} KB
-                </div>
-              </div>
-              <div className="bg-base-100 p-4 rounded">
-                <div className="text-sm text-base-content/70">Pending Retries</div>
-                <div className="text-2xl font-bold text-warning">
-                  {cacheStats.pending_retries}
-                </div>
-              </div>
-            </div>
-
-            {cacheStats.providers && Object.keys(cacheStats.providers).length > 0 && (
-              <div>
-                <h4 className="font-semibold mb-2">By Provider:</h4>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(cacheStats.providers).map(([provider, count]) => (
-                    <span key={provider} className="badge badge-outline">
-                      {provider}: {count}
-                    </span>
-                  ))}
-                </div>
-              </div>
+        <div className="border border-base-300 rounded-lg p-4 mb-4">
+          <h4 className="font-semibold mb-3">Cache</h4>
+          <div className="flex items-center gap-4 text-sm">
+            <span><span className="font-medium">Cached:</span> {cacheStats.total_cached}</span>
+            <span><span className="font-medium">Size:</span> {(cacheStats.cache_size_bytes / 1024).toFixed(2)} KB</span>
+            {cacheStats.pending_retries > 0 && (
+              <span className="text-warning"><span className="font-medium">Pending:</span> {cacheStats.pending_retries}</span>
             )}
           </div>
+          {cacheStats.providers && Object.keys(cacheStats.providers).length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {Object.entries(cacheStats.providers).map(([provider, count]) => (
+                <span key={provider} className="badge badge-sm badge-outline">
+                  {provider}: {count}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* Failed Enrichments */}
       {failedEnrichments.length > 0 && (
-        <div className="card bg-base-200 shadow mb-6">
-          <div className="card-body">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="card-title text-lg">Failed Enrichments ({failedEnrichments.length})</h3>
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => setShowFailedDetails(!showFailedDetails)}
-              >
-                {showFailedDetails ? '▼' : '▶'} Details
-              </button>
-            </div>
+        <div className="border border-base-300 rounded-lg p-4 mb-4">
+          <div className="flex justify-between items-center mb-3">
+            <h4 className="font-semibold">Failed ({failedEnrichments.length})</h4>
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={() => setShowFailedDetails(!showFailedDetails)}
+            >
+              {showFailedDetails ? '▼' : '▶'}
+            </button>
+          </div>
 
-            {showFailedDetails && (
-              <div className="overflow-x-auto">
-                <table className="table table-sm">
-                  <thead>
-                    <tr>
-                      <th>Description</th>
-                      <th>Error Type</th>
-                      <th>Retries</th>
-                      <th>Provider</th>
+          {showFailedDetails && (
+            <div className="overflow-x-auto">
+              <table className="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Description</th>
+                    <th>Error</th>
+                    <th>Retries</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {failedEnrichments.map((failed) => (
+                    <tr key={failed.transaction_id} className="hover">
+                      <td className="max-w-xs truncate">{failed.description}</td>
+                      <td>
+                        <span className="badge badge-error badge-sm">
+                          {failed.error_type}
+                        </span>
+                      </td>
+                      <td>{failed.retry_count}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {failedEnrichments.map((failed) => (
-                      <tr key={failed.transaction_id} className="hover">
-                        <td className="max-w-xs truncate">{failed.description}</td>
-                        <td>
-                          <span className="badge badge-error badge-sm">
-                            {failed.error_type}
-                          </span>
-                        </td>
-                        <td>{failed.retry_count}</td>
-                        <td className="text-sm text-base-content/70">{failed.provider}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Clear Enrichment Data */}
-      {config.configured && (
-        <div className="card bg-base-200 shadow">
-          <div className="card-body">
-            <h3 className="card-title text-lg">Enrichment Management</h3>
-            <p className="text-sm text-base-content/70 mb-4">
-              Manage enrichment data. This is useful for development and testing purposes.
-            </p>
-
-            <div className="flex gap-2">
-              <button
-                className="btn btn-warning"
-                onClick={() => setShowClearConfirm(true)}
-                disabled={clearing}
-              >
-                {clearing ? (
-                  <>
-                    <span className="loading loading-spinner loading-sm"></span>
-                    Clearing...
-                  </>
-                ) : (
-                  '🗑️ Clear All Enrichment Data'
-                )}
-              </button>
+                  ))}
+                </tbody>
+              </table>
             </div>
-
-            {/* Clear Confirmation Modal */}
-            {showClearConfirm && (
-              <div className="modal modal-open">
-                <div className="modal-box">
-                  <h3 className="font-bold text-lg">Clear All Enrichment Data?</h3>
-                  <p className="py-4">
-                    This will permanently delete all enrichment data (categories, merchant names, confidence scores, etc.) for all transactions.
-                  </p>
-                  <p className="text-sm text-warning font-semibold mb-4">
-                    This action cannot be undone. Only proceed if you're certain you want to re-enrich all transactions from scratch.
-                  </p>
-                  <div className="modal-action">
-                    <button
-                      className="btn btn-ghost"
-                      onClick={() => setShowClearConfirm(false)}
-                      disabled={clearing}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="btn btn-error"
-                      onClick={handleClearEnrichment}
-                      disabled={clearing}
-                    >
-                      {clearing ? (
-                        <>
-                          <span className="loading loading-spinner loading-sm"></span>
-                          Clearing...
-                        </>
-                      ) : (
-                        'Yes, Clear All Data'
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          )}
         </div>
       )}
 
-      {/* Add Ollama Model Modal */}
-      <AddOllamaModel
-        isOpen={showAddModel}
-        onClose={() => setShowAddModel(false)}
-        onModelAdded={handleModelAdded}
-      />
     </div>
   );
 }

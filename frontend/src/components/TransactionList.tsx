@@ -1,41 +1,51 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { TableVirtuoso } from 'react-virtuoso';
 import axios from 'axios';
 import type { Transaction, Category } from '../types';
-import { getCategoryColor } from '../utils/categoryColors';
 import CategoryUpdateModal from './CategoryUpdateModal';
-import {
-  loadFilters,
-  saveFilters,
-  getFilteredTransactions,
-  getFilteredCountForCategory,
-  getUniqueCategories,
-  getSubcategoriesForCategory,
-  type TransactionFilters
-} from '../utils/filterUtils';
+import EnrichmentSourceDetailModal from './EnrichmentSourceDetailModal';
+import { useFilters } from '../contexts/FilterContext';
+import TransactionRow, { ColumnVisibility, ColumnOrder, ColumnKey, COLUMN_CONFIG } from './TransactionRow';
+
+// Virtual row types for flattened data structure
+type VirtualRow =
+  | { type: 'header'; dateKey: string; count: number; formattedDate: string }
+  | { type: 'transaction'; dateKey: string; txn: Transaction };
 
 const API_URL = 'http://localhost:5000/api';
 
-interface ColumnVisibility {
-  date: boolean;
-  description: boolean;
-  lookup_details: boolean;
-  amount: boolean;
-  category: boolean;
-  merchant_clean_name: boolean;
-  subcategory: boolean;
-  merchant_type: boolean;
-  essential_discretionary: boolean;
-  payment_method: boolean;
-  payment_method_subtype: boolean;
-  purchase_date: boolean;
-  confidence_score: boolean;
-  enrichment_source: boolean;
-}
+// Format date for group header: "Mon 12th November, 2025"
+const formatDateHeader = (dateStr: string): string => {
+  const date = new Date(dateStr);
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const months = ['January', 'February', 'March', 'April', 'May', 'June',
+                  'July', 'August', 'September', 'October', 'November', 'December'];
+
+  const dayName = days[date.getDay()];
+  const day = date.getDate();
+  const month = months[date.getMonth()];
+  const year = date.getFullYear();
+
+  // Add ordinal suffix (1st, 2nd, 3rd, etc.)
+  const ordinal = (n: number) => {
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  };
+
+  return `${dayName} ${ordinal(day)} ${month}, ${year}`;
+};
+
+// Get date key for grouping (YYYY-MM-DD)
+const getDateKey = (dateStr: string): string => {
+  return new Date(dateStr).toISOString().split('T')[0];
+};
 
 const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
-  date: true,
+  date: false,  // Hidden by default - TrueLayer only provides dates, not times
   description: true,
   lookup_details: true,
+  pre_enrichment_status: false,
   amount: true,
   category: true,
   merchant_clean_name: true,
@@ -49,6 +59,36 @@ const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
   enrichment_source: true
 };
 
+// Default column widths (numeric, in pixels) - user can resize
+const DEFAULT_COLUMN_WIDTHS: Record<keyof ColumnVisibility, number> = {
+  date: 70,
+  description: 200,
+  lookup_details: 160,
+  pre_enrichment_status: 100,
+  amount: 90,
+  category: 120,
+  merchant_clean_name: 140,
+  subcategory: 100,
+  merchant_type: 100,
+  essential_discretionary: 140,
+  payment_method: 110,
+  payment_method_subtype: 110,
+  purchase_date: 100,
+  confidence_score: 90,
+  enrichment_source: 110,
+};
+
+const MIN_COLUMN_WIDTH = 40; // Minimum width to prevent columns from disappearing
+
+const loadColumnWidths = (): Record<keyof ColumnVisibility, number> => {
+  const saved = localStorage.getItem('transactionColumnWidths');
+  return saved ? JSON.parse(saved) : DEFAULT_COLUMN_WIDTHS;
+};
+
+const saveColumnWidths = (widths: Record<keyof ColumnVisibility, number>) => {
+  localStorage.setItem('transactionColumnWidths', JSON.stringify(widths));
+};
+
 const loadColumnVisibility = (): ColumnVisibility => {
   const saved = localStorage.getItem('transactionColumnVisibility');
   return saved ? JSON.parse(saved) : DEFAULT_COLUMN_VISIBILITY;
@@ -58,43 +98,297 @@ const saveColumnVisibility = (visibility: ColumnVisibility) => {
   localStorage.setItem('transactionColumnVisibility', JSON.stringify(visibility));
 };
 
+// Default column order - determines display sequence
+const DEFAULT_COLUMN_ORDER: ColumnOrder = [
+  'date', 'description', 'lookup_details', 'pre_enrichment_status', 'amount',
+  'category', 'subcategory', 'merchant_clean_name', 'merchant_type',
+  'essential_discretionary', 'payment_method', 'payment_method_subtype',
+  'purchase_date', 'confidence_score', 'enrichment_source',
+];
+
+const loadColumnOrder = (): ColumnOrder => {
+  const saved = localStorage.getItem('transactionColumnOrder');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      // Validate: ensure all keys present and correct count
+      if (parsed.length === DEFAULT_COLUMN_ORDER.length) {
+        const defaultSet = new Set(DEFAULT_COLUMN_ORDER);
+        if (parsed.every((key: string) => defaultSet.has(key as ColumnKey))) {
+          return parsed;
+        }
+      }
+    } catch {}
+  }
+  return DEFAULT_COLUMN_ORDER;
+};
+
+const saveColumnOrder = (order: ColumnOrder) => {
+  localStorage.setItem('transactionColumnOrder', JSON.stringify(order));
+};
+
+// Resize handle component for column headers
+interface ResizeHandleProps {
+  onResizeStart: (actualWidth: number) => void;
+  onResize: (delta: number) => void;
+  onResizeEnd: () => void;
+}
+
+const ResizeHandle = ({ onResizeStart, onResize, onResizeEnd }: ResizeHandleProps) => {
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation(); // Prevent header click events
+    const startX = e.pageX;
+
+    // Measure actual rendered width of the parent <th> to prevent width jumps
+    const th = (e.target as HTMLElement).closest('th');
+    const actualWidth = th?.getBoundingClientRect().width ?? 0;
+    onResizeStart(actualWidth);
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.pageX - startX;
+      onResize(delta);
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      onResizeEnd();
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  return (
+    <div
+      onMouseDown={handleMouseDown}
+      className="resize-handle"
+      title="Drag to resize column"
+    />
+  );
+};
+
 export default function TransactionList() {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const { filteredTransactions, transactions, loading, error, refreshTransactions, filters } = useFilters();
   const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  // Enrichment source detail modal state
+  const [viewingEnrichmentSource, setViewingEnrichmentSource] = useState<{
+    sourceId: number;
+    transactionId: number;
+  } | null>(null);
   const [columnVisibility, setColumnVisibility] = useState<ColumnVisibility>(loadColumnVisibility());
+  // Resizable column widths - stored in localStorage
+  const [columnWidths, setColumnWidths] = useState<Record<keyof ColumnVisibility, number>>(loadColumnWidths);
+  const [resizingColumn, setResizingColumn] = useState<keyof ColumnVisibility | null>(null);
+  // Use ref instead of state to avoid stale closure issues during resize
+  const resizeStartWidthRef = useRef<number>(0);
+  // Column order - stored in localStorage
+  const [columnOrder, setColumnOrder] = useState<ColumnOrder>(loadColumnOrder);
+  // Drag-and-drop state for column reordering
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  // State-driven collapse for virtualization (collapsed groups are filtered out of data)
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [togglingIds, setTogglingIds] = useState<Set<number>>(new Set());
+  const [localRequiredState, setLocalRequiredState] = useState<Map<number, boolean>>(new Map());
+  // Column drawer state
+  const [isColumnDrawerOpen, setIsColumnDrawerOpen] = useState(false);
 
-  // Load filters from localStorage
-  const initialFilters = loadFilters();
-  const [filters, setFilters] = useState<TransactionFilters>(initialFilters);
+  // Toggle enrichment_required for a transaction - memoized with useCallback
+  const toggleEnrichmentRequired = useCallback(async (txnId: number, currentRequired: boolean) => {
+    setTogglingIds(prev => new Set(prev).add(txnId));
+    // Optimistic update - toggle the state immediately
+    setLocalRequiredState(prev => new Map(prev).set(txnId, !currentRequired));
 
-  useEffect(() => {
-    fetchTransactions();
-    fetchCategories();
-
-    // Listen for import events from FileList component
-    const handleTransactionsUpdated = () => {
-      fetchTransactions();
-    };
-
-    window.addEventListener('transactions-updated', handleTransactionsUpdated);
-
-    return () => {
-      window.removeEventListener('transactions-updated', handleTransactionsUpdated);
-    };
+    try {
+      await axios.post(`${API_URL}/transactions/${txnId}/toggle-required`);
+      // Don't call refreshTransactions() - optimistic update is sufficient
+      // This prevents page jump and scroll position loss
+    } catch (err) {
+      console.error('Failed to toggle enrichment required:', err);
+      // Revert optimistic update on error
+      setLocalRequiredState(prev => {
+        const next = new Map(prev);
+        next.delete(txnId);
+        return next;
+      });
+    } finally {
+      setTogglingIds(prev => {
+        const next = new Set(prev);
+        next.delete(txnId);
+        return next;
+      });
+    }
   }, []);
 
-  // Save filters to localStorage whenever they change
+  // Open enrichment source detail modal
+  const handleViewEnrichmentSource = useCallback((sourceId: number, transactionId: number) => {
+    setViewingEnrichmentSource({ sourceId, transactionId });
+  }, []);
+
+  // Get effective enrichment_required value (local state takes precedence for optimistic updates)
+  const getEffectiveRequired = (txn: Transaction): boolean => {
+    if (localRequiredState.has(txn.id)) {
+      return localRequiredState.get(txn.id)!;
+    }
+    return txn.enrichment_required ?? true;
+  };
+
+  // Group transactions by date
+  const groupedTransactions = useMemo(() => {
+    const groups: { [key: string]: Transaction[] } = {};
+
+    filteredTransactions.forEach(txn => {
+      const dateKey = getDateKey(txn.date);
+      if (!groups[dateKey]) {
+        groups[dateKey] = [];
+      }
+      groups[dateKey].push(txn);
+    });
+
+    // Return as array of [dateKey, transactions] sorted by date desc
+    return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [filteredTransactions]);
+
+  // Flatten grouped data for virtualization (headers + transactions in one array)
+  // Collapsed groups only show header, expanded groups show header + all transactions
+  const flattenedRows = useMemo(() => {
+    const rows: VirtualRow[] = [];
+    for (const [dateKey, txns] of groupedTransactions) {
+      // Always add header row
+      rows.push({
+        type: 'header',
+        dateKey,
+        count: txns.length,
+        formattedDate: formatDateHeader(dateKey),
+      });
+      // Only add transaction rows if group is not collapsed
+      if (!collapsedGroups.has(dateKey)) {
+        for (const txn of txns) {
+          rows.push({ type: 'transaction', dateKey, txn });
+        }
+      }
+    }
+    return rows;
+  }, [groupedTransactions, collapsedGroups]);
+
+  // Count visible columns for colSpan
+  const visibleColumnCount = useMemo(() => {
+    return Object.values(columnVisibility).filter(Boolean).length;
+  }, [columnVisibility]);
+
+  // State-driven toggle for virtualization - collapsed groups are filtered from flattenedRows
+  const toggleGroup = useCallback((dateKey: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(dateKey)) {
+        next.delete(dateKey);
+      } else {
+        next.add(dateKey);
+      }
+      return next;
+    });
+  }, []);
+
+  // Sync all column widths to match actual rendered widths (safety net for table-layout redistribution)
+  const syncAllColumnWidths = useCallback(() => {
+    const headerRow = document.querySelector('thead tr');
+    if (!headerRow) return;
+
+    // Get all th elements except the spacer (last one)
+    const ths = Array.from(headerRow.querySelectorAll('th')).slice(0, -1);
+    const actualWidths: Record<keyof ColumnVisibility, number> = { ...columnWidths };
+    let thIndex = 0;
+
+    columnOrder.forEach(key => {
+      if (columnVisibility[key] && ths[thIndex]) {
+        actualWidths[key] = ths[thIndex].getBoundingClientRect().width;
+        thIndex++;
+      }
+    });
+
+    setColumnWidths(actualWidths);
+  }, [columnOrder, columnVisibility, columnWidths]);
+
+  // Column resize handlers
+  const startResize = useCallback((column: keyof ColumnVisibility, actualWidth: number) => {
+    // Sync all columns first to prevent cascade effects from table-layout redistribution
+    syncAllColumnWidths();
+    setResizingColumn(column);
+    // Use ref for immediate availability - avoids stale closure in handleResize
+    resizeStartWidthRef.current = actualWidth;
+  }, [syncAllColumnWidths]);
+
+  const handleResize = useCallback((column: keyof ColumnVisibility, delta: number) => {
+    if (resizingColumn !== column && resizingColumn !== null) return;
+
+    setColumnWidths(prev => ({
+      ...prev,
+      // Read from ref for always-current value (avoids stale closure)
+      [column]: Math.max(MIN_COLUMN_WIDTH, resizeStartWidthRef.current + delta),
+    }));
+  }, [resizingColumn]);
+
+  const endResize = useCallback(() => {
+    setResizingColumn(null);
+    resizeStartWidthRef.current = 0;
+  }, []);
+
+  // Column reordering drag handlers
+  const handleDragStart = useCallback((index: number) => {
+    setDraggedIndex(index);
+  }, []);
+
+  const handleDragOver = useCallback((index: number) => {
+    if (draggedIndex !== null && draggedIndex !== index) {
+      setDragOverIndex(index);
+    }
+  }, [draggedIndex]);
+
+  const handleDragEnd = useCallback(() => {
+    if (draggedIndex !== null && dragOverIndex !== null && draggedIndex !== dragOverIndex) {
+      setColumnOrder(prev => {
+        const newOrder = [...prev];
+        const [removed] = newOrder.splice(draggedIndex, 1);
+        newOrder.splice(dragOverIndex, 0, removed);
+        return newOrder;
+      });
+    }
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  }, [draggedIndex, dragOverIndex]);
+
   useEffect(() => {
-    saveFilters(filters);
-  }, [filters]);
+    fetchCategories();
+  }, []);
+
+  // Save column widths to localStorage when they change
+  useEffect(() => {
+    saveColumnWidths(columnWidths);
+  }, [columnWidths]);
 
   // Save column visibility to localStorage whenever it changes
   useEffect(() => {
     saveColumnVisibility(columnVisibility);
   }, [columnVisibility]);
+
+  // Save column order to localStorage whenever it changes
+  useEffect(() => {
+    saveColumnOrder(columnOrder);
+  }, [columnOrder]);
+
+  // Escape key closes the column drawer
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isColumnDrawerOpen) {
+        setIsColumnDrawerOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isColumnDrawerOpen]);
 
   const toggleColumnVisibility = (column: keyof ColumnVisibility) => {
     setColumnVisibility(prev => ({
@@ -103,22 +397,10 @@ export default function TransactionList() {
     }));
   };
 
-  const resetColumnVisibility = () => {
+  const resetColumnSettings = () => {
     setColumnVisibility(DEFAULT_COLUMN_VISIBILITY);
-  };
-
-  const fetchTransactions = async () => {
-    try {
-      setLoading(true);
-      const response = await axios.get<Transaction[]>(`${API_URL}/transactions`);
-      setTransactions(response.data);
-      setError(null);
-    } catch (err) {
-      setError('Failed to fetch transactions');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+    setColumnOrder(DEFAULT_COLUMN_ORDER);
+    setColumnWidths(DEFAULT_COLUMN_WIDTHS);
   };
 
   const fetchCategories = async () => {
@@ -132,29 +414,7 @@ export default function TransactionList() {
 
   const handleModalSuccess = () => {
     // Refresh transactions after successful update
-    fetchTransactions();
-  };
-
-  // Apply all filters
-  const filteredTransactions = getFilteredTransactions(transactions, filters);
-
-  const updateFilter = (key: keyof TransactionFilters, value: string) => {
-    const newFilters = { ...filters, [key]: value };
-    // Clear subcategory when category changes
-    if (key === 'selectedCategory') {
-      newFilters.selectedSubcategory = '';
-    }
-    setFilters(newFilters);
-  };
-
-  const clearAllFilters = () => {
-    setFilters({
-      selectedCategory: 'All',
-      selectedSubcategory: '',
-      dateFrom: '',
-      dateTo: '',
-      searchKeyword: ''
-    });
+    refreshTransactions();
   };
 
   const handleClassificationChange = async (transactionId: number, classification: 'essential' | 'discretionary' | null) => {
@@ -163,7 +423,7 @@ export default function TransactionList() {
         classification
       });
       // Refresh transactions to show updated classification
-      fetchTransactions();
+      refreshTransactions();
     } catch (err) {
       console.error('Failed to update classification:', err);
       alert('Failed to update classification');
@@ -195,339 +455,217 @@ export default function TransactionList() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Search Filter */}
-      <div className="flex gap-2">
-        <div className="flex-1">
-          <input
-            type="text"
-            placeholder="🔍 Search transactions (description, merchant, amount)..."
-            className="input input-bordered w-full"
-            value={filters.searchKeyword}
-            onChange={(e) => updateFilter('searchKeyword', e.target.value)}
-          />
-        </div>
-        {filters.searchKeyword && (
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => updateFilter('searchKeyword', '')}
-          >
-            Clear Search
-          </button>
-        )}
-      </div>
+    <div className="relative">
+      {/* Gear tab - positioned outside container at right edge */}
+      <button
+        onClick={() => setIsColumnDrawerOpen(!isColumnDrawerOpen)}
+        className={`
+          absolute left-full top-0 z-30
+          w-8 h-8 flex items-center justify-center
+          bg-base-300 hover:bg-base-200
+          rounded-r-lg
+          border border-l-0 border-base-content/20
+          transition-all duration-300
+          ${isColumnDrawerOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+        `}
+        title="Column settings"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      </button>
 
-      {/* Date Range Filter */}
-      <div className="flex flex-wrap gap-2 items-center">
-        <span className="text-sm font-semibold">Date Range:</span>
-        <input
-          type="date"
-          className="input input-bordered input-sm"
-          value={filters.dateFrom}
-          onChange={(e) => updateFilter('dateFrom', e.target.value)}
-          placeholder="From"
-        />
-        <span className="text-sm">to</span>
-        <input
-          type="date"
-          className="input input-bordered input-sm"
-          value={filters.dateTo}
-          onChange={(e) => updateFilter('dateTo', e.target.value)}
-          placeholder="To"
-        />
-        {(filters.dateFrom || filters.dateTo) && (
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => {
-              updateFilter('dateFrom', '');
-              updateFilter('dateTo', '');
-            }}
-          >
-            Clear Dates
-          </button>
-        )}
-        {(filters.selectedCategory !== 'All' || filters.dateFrom || filters.dateTo || filters.searchKeyword) && (
-          <button
-            className="btn btn-error btn-sm ml-auto"
-            onClick={clearAllFilters}
-          >
-            Clear All Filters
-          </button>
-        )}
-      </div>
-
-      {/* Category Filter */}
-      <div className="flex flex-wrap gap-2 items-center">
-        <span
-          onClick={() => updateFilter('selectedCategory', 'All')}
-          className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${filters.selectedCategory === 'All'
-              ? 'badge-primary scale-110'
-              : 'badge-ghost hover:scale-105'
-            }`}
-        >
-          All ({getFilteredCountForCategory(transactions, filters, 'All')})
-        </span>
-        {getUniqueCategories(transactions).map(cat => {
-          const count = getFilteredCountForCategory(transactions, filters, cat);
-          if (count === 0) return null;
-          return (
-            <span
-              key={cat}
-              onClick={() => updateFilter('selectedCategory', cat)}
-              className={`badge badge-lg cursor-pointer px-3 py-2 transition-all ${getCategoryColor(cat)} ${filters.selectedCategory === cat ? 'scale-110' : 'hover:scale-105'
-                }`}
-            >
-              {cat} ({count})
-            </span>
-          );
-        })}
-      </div>
-
-      {/* Subcategory Filter (shown when a category is selected) */}
-      {filters.selectedCategory !== 'All' && (
-        <div className="flex flex-wrap gap-2 ml-4 items-center">
-          <span className="text-sm font-semibold">Subcategories:</span>
-          <span
-            onClick={() => updateFilter('selectedSubcategory', '')}
-            className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${!filters.selectedSubcategory
-                ? 'badge-primary scale-105'
-                : 'badge-ghost hover:scale-105'
-              }`}
-          >
-            All
-          </span>
-          {getSubcategoriesForCategory(transactions, filters.selectedCategory).map(subcat => {
-            const subcount = transactions.filter(
-              txn =>
-                txn.category === filters.selectedCategory &&
-                txn.subcategory === subcat
-            ).length;
-            if (subcount === 0) return null;
-            return (
-              <span
-                key={subcat}
-                onClick={() => updateFilter('selectedSubcategory', subcat)}
-                className={`badge badge-md cursor-pointer px-2 py-1 transition-all ${getCategoryColor(filters.selectedCategory)
-                  } ${filters.selectedSubcategory === subcat ? 'scale-105' : 'hover:scale-105'}`}
+      {/* Inner container with overflow-hidden for table and drawer */}
+      <div className="relative overflow-hidden">
+        {/* Virtualized Transactions Table */}
+        <div className="overflow-x-auto">
+        <TableVirtuoso
+          style={{ height: 'calc(100vh - 300px)', minHeight: '400px' }}
+          data={flattenedRows}
+          components={{
+            Table: ({ style, ...props }) => (
+              <table
+                {...props}
+                className="table table-zebra table-fixed"
+                style={{ ...style, width: '100%', tableLayout: 'fixed' }}
               >
-                {subcat} ({subcount})
-              </span>
+                <colgroup>
+                  {columnOrder.map(key =>
+                    columnVisibility[key] && <col key={key} style={{ width: columnWidths[key] }} />
+                  )}
+                  {/* Spacer column absorbs extra table width */}
+                  <col key="spacer" style={{ width: 'auto' }} />
+                </colgroup>
+                {props.children}
+              </table>
+            ),
+            TableHead: React.forwardRef((props, ref) => (
+              <thead {...props} ref={ref} className="sticky top-0 z-10 bg-base-100">
+                <tr>
+                  {columnOrder.map(key => {
+                    if (!columnVisibility[key]) return null;
+                    return (
+                      <th key={key} className="relative">
+                        {COLUMN_CONFIG[key].header}
+                        <ResizeHandle
+                          onResizeStart={(actualWidth) => startResize(key, actualWidth)}
+                          onResize={(delta) => handleResize(key, delta)}
+                          onResizeEnd={endResize}
+                        />
+                      </th>
+                    );
+                  })}
+                  {/* Spacer header cell */}
+                  <th key="spacer" className="w-0 p-0" />
+                </tr>
+              </thead>
+            )),
+            TableBody: React.forwardRef((props, ref) => <tbody {...props} ref={ref} />),
+            TableRow: ({ item, ...props }) => {
+              // Add data-transaction-row for CSS animation on transaction rows only
+              const isTransaction = item.type === 'transaction';
+              return <tr {...props} {...(isTransaction && { 'data-transaction-row': true })} />;
+            },
+          }}
+          fixedHeaderContent={() => null}
+          itemContent={(index, row) => {
+            if (row.type === 'header') {
+              // Date header row
+              const isCollapsed = collapsedGroups.has(row.dateKey);
+              return (
+                <td
+                  colSpan={visibleColumnCount + 1}  /* +1 for spacer column */
+                  className="bg-base-300 py-1 px-2 cursor-pointer hover:bg-base-200/70 transition-colors"
+                  onClick={() => toggleGroup(row.dateKey)}
+                >
+                  <div className="flex items-center gap-2">
+                    <svg
+                      className={`w-4 h-4 chevron-icon ${isCollapsed ? '' : 'rotate-90'}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                    <span className="text-xs text-base-content/60 font-medium">
+                      {row.formattedDate}
+                    </span>
+                    <span className="text-xs text-base-content/40">
+                      ({row.count} transaction{row.count !== 1 ? 's' : ''})
+                    </span>
+                  </div>
+                </td>
+              );
+            }
+            // Transaction row - render cells inline (Virtuoso wraps in <tr>)
+            const txn = row.txn;
+            return (
+              <TransactionRow
+                txn={txn}
+                columnVisibility={columnVisibility}
+                columnOrder={columnOrder}
+                dataGroup={row.dateKey}
+                isToggling={togglingIds.has(txn.id)}
+                effectiveRequired={getEffectiveRequired(txn)}
+                onToggleEnrichment={toggleEnrichmentRequired}
+                onViewEnrichmentSource={handleViewEnrichmentSource}
+              />
             );
-          })}
-        </div>
+          }}
+        />
+      </div>
+
+      {/* Dark Backdrop (no blur) */}
+      {isColumnDrawerOpen && (
+        <div
+          className="absolute inset-0 bg-black/30 z-10 transition-all duration-300 rounded-lg"
+          onClick={() => setIsColumnDrawerOpen(false)}
+        />
       )}
 
-      {/* Column Visibility Toggle */}
-      <div className="flex flex-wrap gap-2">
-        <div className="ml-auto dropdown dropdown-end">
-          <label tabIndex={0} className="btn btn-sm btn-outline">
-            ⚙️ Columns
-          </label>
-          <ul
-            tabIndex={0}
-            className="dropdown-content z-[1] menu p-3 shadow bg-base-200 rounded-box w-56 space-y-1"
-          >
-            <li className="menu-title"><span>Transaction Info</span></li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.date} onChange={() => toggleColumnVisibility('date')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Date</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.description} onChange={() => toggleColumnVisibility('description')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Description</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.lookup_details} onChange={() => toggleColumnVisibility('lookup_details')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Lookup Details (Amazon/Apple)</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.amount} onChange={() => toggleColumnVisibility('amount')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Amount</span>
-              </label>
-            </li>
+      {/* Column Drawer Panel (glassmorphism) */}
+      <div
+        className={`
+          absolute top-0 right-0 bottom-0
+          bg-black/40 backdrop-blur-md shadow-xl border-l border-white/10
+          transform transition-transform duration-300 ease-in-out
+          ${isColumnDrawerOpen ? 'translate-x-0' : 'translate-x-full'}
+          z-20 overflow-y-auto
+        `}
+      >
+        <div className="p-4 w-64">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-base">Columns</h3>
+            <button
+              onClick={() => setIsColumnDrawerOpen(false)}
+              className="btn btn-ghost btn-sm btn-circle"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
 
-            <li className="menu-title mt-3"><span>LLM Enrichment</span></li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.category} onChange={() => toggleColumnVisibility('category')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Primary Category</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.subcategory} onChange={() => toggleColumnVisibility('subcategory')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Subcategory</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.merchant_clean_name} onChange={() => toggleColumnVisibility('merchant_clean_name')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Clean Merchant</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.merchant_type} onChange={() => toggleColumnVisibility('merchant_type')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Merchant Type</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.essential_discretionary} onChange={() => toggleColumnVisibility('essential_discretionary')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Essential/Discretionary</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.payment_method} onChange={() => toggleColumnVisibility('payment_method')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Payment Method</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.payment_method_subtype} onChange={() => toggleColumnVisibility('payment_method_subtype')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Payment Subtype</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.purchase_date} onChange={() => toggleColumnVisibility('purchase_date')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Purchase Date</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.confidence_score} onChange={() => toggleColumnVisibility('confidence_score')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Confidence Score</span>
-              </label>
-            </li>
-            <li>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
-                <input type="checkbox" checked={columnVisibility.enrichment_source} onChange={() => toggleColumnVisibility('enrichment_source')} className="checkbox checkbox-sm" />
-                <span className="text-sm">Enrichment Source</span>
-              </label>
-            </li>
-            <li className="divider my-1"></li>
-            <li>
-              <button className="btn btn-ghost btn-xs w-full" onClick={resetColumnVisibility}>
-                Reset to Default
-              </button>
-            </li>
+          {/* Instructions */}
+          <p className="text-xs text-base-content/60 mb-2">
+            Drag to reorder • Check to show
+          </p>
+
+          {/* Column List */}
+          <ul className="space-y-1">
+            {columnOrder.map((key, index) => (
+              <li
+                key={key}
+                draggable
+                onDragStart={() => handleDragStart(index)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  handleDragOver(index);
+                }}
+                onDragEnd={handleDragEnd}
+                className={`rounded transition-all ${
+                  draggedIndex === index ? 'opacity-50 bg-base-300' : ''
+                } ${dragOverIndex === index ? 'border-t-2 border-primary' : ''}`}
+              >
+                <label className="flex items-center gap-2 cursor-pointer hover:bg-base-300 p-2 rounded">
+                  {/* Drag handle */}
+                  <span className="drag-handle text-base-content/40 hover:text-base-content">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="9" cy="6" r="1.5" />
+                      <circle cx="15" cy="6" r="1.5" />
+                      <circle cx="9" cy="12" r="1.5" />
+                      <circle cx="15" cy="12" r="1.5" />
+                      <circle cx="9" cy="18" r="1.5" />
+                      <circle cx="15" cy="18" r="1.5" />
+                    </svg>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={columnVisibility[key]}
+                    onChange={() => toggleColumnVisibility(key)}
+                    className="checkbox checkbox-sm"
+                  />
+                  <span className="text-sm flex-1">{COLUMN_CONFIG[key].header}</span>
+                  <span className={`badge badge-xs ${COLUMN_CONFIG[key].group === 'info' ? 'badge-ghost' : 'badge-primary badge-outline'}`}>
+                    {COLUMN_CONFIG[key].group === 'info' ? 'Info' : 'AI'}
+                  </span>
+                </label>
+              </li>
+            ))}
           </ul>
+
+          {/* Reset Button */}
+          <div className="pt-3 border-t border-base-300 mt-3">
+            <button className="btn btn-ghost btn-sm w-full" onClick={resetColumnSettings}>
+              Reset to Default
+            </button>
+          </div>
         </div>
       </div>
-
-      {/* Transactions Table */}
-      <div className="overflow-x-auto">
-        <table className="table table-zebra">
-          <thead>
-            <tr>
-              {columnVisibility.date && <th>Date</th>}
-              {columnVisibility.description && <th>Description</th>}
-              {columnVisibility.lookup_details && <th>Lookup Details</th>}
-              {columnVisibility.amount && <th>Amount</th>}
-              {columnVisibility.category && <th>Primary Category</th>}
-              {columnVisibility.subcategory && <th>Subcategory</th>}
-              {columnVisibility.merchant_clean_name && <th>Clean Merchant</th>}
-              {columnVisibility.merchant_type && <th>Merchant Type</th>}
-              {columnVisibility.essential_discretionary && <th>Essential/Discretionary</th>}
-              {columnVisibility.payment_method && <th>Payment Method</th>}
-              {columnVisibility.payment_method_subtype && <th>Payment Subtype</th>}
-              {columnVisibility.purchase_date && <th>Purchase Date</th>}
-              {columnVisibility.confidence_score && <th>Confidence</th>}
-              {columnVisibility.enrichment_source && <th>Enrichment Source</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {filteredTransactions.map((txn) => (
-              <tr key={txn.id}>
-                {columnVisibility.date && <td>{txn.date}</td>}
-                {columnVisibility.description && (
-                  <td className="text-sm whitespace-normal break-words" title={txn.description}>{txn.description}</td>
-                )}
-                {columnVisibility.lookup_details && (
-                  <td className="text-sm whitespace-normal break-words" title={txn.lookup_description || ''}>
-                    {txn.lookup_description ? (
-                      <span className="text-base-content font-medium italic">{txn.lookup_description}</span>
-                    ) : (
-                      <span className="text-base-content/30">-</span>
-                    )}
-                  </td>
-                )}
-                {columnVisibility.amount && (
-                  <td className={txn.amount < 0 ? 'text-error font-semibold' : 'text-success font-semibold'}>
-                    £{Math.abs(txn.amount).toFixed(2)}
-                  </td>
-                )}
-                {columnVisibility.category && (
-                  <td className="text-sm">
-                    <span className={`badge ${getCategoryColor(txn.category)}`}>
-                      {txn.category || '-'}
-                    </span>
-                  </td>
-                )}
-                {columnVisibility.subcategory && (
-                  <td className="text-sm text-base-content/70">{txn.subcategory || '-'}</td>
-                )}
-                {columnVisibility.merchant_clean_name && (
-                  <td className="text-sm text-base-content/70 font-medium">{txn.merchant_clean_name || '-'}</td>
-                )}
-                {columnVisibility.merchant_type && (
-                  <td className="text-sm text-base-content/70">{txn.merchant_type || '-'}</td>
-                )}
-                {columnVisibility.essential_discretionary && (
-                  <td className="text-sm text-center">
-                    {txn.essential_discretionary ? (
-                      <span className={`badge ${txn.essential_discretionary === 'Essential' ? 'badge-success' : 'badge-secondary'}`}>
-                        {txn.essential_discretionary}
-                      </span>
-                    ) : <span className="text-base-content/40">-</span>}
-                  </td>
-                )}
-                {columnVisibility.payment_method && (
-                  <td className="text-sm text-base-content/70">{txn.payment_method || '-'}</td>
-                )}
-                {columnVisibility.payment_method_subtype && (
-                  <td className="text-sm text-base-content/70">{txn.payment_method_subtype || '-'}</td>
-                )}
-                {columnVisibility.purchase_date && (
-                  <td className="text-sm text-base-content/70">{txn.purchase_date || '-'}</td>
-                )}
-                {columnVisibility.confidence_score && (
-                  <td className="text-sm text-center">
-                    {txn.confidence_score ? (
-                      <span className={`badge ${txn.confidence_score >= 0.9 ? 'badge-success' : txn.confidence_score >= 0.7 ? 'badge-warning' : 'badge-error'}`}>
-                        {(txn.confidence_score * 100).toFixed(0)}%
-                      </span>
-                    ) : <span className="text-base-content/40">-</span>}
-                  </td>
-                )}
-                {columnVisibility.enrichment_source && (
-                  <td className="text-sm text-center">
-                    {txn.enrichment_source ? (
-                      <span className={`badge badge-sm ${txn.enrichment_source === 'llm' ? 'badge-info' :
-                          txn.enrichment_source === 'lookup' ? 'badge-primary' :
-                            txn.enrichment_source === 'regex' ? 'badge-warning' :
-                              txn.enrichment_source === 'manual' ? 'badge-success' :
-                                'badge-ghost'
-                        }`}>
-                        {txn.enrichment_source}
-                      </span>
-                    ) : <span className="text-base-content/40">-</span>}
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      </div>{/* End inner overflow-hidden container */}
 
       {filteredTransactions.length === 0 && filters.selectedCategory !== 'All' && (
         <div className="alert alert-info">
@@ -550,6 +688,18 @@ export default function TransactionList() {
           onSuccess={handleModalSuccess}
         />
       )}
+
+      {/* Enrichment Source Detail Modal */}
+      <EnrichmentSourceDetailModal
+        isOpen={viewingEnrichmentSource !== null}
+        sourceId={viewingEnrichmentSource?.sourceId ?? null}
+        transactionId={viewingEnrichmentSource?.transactionId ?? 0}
+        onClose={() => setViewingEnrichmentSource(null)}
+        onSetPrimary={() => {
+          // Refresh transactions to show updated primary source
+          refreshTransactions();
+        }}
+      />
     </div>
   );
 }

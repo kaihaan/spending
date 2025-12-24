@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { ImportWizard } from './TrueLayer/ImportWizard';
-import { ImportProgressBar } from './TrueLayer/ImportProgressBar';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -17,24 +16,18 @@ interface TrueLayerAccount {
 interface TrueLayerConnection {
   id: number;
   provider_id: string;
+  provider_name: string;
   connection_status: string;
   last_synced_at: string | null;
   accounts: TrueLayerAccount[];
-}
-
-interface SyncStatus {
-  account_id: string;
-  display_name: string;
-  last_synced_at: string | null;
-  connection_status: string;
 }
 
 export default function TrueLayerIntegration() {
   const [connections, setConnections] = useState<TrueLayerConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState<string | null>(null);
-  const [syncStatus, setSyncStatus] = useState<SyncStatus[]>([]);
+  const [syncing, setSyncing] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const [showImportWizard, setShowImportWizard] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<TrueLayerConnection | null>(null);
 
@@ -47,7 +40,6 @@ export default function TrueLayerIntegration() {
       setLoading(true);
       const response = await axios.get(`${API_URL}/truelayer/accounts`);
       setConnections(response.data.connections || []);
-      setSyncStatus(response.data.sync_status || []);
       setError(null);
     } catch (err) {
       console.error('Failed to fetch TrueLayer connections:', err);
@@ -63,11 +55,9 @@ export default function TrueLayerIntegration() {
       const response = await axios.get(`${API_URL}/truelayer/authorize`);
       const { auth_url } = response.data;
 
-      // Store state and code_verifier in sessionStorage for OAuth callback
       sessionStorage.setItem('truelayer_state', response.data.state);
       sessionStorage.setItem('truelayer_code_verifier', response.data.code_verifier);
 
-      // Redirect to TrueLayer authorization
       window.location.href = auth_url;
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to initiate authorization');
@@ -77,7 +67,7 @@ export default function TrueLayerIntegration() {
 
   const handleSync = async (connectionId: number) => {
     try {
-      setSyncing(`${connectionId}`);
+      setSyncing(connectionId);
       const response = await axios.post(`${API_URL}/truelayer/sync`, {
         connection_id: connectionId
       });
@@ -90,40 +80,12 @@ export default function TrueLayerIntegration() {
         `Errors: ${result.total_errors}`
       );
 
-      // Refresh connections and sync status
       fetchConnections();
       window.dispatchEvent(new Event('transactions-updated'));
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to sync transactions');
     } finally {
       setSyncing(null);
-    }
-  };
-
-  const handleClearTransactions = async () => {
-    if (!confirm('⚠️  Are you sure? This will delete ALL TrueLayer transactions permanently!')) {
-      return;
-    }
-
-    if (!confirm('🔴 This action is IRREVERSIBLE. Click OK to confirm deletion.')) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const response = await axios.delete(`${API_URL}/truelayer/clear-transactions`, {
-        headers: {
-          'X-Confirm-Delete': 'yes'
-        }
-      });
-
-      alert(`✅ ${response.data.message}\nDeleted: ${response.data.deleted_count} transactions`);
-      fetchConnections();
-      window.dispatchEvent(new Event('transactions-updated'));
-    } catch (err: any) {
-      alert(`❌ ${err.response?.data?.error || 'Failed to clear transactions'}`);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -144,226 +106,191 @@ export default function TrueLayerIntegration() {
     }
   };
 
-  const formatDate = (dateString: string | null) => {
+  const formatDate = (dateString: string | null | undefined) => {
     if (!dateString) return 'Never';
-    return new Date(dateString).toLocaleDateString('en-GB', {
-      year: 'numeric',
-      month: 'short',
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffHours < 1) return 'Just now';
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+
+    return date.toLocaleDateString('en-GB', {
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+      month: 'short'
     });
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'active':
-        return 'badge badge-success';
-      case 'expired':
-        return 'badge badge-warning';
-      case 'disconnected':
-        return 'badge badge-error';
-      default:
-        return 'badge badge-secondary';
-    }
+  const formatAccountType = (type: string) => {
+    return type.charAt(0) + type.slice(1).toLowerCase();
+  };
+
+  const toggleExpanded = (connectionId: number) => {
+    setExpanded(expanded === connectionId ? null : connectionId);
   };
 
   if (loading && connections.length === 0) {
     return (
-      <div className="card bg-base-200 shadow mb-8">
-        <div className="card-body">
-          <div className="flex justify-center items-center p-8">
-            <span className="loading loading-spinner loading-lg"></span>
-          </div>
-        </div>
+      <div className="flex justify-center items-center p-12">
+        <span className="loading loading-spinner loading-lg"></span>
       </div>
     );
   }
 
   return (
-    <div className="card bg-base-200 shadow mb-8">
-      <div className="card-body">
-        <div className="flex justify-between items-center mb-4">
-          <div>
-            <h2 className="card-title">🏦 TrueLayer Bank Integration</h2>
-            <p className="text-sm text-base-content/70 mt-1">
-              Connect your bank account for real-time transaction synchronization
-            </p>
-          </div>
-          {connections.length === 0 ? (
-            <button
-              className="btn btn-primary"
-              onClick={handleAuthorize}
-              disabled={loading}
-            >
-              {loading ? (
-                <>
-                  <span className="loading loading-spinner loading-sm"></span>
-                  Connecting...
-                </>
-              ) : (
-                '🔗 Connect Bank Account'
-              )}
-            </button>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <h3 className="text-lg font-semibold">Linked Accounts</h3>
+        <button
+          className="btn btn-sm btn-primary"
+          onClick={handleAuthorize}
+          disabled={loading}
+        >
+          {loading ? (
+            <span className="loading loading-spinner loading-sm"></span>
           ) : (
-            <button
-              className="btn btn-primary btn-outline"
-              onClick={handleAuthorize}
-              disabled={loading}
-            >
-              + Add Another Account
-            </button>
+            'Add Account'
           )}
-        </div>
-
-        {error && (
-          <div className="alert alert-error mb-4">
-            <span>{error}</span>
-          </div>
-        )}
-
-        {connections.length === 0 ? (
-          <div className="alert alert-info">
-            <span>
-              No bank accounts connected. Click "Connect Bank Account" to authorize TrueLayer access and start syncing transactions automatically.
-            </span>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {connections.map((connection) => (
-              <div key={connection.id} className="border border-base-300 rounded-lg p-4 bg-base-100">
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <h3 className="font-semibold text-lg">
-                        {connection.provider_id || 'Bank Account'}
-                      </h3>
-                      <span className={getStatusBadge(connection.connection_status)}>
-                        {connection.connection_status}
-                      </span>
-                    </div>
-                    <p className="text-sm text-base-content/70">
-                      Last synced: {formatDate(connection.last_synced_at)}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      className="btn btn-sm btn-primary"
-                      onClick={() => handleSync(connection.id)}
-                      disabled={syncing === `${connection.id}`}
-                    >
-                      {syncing === `${connection.id}` ? (
-                        <>
-                          <span className="loading loading-spinner loading-sm"></span>
-                          Syncing...
-                        </>
-                      ) : (
-                        '🔄 Sync Now'
-                      )}
-                    </button>
-                    <button
-                      className="btn btn-sm btn-primary btn-outline"
-                      onClick={() => {
-                        setSelectedConnection(connection);
-                        setShowImportWizard(true);
-                      }}
-                    >
-                      📥 Advanced Import
-                    </button>
-                    <button
-                      className="btn btn-sm btn-ghost text-error"
-                      onClick={() => handleDisconnect(connection.id)}
-                    >
-                      Disconnect
-                    </button>
-                  </div>
-                </div>
-
-                {connection.accounts && connection.accounts.length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-base-300">
-                    <p className="text-sm font-semibold mb-2">Linked Accounts:</p>
-                    <div className="space-y-2">
-                      {connection.accounts.map((account) => (
-                        <div
-                          key={account.id}
-                          className="text-sm p-2 bg-base-200 rounded"
-                        >
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <span className="font-medium">{account.display_name}</span>
-                              <span className="text-base-content/60 ml-2">
-                                ({account.account_type})
-                              </span>
-                            </div>
-                            <span className="text-base-content/70 font-mono">
-                              {account.currency}
-                            </span>
-                          </div>
-                          <div className="text-xs text-base-content/60 mt-1">
-                            Last synced: {formatDate(account.last_synced_at)}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {syncStatus.length > 0 && (
-              <div className="border border-info rounded-lg p-4 bg-info/10">
-                <p className="text-sm font-semibold mb-3">📊 Sync Status Overview</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {syncStatus.map((account) => (
-                    <div key={account.account_id} className="text-sm">
-                      <span className="font-medium">{account.display_name}:</span>
-                      <span className="text-base-content/70 ml-2">
-                        {account.connection_status === 'active'
-                          ? `Last: ${formatDate(account.last_synced_at)}`
-                          : 'Disconnected'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Testing/Development Section */}
-            <div className="divider my-4"></div>
-            <div className="collapse collapse-arrow border border-error/20 bg-error/5">
-              <input type="checkbox" />
-              <div className="collapse-title text-sm font-semibold text-error">
-                🧪 Testing & Development
-              </div>
-              <div className="collapse-content">
-                <p className="text-xs text-base-content/70 mb-3">
-                  ⚠️ These actions are for testing/development only and cannot be undone.
-                </p>
-                <button
-                  className="btn btn-sm btn-error btn-outline"
-                  onClick={handleClearTransactions}
-                  disabled={loading}
-                >
-                  🗑️ Clear All TrueLayer Transactions
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Import Wizard Modal */}
-        {showImportWizard && selectedConnection && (
-          <ImportWizard
-            connection={selectedConnection}
-            onImportComplete={(jobId) => {
-              console.log('Import job completed:', jobId);
-              window.dispatchEvent(new Event('transactions-updated'));
-              setShowImportWizard(false);
-            }}
-            onClose={() => setShowImportWizard(false)}
-          />
-        )}
+        </button>
       </div>
+
+      {error && (
+        <div className="alert alert-error">
+          <span>{error}</span>
+        </div>
+      )}
+
+      {connections.length === 0 ? (
+        <div className="alert alert-info">
+          <span>No accounts connected. Click "Add Account" to link your bank.</span>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="table">
+            <thead>
+              <tr>
+                <th className="w-8"></th>
+                <th>Bank</th>
+                <th className="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {connections.map((connection) => (
+                <>
+                  {/* Bank Row (Level 1) */}
+                  <tr
+                    key={connection.id}
+                    className="hover cursor-pointer"
+                    onClick={() => toggleExpanded(connection.id)}
+                  >
+                    <td className="w-4 pr-0 bg-transparent">
+                      <span className="text-base-content/50" style={{ fontFamily: 'system-ui, sans-serif', fontSize: '1.4em' }}>
+                        {expanded === connection.id ? '▾' : '▸'}
+                      </span>
+                    </td>
+                    <td className="pl-2">
+                      <span className="font-medium">{connection.provider_name}</span>
+                      {connection.connection_status !== 'active' && (
+                        <span className="badge badge-warning badge-sm ml-2">
+                          {connection.connection_status}
+                        </span>
+                      )}
+                    </td>
+                    <td className="text-right">
+                      <div className="flex gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="btn btn-xs btn-primary"
+                          onClick={() => handleSync(connection.id)}
+                          disabled={syncing === connection.id}
+                        >
+                          {syncing === connection.id ? (
+                            <span className="loading loading-spinner loading-xs"></span>
+                          ) : (
+                            'Sync'
+                          )}
+                        </button>
+                        <button
+                          className="btn btn-xs btn-outline"
+                          onClick={() => {
+                            setSelectedConnection(connection);
+                            setShowImportWizard(true);
+                          }}
+                        >
+                          Import
+                        </button>
+                        <button
+                          className="btn btn-xs btn-ghost text-error"
+                          onClick={() => handleDisconnect(connection.id)}
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+
+                  {/* Accounts Row (Level 2 - Expanded) */}
+                  {expanded === connection.id && connection.accounts.length > 0 && (
+                    <tr key={`${connection.id}-accounts`}>
+                      <td colSpan={3} className="bg-base-200 p-0">
+                        <table className="table table-sm">
+                          <thead>
+                            <tr className="text-xs">
+                              <th className="pl-10">Account Name</th>
+                              <th>Type</th>
+                              <th>Last Sync</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {connection.accounts.map((account) => (
+                              <tr key={account.id}>
+                                <td className="pl-10">{account.display_name}</td>
+                                <td>
+                                  <span className="badge badge-ghost badge-sm">
+                                    {formatAccountType(account.account_type)}
+                                  </span>
+                                </td>
+                                <td className="text-base-content/70">
+                                  {formatDate(account.last_synced_at)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+
+                  {/* No accounts message */}
+                  {expanded === connection.id && connection.accounts.length === 0 && (
+                    <tr key={`${connection.id}-empty`}>
+                      <td colSpan={3} className="bg-base-200 pl-10 text-base-content/50">
+                        No accounts found
+                      </td>
+                    </tr>
+                  )}
+                </>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Import Wizard Modal */}
+      {showImportWizard && selectedConnection && (
+        <ImportWizard
+          connection={selectedConnection}
+          onImportComplete={(jobId) => {
+            console.log('Import job completed:', jobId);
+            window.dispatchEvent(new Event('transactions-updated'));
+            setShowImportWizard(false);
+          }}
+          onClose={() => setShowImportWizard(false)}
+        />
+      )}
     </div>
   );
 }

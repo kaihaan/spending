@@ -1,25 +1,65 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import Navigation from './components/Navigation';
+import MainLayout from './components/layouts/MainLayout';
+import FilterDrawer from './components/FilterDrawer';
+import SettingsTabsDrawer from './components/SettingsTabsDrawer';
+import { FilterProvider } from './contexts/FilterContext';
+import { useScrollVisibility } from './hooks/useScrollVisibility';
 import Dashboard from './pages/Dashboard';
 import Transactions from './pages/Transactions';
 import Huququllah from './pages/Huququllah';
 import Settings from './pages/Settings';
 import TrueLayerCallbackHandler from './components/TrueLayerCallbackHandler';
+import GmailCallbackHandler from './components/GmailCallbackHandler';
 
-function App() {
+// Routes that should show the FilterDrawer
+const FILTER_DRAWER_ROUTES = ['/', '/transactions', '/huququllah'];
+
+function AppContent() {
+  const location = useLocation();
+  const isNavVisible = useScrollVisibility(2000);
+
+  const showFilterDrawer = FILTER_DRAWER_ROUTES.includes(location.pathname);
+  const showSettingsDrawer = location.pathname === '/settings';
+
   return (
-    <Router>
-      <div className="min-h-screen bg-base-100">
+    <div className="min-h-screen bg-base-100">
+      {/* Sticky Nav + Filter/Settings Drawer Container */}
+      <div
+        className={`
+          sticky top-0 z-50
+          transition-transform duration-300 ease-in-out
+          ${isNavVisible ? 'translate-y-0' : '-translate-y-full'}
+        `}
+      >
         <Navigation />
-        <Routes>
+        {showFilterDrawer && <FilterDrawer />}
+        {showSettingsDrawer && <SettingsTabsDrawer />}
+      </div>
+
+      <Routes>
+        {/* Routes with FilterBar */}
+        <Route element={<MainLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/huququllah" element={<Huququllah />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/auth/callback" element={<TrueLayerCallbackHandler />} />
-        </Routes>
-      </div>
-    </Router>
+        </Route>
+        {/* Routes without FilterBar */}
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/auth/callback" element={<TrueLayerCallbackHandler />} />
+        <Route path="/auth/gmail/callback" element={<GmailCallbackHandler />} />
+      </Routes>
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <FilterProvider>
+      <Router>
+        <AppContent />
+      </Router>
+    </FilterProvider>
   );
 }
 
