@@ -4,6 +4,7 @@ Parses Amazon returns/refunds CSV files.
 """
 
 import pandas as pd
+import io
 from datetime import datetime
 
 
@@ -49,6 +50,50 @@ def parse_amazon_returns_csv(file_path):
 
     except Exception as e:
         raise Exception(f"Failed to parse Amazon returns CSV: {str(e)}")
+
+
+def parse_amazon_returns_csv_content(csv_content: str) -> list:
+    """
+    Parse Amazon returns from CSV string content.
+
+    Args:
+        csv_content: CSV file content as a string
+
+    Returns:
+        List of return dictionaries
+    """
+    try:
+        # Read CSV from string content
+        df = pd.read_csv(io.StringIO(csv_content))
+
+        # Verify required columns exist
+        required_columns = ['OrderID', 'ReversalID', 'RefundCompletionDate', 'AmountRefunded']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
+
+        returns = []
+
+        for idx, row in df.iterrows():
+            # Skip rows with no order ID or reversal ID
+            if pd.isna(row['OrderID']) or pd.isna(row['ReversalID']):
+                continue
+
+            returns.append({
+                'order_id': str(row['OrderID']).strip(),
+                'reversal_id': str(row['ReversalID']).strip(),
+                'refund_completion_date': clean_date(row['RefundCompletionDate']),
+                'currency': str(row.get('Currency', 'GBP')).strip(),
+                'amount_refunded': clean_currency(row['AmountRefunded']),
+                'status': str(row.get('Status', '')).strip() if 'Status' in row else None,
+                'disbursement_type': str(row.get('DisbursementType', '')).strip() if 'DisbursementType' in row else None,
+            })
+
+        return returns
+
+    except Exception as e:
+        raise Exception(f"Failed to parse Amazon returns CSV content: {str(e)}")
 
 
 def clean_date(date_str):

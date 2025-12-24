@@ -184,6 +184,14 @@ def sync_account_transactions(
                         merchant_name = txn.get('merchant_name', 'Unknown Merchant')
                         category = 'Other'
 
+                    # Detect pre-enrichment status for Apple/Amazon matching
+                    from mcp.pre_enrichment_detector import detect_pre_enrichment_status
+                    pre_enrichment_status = detect_pre_enrichment_status(
+                        txn.get('description', ''),
+                        merchant_name,
+                        txn.get('transaction_type', 'DEBIT')
+                    )
+
                     # Insert new transaction
                     txn_id = database.insert_truelayer_transaction(
                         account_id=db_account_id,
@@ -197,7 +205,8 @@ def sync_account_transactions(
                         transaction_category=category,
                         merchant_name=merchant_name,
                         running_balance=txn.get('running_balance'),
-                        metadata=txn.get('metadata', {})
+                        metadata=txn.get('metadata', {}),
+                        pre_enrichment_status=pre_enrichment_status
                     )
 
                     if txn_id:
@@ -348,8 +357,10 @@ def sync_all_accounts(user_id: int) -> dict:
         connection_id = connection.get('id')
         user_id_from_conn = connection.get('user_id')
         conn_status = connection.get('connection_status')
+        provider_id = connection.get('provider_id')
+        provider_name = connection.get('provider_name')
 
-        print(f"   📍 Connection {connection_id} - Status: {conn_status}")
+        print(f"   📍 Connection {connection_id} - Status: {conn_status}, Provider: {provider_id}/{provider_name}")
 
         # Refresh token if expired
         connection = refresh_token_if_needed(connection_id, connection)
@@ -357,6 +368,24 @@ def sync_all_accounts(user_id: int) -> dict:
         # Get accounts for this connection
         accounts = database.get_connection_accounts(connection_id)
         print(f"   📊 Found {len(accounts)} accounts for connection {connection_id}")
+
+        # Update provider info if still set to 'truelayer' (legacy)
+        if provider_id == 'truelayer' or provider_name == 'TrueLayer':
+            try:
+                encrypted_token = connection.get('access_token')
+                if encrypted_token:
+                    access_token = decrypt_token(encrypted_token)
+                    client = TrueLayerClient(access_token)
+                    api_accounts = client.get_accounts()
+                    if api_accounts:
+                        provider_info = api_accounts[0].get('provider', {})
+                        new_provider_id = provider_info.get('provider_id')
+                        new_provider_name = provider_info.get('display_name')
+                        if new_provider_id or new_provider_name:
+                            print(f"   🔄 Updating provider info: {new_provider_id} / {new_provider_name}")
+                            database.update_connection_provider(connection_id, new_provider_id, new_provider_name)
+            except Exception as e:
+                print(f"   ⚠️ Could not update provider info: {e}")
 
         for account in accounts:
             truelayer_account_id = account.get('account_id')

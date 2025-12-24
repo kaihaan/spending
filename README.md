@@ -18,7 +18,7 @@ A **privacy-first local personal finance tracker** that parses Santander bank st
 - **TypeScript** + React 19
 - **Vite** - Fast build tool
 - **Tailwind CSS v4** + daisyUI - Modern styling
-- **Recharts** - Data visualization
+- **D3.js** - Data visualization
 - **Axios** - API communication
 
 ### Backend

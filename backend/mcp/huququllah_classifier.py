@@ -37,7 +37,8 @@ def get_suggestion_for_transaction(transaction_id):
         }
 
     # Only suggest for expenses, not income
-    if transaction['amount'] >= 0:
+    # TrueLayer uses transaction_type: DEBIT = expense, CREDIT = income
+    if transaction.get('transaction_type') == 'CREDIT':
         return {
             'suggested_classification': None,
             'confidence': 0.0,
@@ -49,8 +50,9 @@ def get_suggestion_for_transaction(transaction_id):
     amount = abs(transaction['amount'])
 
     # Get all classified expense transactions for learning (only expenses, not income)
+    # TrueLayer uses transaction_type: DEBIT = expense, CREDIT = income
     all_transactions = database.get_all_transactions()
-    classified = [t for t in all_transactions if t['huququllah_classification'] is not None and t['amount'] < 0]
+    classified = [t for t in all_transactions if t['huququllah_classification'] is not None and t.get('transaction_type') == 'DEBIT']
 
     if not classified:
         return {
@@ -160,8 +162,9 @@ def get_category_classification_patterns():
         }
     """
     all_transactions = database.get_all_transactions()
-    # Only include expense transactions (negative amounts), not income
-    classified = [t for t in all_transactions if t['huququllah_classification'] is not None and t['amount'] < 0]
+    # Only include expense transactions, not income
+    # TrueLayer uses transaction_type: DEBIT = expense, CREDIT = income
+    classified = [t for t in all_transactions if t['huququllah_classification'] is not None and t.get('transaction_type') == 'DEBIT']
 
     # Group by category
     category_stats = defaultdict(lambda: {'essential': 0, 'discretionary': 0})

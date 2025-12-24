@@ -280,10 +280,26 @@ def discover_and_save_accounts(connection_id: int, access_token: str) -> dict:
         accounts = client.get_accounts()
         print(f"   ✅ TrueLayer API returned {len(accounts)} accounts")
 
+        # Extract provider info from first account (all accounts have same provider)
+        provider_id = None
+        provider_display_name = None
         if accounts:
             print(f"   Account details:")
             for i, acc in enumerate(accounts):
                 print(f"     [{i}] {acc.get('display_name')} (ID: {acc.get('account_id')}, Type: {acc.get('account_type')})")
+                # Check for provider info in the account response
+                provider = acc.get('provider', {})
+                if provider:
+                    if provider.get('provider_id'):
+                        provider_id = provider.get('provider_id')
+                    if provider.get('display_name'):
+                        provider_display_name = provider.get('display_name')
+                    print(f"     Provider ID: {provider_id}, Name: {provider_display_name}")
+
+        # Update the bank connection with provider info if found
+        if provider_id or provider_display_name:
+            print(f"   Updating connection {connection_id} with provider: {provider_id} / {provider_display_name}")
+            database.update_connection_provider(connection_id, provider_id, provider_display_name)
 
         # Save each account to database
         saved_accounts = []

@@ -1,0 +1,27 @@
+# Environment files (use Docker env vars instead)
+.env
+.env.*
+
+# Virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test and coverage files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Backup files
+*.backup
+*.bak

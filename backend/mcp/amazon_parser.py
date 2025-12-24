@@ -5,6 +5,7 @@ Supports Amazon.co.uk, Amazon.com, Amazon Digital, and Amazon Marketplace.
 """
 
 import pandas as pd
+import io
 from datetime import datetime
 from collections import defaultdict
 
@@ -87,6 +88,86 @@ def parse_amazon_csv(file_path):
 
     except Exception as e:
         raise Exception(f"Failed to parse Amazon CSV: {str(e)}")
+
+
+def parse_amazon_csv_content(csv_content: str) -> list:
+    """
+    Parse Amazon order history from CSV string content.
+
+    Args:
+        csv_content: CSV file content as a string
+
+    Returns:
+        List of order dictionaries with consolidated product names
+    """
+    try:
+        # Read CSV from string content
+        df = pd.read_csv(io.StringIO(csv_content))
+
+        # Verify required columns exist
+        required_columns = ['Website', 'Order ID', 'Order Date', 'Total Owed', 'Product Name']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
+
+        # Group items by Order ID to handle multi-item orders
+        orders_dict = defaultdict(list)
+
+        for idx, row in df.iterrows():
+            # Skip rows with no order ID or product name
+            if pd.isna(row['Order ID']) or pd.isna(row['Product Name']):
+                continue
+
+            order_id = str(row['Order ID']).strip()
+
+            orders_dict[order_id].append({
+                'order_id': order_id,
+                'order_date': clean_date(row['Order Date']),
+                'website': str(row['Website']).strip(),
+                'currency': str(row.get('Currency', 'GBP')).strip(),
+                'total_owed': clean_currency(row['Total Owed']),
+                'product_name': str(row['Product Name']).strip(),
+                'order_status': str(row.get('Order Status', '')).strip() if 'Order Status' in row else None,
+                'shipment_status': str(row.get('Shipment Status', '')).strip() if 'Shipment Status' in row else None,
+            })
+
+        # Consolidate orders - combine product names for multi-item orders
+        consolidated_orders = []
+
+        for order_id, items in orders_dict.items():
+            # Use first item for base data (all items in same order have same metadata)
+            base_item = items[0]
+
+            # Combine product names
+            if len(items) == 1:
+                product_names = base_item['product_name']
+            else:
+                # Multiple items - abbreviate each and join
+                abbreviated_names = [abbreviate_product_name(item['product_name']) for item in items]
+                product_names = ' | '.join(abbreviated_names)
+
+                # If still too long, truncate to first few items
+                if len(product_names) > 150:
+                    first_items = ' | '.join(abbreviated_names[:3])
+                    remaining = len(items) - 3
+                    product_names = f"{first_items} & {remaining} more"
+
+            consolidated_orders.append({
+                'order_id': base_item['order_id'],
+                'order_date': base_item['order_date'],
+                'website': base_item['website'],
+                'currency': base_item['currency'],
+                'total_owed': base_item['total_owed'],
+                'product_names': product_names,
+                'order_status': base_item['order_status'],
+                'shipment_status': base_item['shipment_status'],
+            })
+
+        return consolidated_orders
+
+    except Exception as e:
+        raise Exception(f"Failed to parse Amazon CSV content: {str(e)}")
 
 
 def abbreviate_product_name(product_name, max_length=35):

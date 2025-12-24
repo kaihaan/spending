@@ -29,6 +29,26 @@ def parse_apple_html(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
 
+        return parse_apple_html_content(html_content)
+
+    except Exception as e:
+        raise Exception(f"Failed to parse Apple HTML file: {str(e)}")
+
+
+def parse_apple_html_content(html_content):
+    """
+    Parse Apple "Report a Problem" HTML content into normalized transaction format.
+
+    This function accepts raw HTML content (e.g., from browser capture) rather than
+    a file path. Used by browser-based import.
+
+    Args:
+        html_content: Raw HTML string from Apple's Report a Problem page
+
+    Returns:
+        List of transaction dictionaries
+    """
+    try:
         soup = BeautifulSoup(html_content, 'html.parser')
 
         # Get all text with newline separators to preserve HTML structure
@@ -124,7 +144,7 @@ def parse_apple_html(file_path):
         return transactions
 
     except Exception as e:
-        raise Exception(f"Failed to parse Apple HTML: {str(e)}")
+        raise Exception(f"Failed to parse Apple HTML content: {str(e)}")
 
 
 def parse_json_from_script(script_content):

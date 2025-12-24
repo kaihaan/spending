@@ -82,14 +82,21 @@ def match_single_return(ret):
     if not refund_transaction:
         return {'success': False, 'reason': 'Refund transaction not found'}
 
-    # Step 4: Update refund transaction description
-    refund_desc = f"[REFUND] {order['product_names']}"
-    database.update_transaction_description(refund_transaction['id'], refund_desc)
+    # Step 4: Add enrichment source for refund transaction
+    add_refund_enrichment_source(
+        refund_transaction['id'],
+        order['product_names'],
+        ret['order_id']
+    )
 
-    # Step 5: Mark original transaction as returned
-    database.mark_transaction_as_returned(original_transaction['id'])
+    # Step 4.5: Update pre-enrichment status to 'Matched' for refund transaction
+    database.update_pre_enrichment_status(refund_transaction['id'], 'Matched')
+
+    # Step 5: Mark original transaction as returned (updates enrichment source description)
+    mark_original_as_returned(original_transaction['id'])
 
     # Step 6: Link return to transactions
+    # Now that FK constraints are removed, we can link TrueLayer transactions
     database.link_return_to_transactions(
         ret['id'],
         original_transaction['id'],
@@ -99,36 +106,42 @@ def match_single_return(ret):
     return {
         'success': True,
         'original_transaction_id': original_transaction['id'],
-        'refund_transaction_id': refund_transaction['id']
+        'refund_transaction_id': refund_transaction['id'],
+        'source': 'truelayer'
     }
 
 
 def find_transaction_for_order(order_db_id):
     """
     Find the bank transaction that was matched to a specific Amazon order.
+    Checks TrueLayer transactions only (legacy table dropped).
 
     Args:
         order_db_id: Database ID of the Amazon order
 
     Returns:
-        Transaction dictionary or None
+        Transaction dictionary or None (with 'source' field set to 'truelayer')
     """
-    # Query amazon_transaction_matches to find the linked transaction
+    from psycopg2.extras import RealDictCursor
+
     with database.get_db() as conn:
-        c = conn.cursor()
+        c = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Check TrueLayer transactions
         c.execute('''
-            SELECT t.*
-            FROM transactions t
-            JOIN amazon_transaction_matches m ON t.id = m.transaction_id
-            WHERE m.amazon_order_id = %s
+            SELECT tt.*, 'truelayer' as source
+            FROM truelayer_transactions tt
+            JOIN truelayer_amazon_transaction_matches tatm ON tt.id = tatm.truelayer_transaction_id
+            WHERE tatm.amazon_order_id = %s
         ''', (order_db_id,))
         row = c.fetchone()
+
         return dict(row) if row else None
 
 
 def find_refund_transaction(ret):
     """
-    Find the bank transaction representing the refund.
+    Find the bank transaction representing the refund (OPTIMIZED - SQL filtering).
     Looks for positive amount (credit) near the refund completion date.
 
     Args:
@@ -137,61 +150,62 @@ def find_refund_transaction(ret):
     Returns:
         Transaction dictionary or None
     """
+    from datetime import timezone as tz
+    from psycopg2.extras import RealDictCursor
+
     # Parse refund date
     try:
-        refund_date = datetime.strptime(ret['refund_completion_date'], '%Y-%m-%d')
+        refund_date_val = ret['refund_completion_date']
+        if isinstance(refund_date_val, datetime):
+            refund_date = refund_date_val
+            if refund_date.tzinfo is None:
+                refund_date = refund_date.replace(tzinfo=tz.utc)
+        elif isinstance(refund_date_val, type(datetime.now().date())):
+            refund_date = datetime.combine(refund_date_val, datetime.min.time(), tzinfo=tz.utc)
+        else:
+            refund_date = datetime.strptime(str(refund_date_val), '%Y-%m-%d').replace(tzinfo=tz.utc)
     except:
         return None
 
     amount_refunded = abs(ret['amount_refunded'])
 
-    # Get all transactions
-    all_transactions = database.get_all_transactions()
+    # Use SQL to filter transactions (not Python loops) - MASSIVE performance improvement
+    with database.get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # SQL does the filtering - only fetch matching candidates
+            cursor.execute('''
+                SELECT *
+                FROM truelayer_transactions
+                WHERE transaction_type = 'CREDIT'
+                  AND amount = %s
+                  AND (UPPER(merchant_name) LIKE '%%AMAZON%%'
+                       OR UPPER(merchant_name) LIKE '%%AMZN%%'
+                       OR UPPER(description) LIKE '%%AMAZON%%'
+                       OR UPPER(description) LIKE '%%AMZN%%')
+                  AND timestamp BETWEEN %s AND %s
+                ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - %s)))
+                LIMIT 5
+            ''', (
+                amount_refunded,
+                refund_date - timedelta(days=7),
+                refund_date + timedelta(days=3),
+                refund_date
+            ))
 
-    # Find candidate refund transactions
-    candidates = []
+            candidates = cursor.fetchall()
 
-    for txn in all_transactions:
-        # Must be a credit (positive amount)
-        if txn['amount'] <= 0:
-            continue
-
-        # Must be an Amazon transaction
-        merchant = (txn.get('merchant') or '').upper()
-        description = (txn.get('description') or '').upper()
-
-        if not ('AMAZON' in merchant or 'AMZN' in merchant or 'AMAZON' in description or 'AMZN' in description):
-            continue
-
-        # Parse transaction date
-        try:
-            txn_date = datetime.strptime(txn['date'], '%Y-%m-%d')
-        except:
-            continue
-
-        # Check date proximity (within ±5 days)
-        date_diff_days = abs((txn_date - refund_date).days)
-        if date_diff_days > 5:
-            continue
-
-        # Check amount match (exact)
-        if not amounts_match(txn['amount'], amount_refunded):
-            continue
-
-        candidates.append({
-            'transaction': txn,
-            'date_diff': date_diff_days
-        })
-
-    # No candidates found
     if not candidates:
         return None
 
-    # Sort by date proximity (closest first)
-    candidates.sort(key=lambda x: x['date_diff'])
+    # Return best match (already sorted by date proximity in SQL)
+    best_match = dict(candidates[0])
 
-    # Return best match
-    return candidates[0]['transaction']
+    # Normalize field names for compatibility
+    best_match['source'] = 'truelayer'
+    best_match['date'] = best_match.get('timestamp')
+    best_match['merchant'] = best_match.get('merchant_name')
+
+    return best_match
 
 
 def amounts_match(amount1, amount2, tolerance=0.01):
@@ -207,3 +221,69 @@ def amounts_match(amount1, amount2, tolerance=0.01):
         Boolean indicating if amounts match
     """
     return abs(abs(amount1) - abs(amount2)) < tolerance
+
+
+def add_refund_enrichment_source(transaction_id, order_product_names, amazon_order_id):
+    """Add an enrichment source entry for a refund transaction."""
+    from psycopg2.extras import RealDictCursor
+
+    with database.get_db() as conn:
+        with conn.cursor() as cursor:
+            description = f"[REFUND] {order_product_names}" if order_product_names else "[REFUND]"
+            cursor.execute('''
+                INSERT INTO transaction_enrichment_sources
+                    (truelayer_transaction_id, source_type, description,
+                     order_id, match_confidence, match_method, is_primary)
+                VALUES (%s, 'amazon', %s, %s, 100, 'return_match', TRUE)
+                ON CONFLICT (truelayer_transaction_id, source_type, source_id)
+                DO UPDATE SET
+                    description = EXCLUDED.description,
+                    updated_at = NOW()
+            ''', (transaction_id, description, amazon_order_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+
+def mark_original_as_returned(transaction_id):
+    """Mark the original transaction as returned by updating its enrichment source description."""
+    from psycopg2.extras import RealDictCursor
+
+    with database.get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Check if there's an existing enrichment source
+            cursor.execute('''
+                SELECT id, description FROM transaction_enrichment_sources
+                WHERE truelayer_transaction_id = %s AND is_primary = TRUE
+                LIMIT 1
+            ''', (transaction_id,))
+            row = cursor.fetchone()
+
+            if row:
+                current_desc = row['description'] or ''
+                if not current_desc.startswith('[RETURNED] '):
+                    new_desc = f"[RETURNED] {current_desc}"
+                    cursor.execute('''
+                        UPDATE transaction_enrichment_sources
+                        SET description = %s, updated_at = NOW()
+                        WHERE id = %s
+                    ''', (new_desc, row['id']))
+                    conn.commit()
+                    return True
+            else:
+                # No enrichment source exists, get description from transaction and create one
+                cursor.execute('''
+                    SELECT description FROM truelayer_transactions WHERE id = %s
+                ''', (transaction_id,))
+                txn_row = cursor.fetchone()
+                if txn_row:
+                    desc = txn_row['description'] or ''
+                    cursor.execute('''
+                        INSERT INTO transaction_enrichment_sources
+                            (truelayer_transaction_id, source_type, description,
+                             match_confidence, match_method, is_primary)
+                        VALUES (%s, 'manual', %s, 100, 'return_original', TRUE)
+                    ''', (transaction_id, f"[RETURNED] {desc}"))
+                    conn.commit()
+                    return True
+
+            return False
