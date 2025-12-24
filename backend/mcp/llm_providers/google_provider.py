@@ -11,7 +11,7 @@ try:
 except ImportError:
     genai = None
 
-from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats
+from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats, AccountInfo, LLMResponse
 
 
 class GoogleProvider(BaseLLMProvider):
@@ -171,3 +171,69 @@ class GoogleProvider(BaseLLMProvider):
         total_cost = (tokens_in / 1000) * input_cost_per_1k + (tokens_out / 1000) * output_cost_per_1k
 
         return round(total_cost, 6)
+
+    def get_account_info(self) -> AccountInfo:
+        """
+        Fetch account information from Google.
+
+        Note: Google Gemini does not provide a public API for checking
+        account balance or usage.
+
+        Returns:
+            AccountInfo with available=False
+        """
+        return AccountInfo(
+            provider="google",
+            available=False,
+            error="Google does not provide a public API for Gemini account balance/usage information. "
+                  "Check your account at console.cloud.google.com for billing details."
+        )
+
+    def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
+        """
+        Simple completion API for single prompt.
+
+        Args:
+            prompt: The user prompt
+            system_prompt: Optional system prompt
+
+        Returns:
+            LLMResponse with content and token/cost info
+        """
+        try:
+            # Gemini doesn't have separate system messages, combine them
+            full_prompt = prompt
+            if system_prompt:
+                full_prompt = f"{system_prompt}\n\n{prompt}"
+
+            response = self.model_obj.generate_content(
+                full_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=4096,
+                ),
+            )
+
+            # Get response text
+            content = response.text
+
+            # Estimate tokens (Gemini doesn't always provide counts)
+            input_tokens = self._estimate_tokens(full_prompt)
+            output_tokens = self._estimate_tokens(content)
+            total_tokens = input_tokens + output_tokens
+
+            # Calculate cost
+            cost = self.calculate_cost(input_tokens, output_tokens)
+
+            return LLMResponse(
+                content=content,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                cost=cost
+            )
+
+        except Exception as e:
+            if self.debug:
+                print(f"Google Gemini completion error: {e}")
+            raise

@@ -37,6 +37,28 @@ class ProviderStats:
     failure_count: int
 
 
+@dataclass
+class AccountInfo:
+    """Provider account information for billing/subscription status"""
+    provider: str
+    available: bool  # Whether account info API is available for this provider
+    balance: Optional[float] = None  # Remaining credits/balance in USD
+    subscription_tier: Optional[str] = None  # e.g., "Free", "Pay-as-you-go", "Scale"
+    usage_this_month: Optional[float] = None  # Current month spend in USD
+    error: Optional[str] = None  # Error message if fetch failed
+    extra: Optional[Dict[str, Any]] = None  # Provider-specific extra data
+
+
+@dataclass
+class LLMResponse:
+    """Simple response from LLM completion"""
+    content: str  # The text content of the response
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cost: float = 0.0  # Cost in USD
+
+
 class BaseLLMProvider(ABC):
     """Abstract base class for LLM providers"""
 
@@ -99,6 +121,96 @@ class BaseLLMProvider(ABC):
         """
         pass
 
+    @abstractmethod
+    def get_account_info(self) -> AccountInfo:
+        """
+        Fetch account information from the provider.
+
+        Returns:
+            AccountInfo object with balance, tier, and usage data.
+            If the provider doesn't support account APIs, returns
+            AccountInfo with available=False and an error message.
+        """
+        pass
+
+    @abstractmethod
+    def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
+        """
+        Simple completion API for single prompt.
+
+        Args:
+            prompt: The user prompt
+            system_prompt: Optional system prompt
+
+        Returns:
+            LLMResponse with content and token/cost info
+        """
+        pass
+
+    # Base categories (fallback only - prefer normalized_categories table)
+    BASE_CATEGORIES = [
+        'Groceries', 'Transportation', 'Clothing', 'Dining', 'Entertainment',
+        'Shopping', 'Healthcare', 'Utilities', 'Income', 'Taxes',
+        'Subscriptions', 'Insurance', 'Education', 'Travel', 'Personal Care',
+        'Gifts', 'Pet Care', 'Home & Garden', 'Electronics', 'Sports & Outdoors',
+        'Books & Media', 'Office Supplies', 'Automotive', 'Banking Fees', 'Other'
+    ]
+
+    def _get_active_categories(self) -> List[str]:
+        """
+        Get the list of active categories for LLM enrichment.
+        Returns: List of category names from normalized_categories table (active only)
+        Falls back to BASE_CATEGORIES if database unavailable.
+        """
+        try:
+            # Import here to avoid circular imports
+            import sys
+            import os
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            import database_postgres as database
+
+            # Get active categories from normalized table
+            categories_data = database.get_normalized_categories(active_only=True)
+            if categories_data:
+                return [cat['name'] for cat in categories_data]
+
+        except Exception as e:
+            # If we can't load from database, use base categories
+            if self.debug:
+                print(f"Could not load normalized categories: {e}")
+
+        return list(self.BASE_CATEGORIES)
+
+    def _get_category_context(self) -> str:
+        """
+        Get category names with descriptions for LLM context.
+        Returns formatted string with categories and their descriptions.
+        """
+        try:
+            # Import here to avoid circular imports
+            import sys
+            import os
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            import database_postgres as database
+
+            # Get active categories with descriptions
+            categories_data = database.get_normalized_categories(active_only=True)
+            if categories_data:
+                lines = []
+                for cat in categories_data:
+                    if cat.get('description'):
+                        lines.append(f"- {cat['name']}: {cat['description']}")
+                    else:
+                        lines.append(f"- {cat['name']}")
+                return "\n".join(lines)
+
+        except Exception as e:
+            if self.debug:
+                print(f"Could not load category context: {e}")
+
+        # Fallback to simple list
+        return "\n".join(f"- {cat}" for cat in self.BASE_CATEGORIES)
+
     def _build_system_prompt(self) -> str:
         """
         Build the system prompt for transaction enrichment.
@@ -106,12 +218,20 @@ class BaseLLMProvider(ABC):
         Returns:
             System prompt string
         """
-        return """You are a financial transaction classification expert. Your task is to analyze transaction descriptions and enrich them with structured data.
+        # Get dynamic category list with descriptions for better LLM context
+        categories = self._get_active_categories()
+        category_list = ', '.join(categories)
+        category_context = self._get_category_context()
 
-IMPORTANT: When "Details:" information is provided (e.g., product names from Amazon orders or apps from Apple), prioritize using that information for classification. This provides accurate insight into what was actually purchased and should override generic merchant-based assumptions.
+        return f"""You are a financial transaction classification expert. Your task is to analyze transaction descriptions and enrich them with structured data.
+
+IMPORTANT: When enrichment details are provided (product names from Amazon, apps from Apple, or email receipt contents), prioritize using that information for classification. This provides accurate insight into what was actually purchased and should override generic merchant-based assumptions. Multiple sources may be provided for the same transaction - consider all of them.
+
+AVAILABLE CATEGORIES:
+{category_context}
 
 For each transaction, you must return a JSON object with the following fields:
-- primary_category: One of: Groceries, Transportation, Clothing, Dining, Entertainment, Shopping, Healthcare, Utilities, Income, Taxes, Subscriptions, Insurance, Education, Travel, Personal Care, Gifts, Pet Care, Home & Garden, Electronics, Sports & Outdoors, Books & Media, Office Supplies, Automotive, Banking Fees, Other
+- primary_category: One of: {category_list}
 - subcategory: More specific classification (e.g., "Coffee Shop", "Supermarket", "Taxi Service", "Electronics - Audio Equipment")
 - merchant_clean_name: Standardized merchant name (e.g., "Amazon", "Starbucks", "TfL", not "AMZN*MKTP" or "TESCO STORES")
 - merchant_type: Type of merchant (e.g., "supermarket", "coffee shop", "public transport", "utility provider", "council tax", "restaurant", "music streaming", "airline", "electronics retailer")
@@ -125,9 +245,19 @@ CLASSIFICATION GUIDELINES:
 - When you see product/app details: Use them to determine the most specific category (e.g., "Music streamer" → Electronics, "Coffee maker" → Appliances → Electronics)
 - For marketplace transactions without product details: Default to "Shopping" category with "Online Marketplace" subcategory
 - Always be specific: Instead of generic "Shopping", use "Electronics", "Sports & Outdoors", "Books & Media", etc. when the product type is clear
+- Use the category descriptions above to understand what each category encompasses
 
 Return ONLY valid JSON. Return an array of objects, one per transaction.
 Never include amounts or actual monetary values in your analysis."""
+
+    # Source type to human-readable label mapping for LLM prompts
+    SOURCE_TYPE_LABELS = {
+        'amazon': 'Amazon Products',
+        'amazon_business': 'Amazon Business',
+        'apple': 'Apple/App Store',
+        'gmail': 'Email Receipt',
+        'manual': 'Manual Entry'
+    }
 
     def _build_user_prompt(self, transactions: List[Dict[str, str]], direction: str) -> str:
         """
@@ -137,8 +267,9 @@ Never include amounts or actual monetary values in your analysis."""
             transactions: List of transaction dicts with keys:
                 - description: Transaction description (required)
                 - date: Transaction date (optional)
-                - lookup_description: Product/service from Amazon/Apple lookup (optional)
                 - merchant: Extracted/normalized merchant name (optional)
+                - enrichment_sources: List of enrichment source dicts (optional)
+                    Each source has: source_type, description, order_id, confidence
             direction: "in" for income, "out" for expenses
 
         Returns:
@@ -150,7 +281,6 @@ Never include amounts or actual monetary values in your analysis."""
             # Handle date as either string or date object
             date_val = txn.get('date', '')
             date = str(date_val).strip() if date_val else ''
-            lookup_desc = txn.get('lookup_description', '').strip()
             merchant = txn.get('merchant', '').strip()
 
             direction_label = "INCOME" if direction.lower() == "in" else "EXPENSE"
@@ -162,15 +292,23 @@ Never include amounts or actual monetary values in your analysis."""
                 context_parts.append(f"Date: {date}")
             if merchant:
                 context_parts.append(f"Merchant: {merchant}")
-            if lookup_desc:
-                context_parts.append(f"Details: {lookup_desc}")
+
+            # Add all enrichment sources with labeled context
+            enrichment_sources = txn.get('enrichment_sources', [])
+            if enrichment_sources and isinstance(enrichment_sources, list):
+                for source in enrichment_sources:
+                    source_type = source.get('source_type', 'unknown')
+                    source_desc = source.get('description', '').strip()
+                    if source_desc:
+                        label = self.SOURCE_TYPE_LABELS.get(source_type, 'Details')
+                        context_parts.append(f"{label}: {source_desc}")
 
             if context_parts:
                 line += f" ({', '.join(context_parts)})"
 
             transaction_lines.append(line)
 
-        return f"""Please classify the following transactions. Use the additional context (merchant name, product details from order history) if provided to improve accuracy:
+        return f"""Please classify the following transactions. Use the additional context (merchant name, product details from order history, email receipts) if provided to improve accuracy:
 
 {chr(10).join(transaction_lines)}
 

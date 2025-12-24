@@ -8,7 +8,7 @@ import time
 import requests
 from typing import List, Dict, Optional
 
-from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats
+from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats, AccountInfo, LLMResponse
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -189,3 +189,132 @@ class OllamaProvider(BaseLLMProvider):
         total_cost = total_tokens * self.cost_per_token
 
         return round(total_cost, 6)
+
+    def get_account_info(self) -> AccountInfo:
+        """
+        Get account information for local Ollama instance.
+
+        For Ollama, this checks if the service is running and returns
+        information about local model availability and system metrics.
+
+        Returns:
+            AccountInfo with local instance details (models, VRAM usage)
+        """
+        try:
+            # Check Ollama status - get available models
+            tags_response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            if tags_response.status_code != 200:
+                return AccountInfo(
+                    provider="ollama",
+                    available=False,
+                    error=f"Ollama service returned status {tags_response.status_code}"
+                )
+
+            models = tags_response.json().get("models", [])
+            model_names = [m.get("name", "") for m in models]
+
+            # Get running models and VRAM usage via /api/ps
+            running_models = []
+            vram_used_gb = None
+            try:
+                ps_response = requests.get(f"{self.base_url}/api/ps", timeout=5)
+                if ps_response.status_code == 200:
+                    ps_data = ps_response.json()
+                    running = ps_data.get("models", [])
+                    running_models = [m.get("name", "") for m in running]
+                    # Calculate total VRAM usage
+                    total_vram = sum(m.get("size_vram", 0) for m in running)
+                    if total_vram > 0:
+                        vram_used_gb = round(total_vram / (1024 ** 3), 2)
+            except Exception:
+                pass  # ps endpoint may not be available in older versions
+
+            extra_data = {
+                "status": "running",
+                "available_models": len(model_names),
+                "running_models": len(running_models),
+                "host": self.base_url
+            }
+            if vram_used_gb is not None:
+                extra_data["vram_used_gb"] = vram_used_gb
+
+            return AccountInfo(
+                provider="ollama",
+                available=True,
+                balance=None,  # Local - no billing
+                subscription_tier="Local (Free)",
+                extra=extra_data
+            )
+
+        except requests.exceptions.RequestException as e:
+            return AccountInfo(
+                provider="ollama",
+                available=False,
+                error=f"Could not connect to Ollama at {self.base_url}: {str(e)}"
+            )
+
+    def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
+        """
+        Simple completion API for single prompt.
+
+        Args:
+            prompt: The user prompt
+            system_prompt: Optional system prompt
+
+        Returns:
+            LLMResponse with content and token/cost info
+        """
+        try:
+            # Combine system and user prompts for Ollama
+            full_prompt = prompt
+            if system_prompt:
+                full_prompt = f"{system_prompt}\n\n{prompt}"
+
+            # Call Ollama API
+            url = f"{self.base_url}/api/generate"
+
+            payload = {
+                "model": self.model,
+                "prompt": full_prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.3,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                }
+            }
+
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=self.timeout * 2
+            )
+
+            if response.status_code != 200:
+                raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
+
+            response_data = response.json()
+
+            # Get response text
+            content = response_data.get("response", "")
+
+            # Estimate tokens
+            input_tokens = self._estimate_tokens(full_prompt)
+            output_tokens = self._estimate_tokens(content)
+            total_tokens = input_tokens + output_tokens
+
+            # Calculate cost
+            cost = self.calculate_cost(input_tokens, output_tokens)
+
+            return LLMResponse(
+                content=content,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                cost=cost
+            )
+
+        except Exception as e:
+            if self.debug:
+                print(f"Ollama completion error: {e}")
+            raise

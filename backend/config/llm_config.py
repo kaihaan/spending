@@ -72,6 +72,7 @@ class LLMConfig:
     cache_enabled: bool = True
     debug: bool = False
     ollama_cost_per_token: Optional[float] = None  # Cost per token for local Ollama models
+    anthropic_admin_api_key: Optional[str] = None  # Anthropic Admin API key for billing/usage data
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -220,6 +221,9 @@ def load_llm_config() -> Optional[LLMConfig]:
         if cost_env:
             ollama_cost_per_token = float(cost_env)
 
+    # Anthropic Admin API key (for billing/usage APIs)
+    anthropic_admin_api_key = os.getenv("ANTHROPIC_ADMIN_API_KEY", "").strip() or None
+
     config = LLMConfig(
         provider=provider,
         model=model,
@@ -232,6 +236,7 @@ def load_llm_config() -> Optional[LLMConfig]:
         cache_enabled=cache_enabled,
         debug=debug,
         ollama_cost_per_token=ollama_cost_per_token,
+        anthropic_admin_api_key=anthropic_admin_api_key,
     )
 
     return config

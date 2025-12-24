@@ -40,7 +40,7 @@ PATTERNS = [
     {
         'provider': 'Direct Debit',
         'variant': None,
-        'pattern': r'^DIRECT DEBIT PAYMENT TO\s+(.+?)\s+REF\s+(\d+)\s*/,\s*MANDATE NO\s+(\d+)$',
+        'pattern': r'^DIRECT DEBIT PAYMENT TO\s+(.+?)\s+REF\s+([A-Z0-9\-_]+)\s*[/,]*\s*MANDATE NO\s+(\d+)$',
         'variables': ['payee', 'reference', 'mandate_number'],
         'confidence': 95
     },
@@ -208,6 +208,59 @@ def extract_variables(description: str) -> Dict[str, Optional[str]]:
             result['extraction_confidence'] = max(result['extraction_confidence'], 70)
 
     return result
+
+
+def extract_direct_debit_payee_fallback(description: str) -> Dict[str, Optional[str]]:
+    """
+    Fallback extraction for direct debit transactions when strict pattern fails.
+    Extracts payee from 'DIRECT DEBIT PAYMENT TO {payee} REF...' format.
+
+    This handles variations in formatting that the strict pattern doesn't catch:
+    - Different spacing/punctuation around REF and MANDATE
+    - Missing MANDATE NO entirely
+    - Extra characters in reference field
+
+    Args:
+        description: Transaction description text
+
+    Returns:
+        Dictionary with extracted fields (provider, payee, reference, mandate_number)
+    """
+    if not description:
+        return {}
+
+    # Pattern: DIRECT DEBIT PAYMENT TO {payee} REF {anything}
+    # or: DIRECT DEBIT PAYMENT TO {payee} (no REF)
+    match = re.match(
+        r'^DIRECT DEBIT PAYMENT TO\s+(.+?)(?:\s+REF\s+(.*))?$',
+        description,
+        re.IGNORECASE
+    )
+
+    if match:
+        payee = match.group(1).strip()
+        rest = match.group(2) or ''
+
+        # Try to extract mandate number from rest
+        mandate_match = re.search(r'MANDATE NO\s+(\d+)', rest, re.IGNORECASE)
+        mandate_number = mandate_match.group(1) if mandate_match else None
+
+        # Try to extract reference (everything before MANDATE NO or comma)
+        reference = None
+        if rest:
+            ref_match = re.match(r'^([^,]+?)(?:\s*[,/]\s*MANDATE|\s*MANDATE|\s*$)', rest, re.IGNORECASE)
+            if ref_match:
+                reference = ref_match.group(1).strip()
+
+        return {
+            'provider': 'Direct Debit',
+            'payee': payee,
+            'reference': reference,
+            'mandate_number': mandate_number,
+            'extraction_confidence': 80  # Lower confidence for fallback
+        }
+
+    return {}
 
 
 def extract_and_update(description: str) -> Dict[str, any]:

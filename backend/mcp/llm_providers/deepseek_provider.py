@@ -7,7 +7,7 @@ import time
 from typing import List, Dict, Optional
 from openai import OpenAI, APIError
 
-from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats
+from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats, AccountInfo, LLMResponse
 
 
 class DeepseekProvider(BaseLLMProvider):
@@ -164,3 +164,69 @@ class DeepseekProvider(BaseLLMProvider):
         total_cost = (tokens_in / 1000) * input_cost_per_1k + (tokens_out / 1000) * output_cost_per_1k
 
         return round(total_cost, 6)
+
+    def get_account_info(self) -> AccountInfo:
+        """
+        Fetch account information from Deepseek.
+
+        Note: Deepseek does not currently provide a public API for
+        checking account balance or usage.
+
+        Returns:
+            AccountInfo with available=False
+        """
+        return AccountInfo(
+            provider="deepseek",
+            available=False,
+            error="Deepseek does not provide a public API for account balance/usage information. "
+                  "Check your account at platform.deepseek.com for billing details."
+        )
+
+    def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
+        """
+        Simple completion API for single prompt.
+
+        Args:
+            prompt: The user prompt
+            system_prompt: Optional system prompt
+
+        Returns:
+            LLMResponse with content and token/cost info
+        """
+        try:
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=4096,
+                temperature=0.3,
+                messages=messages,
+                timeout=self.timeout
+            )
+
+            # Extract usage information
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
+            total_tokens = response.usage.total_tokens
+
+            # Get response text
+            content = response.choices[0].message.content
+
+            # Calculate cost
+            cost = self.calculate_cost(input_tokens, output_tokens)
+
+            return LLMResponse(
+                content=content,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                cost=cost
+            )
+
+        except Exception as e:
+            if self.debug:
+                print(f"Deepseek completion error: {e}")
+            raise

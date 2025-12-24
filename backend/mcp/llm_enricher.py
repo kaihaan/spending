@@ -17,6 +17,10 @@ from mcp.llm_providers import (
     DeepseekProvider,
     OllamaProvider,
 )
+from mcp.consistency_engine import (
+    apply_rules_to_transaction,
+    get_enrichment_from_rules,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,7 @@ class EnrichmentStats:
     successful_enrichments: int
     failed_enrichments: int
     cached_hits: int
+    rule_based_hits: int  # Transactions enriched by consistency rules
     api_calls_made: int
     total_tokens_used: int
     total_cost: float
@@ -87,6 +92,10 @@ class LLMEnricher:
         if self.config.provider == LLMProvider.OLLAMA:
             provider_kwargs["cost_per_token"] = self.config.ollama_cost_per_token
 
+        # Add Anthropic-specific parameters (admin API key for billing info)
+        if self.config.provider == LLMProvider.ANTHROPIC:
+            provider_kwargs["admin_api_key"] = self.config.anthropic_admin_api_key
+
         return ProviderClass(**provider_kwargs)
 
     def enrich_transactions(
@@ -108,10 +117,21 @@ class LLMEnricher:
         """
         # Get transactions to enrich
         if transaction_ids:
-            transactions = [database.get_transaction_by_id(tid) for tid in transaction_ids]
-            transactions = [t for t in transactions if t]
+            # Try TrueLayer transactions first (by primary key), then fall back to legacy transactions
+            transactions = []
+            for tid in transaction_ids:
+                # Try TrueLayer transaction by PK
+                t = database.get_truelayer_transaction_by_pk(tid)
+                if not t:
+                    # Fall back to legacy transaction
+                    t = database.get_transaction_by_id(tid)
+                if t:
+                    transactions.append(t)
         else:
-            transactions = database.get_all_transactions()
+            # Get both TrueLayer and legacy transactions
+            truelayer_txns = database.get_all_truelayer_transactions() or []
+            legacy_txns = database.get_all_transactions() or []
+            transactions = truelayer_txns + legacy_txns
 
         if not transactions:
             logger.info("No transactions to enrich")
@@ -120,6 +140,7 @@ class LLMEnricher:
                 successful_enrichments=0,
                 failed_enrichments=0,
                 cached_hits=0,
+                rule_based_hits=0,
                 api_calls_made=0,
                 total_tokens_used=0,
                 total_cost=0.0,
@@ -128,8 +149,15 @@ class LLMEnricher:
 
         logger.info(f"Enriching {len(transactions)} transactions")
 
-        # Separate transactions into cached, already enriched, and non-cached
+        # Load consistency rules for rule-based enrichment
+        category_rules = database.get_category_rules(active_only=True)
+        merchant_normalizations = database.get_merchant_normalizations()
+        logger.debug(f"Loaded {len(category_rules)} category rules and {len(merchant_normalizations)} merchant normalizations")
+
+        # Separate transactions into rule-based, cached, already enriched, and LLM-needed
+        rule_based_enrichments = {}
         cached_enrichments = {}
+        merchant_hints = {}  # Partial matches for LLM hints
         txns_to_enrich = []
         already_enriched = 0
 
@@ -140,6 +168,30 @@ class LLMEnricher:
                 logger.debug(f"Transaction {txn['id']} already enriched, skipping")
                 continue
 
+            # Check consistency rules first (before cache)
+            rule_result = apply_rules_to_transaction(
+                txn, category_rules, merchant_normalizations
+            )
+
+            if rule_result and 'primary_category' in rule_result:
+                # Full match from rules - skip LLM entirely
+                rule_based_enrichments[txn["id"]] = rule_result
+                # Track rule usage
+                if rule_result.get('matched_rule'):
+                    for rule in category_rules:
+                        if rule.get('rule_name') == rule_result['matched_rule']:
+                            database.increment_rule_usage(rule['id'])
+                            break
+                if rule_result.get('matched_merchant'):
+                    for norm in merchant_normalizations:
+                        if norm.get('normalized_name') == rule_result['matched_merchant']:
+                            database.increment_merchant_normalization_usage(norm['id'])
+                            break
+                continue
+            elif rule_result and 'merchant_hint' in rule_result:
+                # Partial match (merchant only) - store hint for LLM
+                merchant_hints[txn["id"]] = rule_result['merchant_hint']
+
             # Check cache if enabled
             if self.config.cache_enabled and not force_refresh:
                 cached = database.get_enrichment_from_cache(
@@ -149,11 +201,14 @@ class LLMEnricher:
                     cached_enrichments[txn["id"]] = cached
                     continue
 
-            # Otherwise, need to enrich
+            # Otherwise, need LLM enrichment
             txns_to_enrich.append(txn)
 
         if already_enriched > 0:
             logger.info(f"Skipped {already_enriched} already-enriched transactions")
+
+        if rule_based_enrichments:
+            logger.info(f"Applied rules to {len(rule_based_enrichments)} transactions (skipping LLM)")
 
         # Enrich non-cached transactions in batches
         enrichment_map = {}  # transaction_id -> enrichment
@@ -172,7 +227,7 @@ class LLMEnricher:
                 logger.debug(f"Processing batch {i // batch_size + 1} with {len(batch)} transactions")
 
                 try:
-                    # Prepare batch data with lookup context
+                    # Prepare batch data with enrichment context
                     batch_data = []
                     for txn in batch:
                         txn_data = {
@@ -180,9 +235,9 @@ class LLMEnricher:
                             "date": txn.get("date", ""),
                         }
 
-                        # Include lookup_description if available (from Amazon/Apple matches)
-                        if txn.get("lookup_description"):
-                            txn_data["lookup_description"] = txn["lookup_description"]
+                        # Include enrichment_sources if available (from Amazon/Apple/Gmail matches)
+                        if txn.get("enrichment_sources"):
+                            txn_data["enrichment_sources"] = txn["enrichment_sources"]
 
                         # Include merchant name if already normalized
                         if txn.get("merchant"):
@@ -234,15 +289,39 @@ class LLMEnricher:
 
         # Update transactions with enriched data
         successful_count = 0
+
+        # First, save rule-based enrichments
+        for txn_id, enrichment in rule_based_enrichments.items():
+            try:
+                updated = database.update_transaction_with_enrichment(
+                    txn_id, enrichment,
+                    enrichment_source='rule'
+                )
+                if updated:
+                    successful_count += 1
+                    logger.debug(f"Saved rule-based enrichment for transaction {txn_id}")
+                else:
+                    logger.warning(f"No rows updated for rule-based enrichment transaction {txn_id}")
+                    retry_queue.append(txn_id)
+            except Exception as e:
+                logger.error(f"Error saving rule-based enrichment for transaction {txn_id}: {e}")
+                retry_queue.append(txn_id)
+
+        # Then save LLM and cached enrichments
         for txn_id, enrichment in enrichment_map.items():
             try:
                 # Determine enrichment source: 'llm' for API-enriched, 'cache' for cached
                 enrichment_source = 'cache' if txn_id in cached_enrichments else 'llm'
-                database.update_transaction_with_enrichment(
+                updated = database.update_transaction_with_enrichment(
                     txn_id, enrichment,
                     enrichment_source=enrichment_source
                 )
-                successful_count += 1
+                if updated:
+                    successful_count += 1
+                    logger.debug(f"Saved {enrichment_source} enrichment for transaction {txn_id}")
+                else:
+                    logger.warning(f"No rows updated for {enrichment_source} enrichment transaction {txn_id}")
+                    retry_queue.append(txn_id)
             except Exception as e:
                 logger.error(f"Error saving enrichment for transaction {txn_id}: {e}")
                 retry_queue.append(txn_id)
@@ -250,8 +329,9 @@ class LLMEnricher:
         return EnrichmentStats(
             total_transactions=len(transactions),
             successful_enrichments=successful_count,
-            failed_enrichments=len(transactions) - successful_count,
+            failed_enrichments=len(transactions) - successful_count - already_enriched,
             cached_hits=len(cached_enrichments),
+            rule_based_hits=len(rule_based_enrichments),
             api_calls_made=api_calls,
             total_tokens_used=total_tokens,
             total_cost=total_cost,

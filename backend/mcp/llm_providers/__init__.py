@@ -1,6 +1,6 @@
 """LLM Provider implementations"""
 
-from .base_provider import BaseLLMProvider
+from .base_provider import BaseLLMProvider, LLMResponse
 from .anthropic_provider import AnthropicProvider
 
 # Optional providers - import gracefully if dependencies available
@@ -26,6 +26,7 @@ except ImportError:
 
 __all__ = [
     'BaseLLMProvider',
+    'LLMResponse',
     'AnthropicProvider',
     'OpenAIProvider',
     'GoogleProvider',
