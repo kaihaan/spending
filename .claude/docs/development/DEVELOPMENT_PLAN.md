@@ -429,15 +429,9 @@ def analytics_merchants():
     pass
 ```
 
-### Frontend Setup
-```bash
-npm install recharts
-```
-
 ### Frontend Components
-- `<SpendingChart />` - Line chart (Recharts)
-- `<CategoryPieChart />` - Pie chart
-- `<TopMerchantsBar />` - Bar chart
+- `<D3LineChart />` - Line chart (D3.js)
+- `<D3BarChart />` - Bar chart (D3.js)
 - `<MetricsCards />` - Summary stats
 - Time period selector (1M, 3M, 6M, 1Y)
 

@@ -1,6 +1,6 @@
 # Personal Finance Analysis Service
 
-A **privacy-first local personal finance tracker** that parses Santander bank statements and TrueLayer bank connections, categorizes transactions using AI, and provides spending insights through a web dashboard.
+A **privacy-first local personal finance tracker** that parses bank statements and TrueLayer bank connections, categorizes transactions using AI, and provides spending insights through a web dashboard.
 
 ## Key Features
 
