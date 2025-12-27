@@ -29,11 +29,21 @@ def normalize_transaction(t: dict) -> dict:
     Returns:
         Normalized transaction dict with consistent field names
     """
-    # This is a placeholder - actual implementation would normalize field names
-    # For now, just return as-is since the database already uses correct names
+    # Normalize timestamp to date field for frontend
+    timestamp = t.get('timestamp')
+    if timestamp:
+        # If timestamp is already a string, use as-is
+        if isinstance(timestamp, str):
+            date_str = timestamp.split('T')[0] if 'T' in timestamp else timestamp
+        else:
+            # If it's a datetime object, convert to ISO format
+            date_str = timestamp.isoformat().split('T')[0]
+    else:
+        date_str = None
+
     return {
         'id': t.get('id'),
-        'date': t.get('date'),
+        'date': date_str,  # Normalized from timestamp for frontend
         'description': t.get('description'),
         'amount': float(t.get('amount', 0)) if t.get('amount') is not None else None,
         'transaction_type': t.get('transaction_type'),
@@ -41,7 +51,7 @@ def normalize_transaction(t: dict) -> dict:
         'provider_id': t.get('provider_id'),
         'category': t.get('category'),
         'meta': t.get('meta'),
-        'timestamp': t.get('timestamp').isoformat() if t.get('timestamp') else None
+        'timestamp': t.get('timestamp').isoformat() if hasattr(t.get('timestamp'), 'isoformat') else t.get('timestamp')
     }
 
 
