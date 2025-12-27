@@ -26,6 +26,20 @@ backup_*.sql
 .DS_Store
 *.swp
 *.swo
+*:Zone.Identifier
+**/*:Zone.Identifier
+
+# Claude Code temporary files
+.claude/logs/
+.claude/emails/
+.claude/docs/deployment/
+backend/.claude/
+
+# MCP server data
+.playwright-mcp/
+
+# Command artifacts
+=*
 
 # sample finance data
 sample/
