@@ -429,3 +429,16 @@ def handle_webhook(event_id: str, event_type: str, payload: dict, signature: str
     # TODO: Process webhook asynchronously
 
     return {'message': 'Webhook received'}
+
+
+def get_connections(user_id: int = 1) -> list:
+    """
+    Get all TrueLayer connections for a user.
+
+    Args:
+        user_id: User ID
+
+    Returns:
+        List of TrueLayer connection objects
+    """
+    return truelayer.get_user_connections(user_id)

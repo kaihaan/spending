@@ -56,6 +56,28 @@ def callback():
         return jsonify({'error': str(e)}), 500
 
 
+@truelayer_bp.route('/connections', methods=['GET'])
+def get_connections():
+    """
+    Get all TrueLayer connections for a user.
+
+    Query params:
+        user_id (int): User ID (default: 1)
+
+    Returns:
+        List of TrueLayer connection objects
+    """
+    try:
+        user_id = int(request.args.get('user_id', 1))
+        connections = truelayer_service.get_connections(user_id)
+        return jsonify(connections)
+
+    except Exception as e:
+        print(f"❌ Get TrueLayer connections error: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @truelayer_bp.route('/accounts', methods=['GET'])
 def get_accounts():
     """

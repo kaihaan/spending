@@ -138,6 +138,24 @@ def get_stats():
         return jsonify({'error': str(e)}), 500
 
 
+@enrichment_bp.route('/api/enrichment/status', methods=['GET'])
+def get_status():
+    """
+    Get enrichment status (alias for /stats).
+
+    Returns:
+        Enrichment statistics summary
+    """
+    try:
+        stats = enrichment_service.get_stats()
+        return jsonify(stats)
+
+    except Exception as e:
+        print(f"❌ Enrichment status error: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @enrichment_bp.route('/api/enrichment/failed', methods=['GET'])
 def get_failed():
     """

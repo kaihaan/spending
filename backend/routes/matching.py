@@ -120,6 +120,29 @@ def get_coverage():
         return jsonify({'error': str(e)}), 500
 
 
+@matching_bp.route('/stats', methods=['GET'])
+def get_stats():
+    """
+    Get matching statistics (alias for /coverage).
+
+    Query params:
+        user_id (int): User ID (default: 1)
+
+    Returns:
+        Coverage and matching statistics
+    """
+    try:
+        user_id = request.args.get('user_id', 1, type=int)
+        coverage = matching_service.get_coverage(user_id=user_id)
+
+        return jsonify(coverage)
+
+    except Exception as e:
+        print(f"❌ Matching stats error: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 # ============================================================================
 # Unified Matching
 # ============================================================================

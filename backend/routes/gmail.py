@@ -84,6 +84,37 @@ def get_connection():
         return jsonify({'error': str(e)}), 500
 
 
+@gmail_bp.route('/connections', methods=['GET'])
+def get_connections():
+    """
+    Get all Gmail connections (alias for /connection).
+    Returns connection in a list for API consistency.
+
+    Query params:
+        user_id (int): User ID (default: 1)
+
+    Returns:
+        List of connection objects
+    """
+    try:
+        user_id = int(request.args.get('user_id', 1))
+        connection = gmail_service.get_connection(user_id)
+
+        if not connection:
+            return jsonify([])
+
+        # Remove sensitive fields
+        connection.pop('access_token', None)
+        connection.pop('refresh_token', None)
+
+        return jsonify([connection])
+
+    except Exception as e:
+        print(f"❌ Get Gmail connections error: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @gmail_bp.route('/disconnect', methods=['POST'])
 def disconnect():
     """
