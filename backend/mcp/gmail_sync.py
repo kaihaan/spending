@@ -6,9 +6,19 @@ Supports full sync (initial) and incremental sync (subsequent).
 """
 
 import hashlib
+import os
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from functools import wraps
 from typing import Optional, Generator
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 import database_postgres as database
 from mcp.gmail_auth import get_valid_access_token, get_gmail_credentials, decrypt_token
@@ -21,6 +31,7 @@ from mcp.gmail_client import (
     get_user_profile,
     parse_sender_email,
     extract_sender_domain,
+    get_attachment_content,
 )
 from mcp.gmail_parser import (
     is_amazon_receipt_email,
@@ -40,12 +51,78 @@ from mcp.gmail_parser import (
     is_figma_receipt_email,
     parse_receipt_content,
 )
+from mcp.gmail_pdf_parser import parse_receipt_pdf
+from mcp.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # Sync configuration
 DEFAULT_SYNC_MONTHS = 12  # Default to last 12 months
 MAX_MESSAGES_PER_SYNC = 5000  # Safety limit
 BATCH_SIZE = 50  # Messages to process before updating progress
+
+# Performance tracking configuration
+GMAIL_SYNC_WORKERS = int(os.getenv('GMAIL_SYNC_WORKERS', '5'))
+GMAIL_PARALLEL_FETCH = os.getenv('GMAIL_PARALLEL_FETCH', 'true').lower() == 'true'
+
+
+class SyncPerformanceTracker:
+    """Track performance metrics during Gmail sync."""
+
+    def __init__(self):
+        self.api_calls = []
+        self.db_writes = []
+        self.parse_times = []
+        self.start_time = time.time()
+        self.start_memory = 0
+
+        if PSUTIL_AVAILABLE:
+            try:
+                self.start_memory = psutil.Process().memory_info().rss / 1024 / 1024
+            except Exception as e:
+                logger.warning(f"Could not initialize psutil: {e}")
+                # Disable psutil for this session
+                globals()['PSUTIL_AVAILABLE'] = False
+
+    def record_api_call(self, duration: float):
+        self.api_calls.append(duration)
+
+    def record_db_write(self, duration: float):
+        self.db_writes.append(duration)
+
+    def record_parse(self, duration: float):
+        self.parse_times.append(duration)
+
+    def report(self, message_count: int):
+        """Log performance summary."""
+        total_time = time.time() - self.start_time
+        memory_used = 0
+
+        if PSUTIL_AVAILABLE:
+            try:
+                memory_used = psutil.Process().memory_info().rss / 1024 / 1024 - self.start_memory
+            except Exception:
+                pass  # Silently skip memory reporting if psutil fails
+
+        logger.info("=" * 80)
+        logger.info(f"PERFORMANCE SUMMARY: {message_count} messages in {total_time:.1f}s")
+        logger.info("=" * 80)
+        logger.info(f"Throughput: {message_count / (total_time / 60):.1f} messages/min")
+
+        if self.api_calls:
+            logger.info(f"API calls: avg={sum(self.api_calls)/len(self.api_calls):.3f}s, max={max(self.api_calls):.3f}s")
+
+        if self.db_writes:
+            logger.info(f"DB writes: avg={sum(self.db_writes)/len(self.db_writes):.3f}s, max={max(self.db_writes):.3f}s")
+
+        if self.parse_times:
+            logger.info(f"Parsing: avg={sum(self.parse_times)/len(self.parse_times):.3f}s, max={max(self.parse_times):.3f}s")
+
+        if PSUTIL_AVAILABLE:
+            logger.info(f"Memory delta: {memory_used:.1f} MB")
+
+        logger.info("=" * 80)
 
 
 def should_import_email(subject: str, sender_email: str, body_text: str = None) -> tuple:
@@ -179,7 +256,8 @@ def sync_receipts_full(
     connection_id: int,
     from_date: datetime = None,
     to_date: datetime = None,
-    job_id: int = None
+    job_id: int = None,
+    force_reparse: bool = False
 ) -> Generator[dict, None, dict]:
     """
     Full sync of all receipt emails.
@@ -190,6 +268,8 @@ def sync_receipts_full(
         connection_id: Database connection ID
         from_date: Optional start date (defaults to 12 months ago)
         to_date: Optional end date (defaults to today)
+        job_id: Optional pre-created job ID for progress tracking
+        force_reparse: If True, re-parse existing emails (bypass duplicate check)
 
     Yields:
         Progress dictionaries with count, status, etc.
@@ -205,19 +285,25 @@ def sync_receipts_full(
     # Create sync job only if not provided (avoids duplicate job creation)
     if job_id is None:
         job_id = database.create_gmail_sync_job(connection_id, job_type='full')
-    print(f"📧 Starting full Gmail sync: job={job_id}, connection={connection_id}")
+    logger.info("Starting full Gmail sync", extra={'sync_job_id': job_id, 'connection_id': connection_id})
+
+    # Initialize statistics tracker for this sync
+    from mcp.statistics_tracker import GmailSyncStatistics
+    stats = GmailSyncStatistics(connection_id=connection_id, sync_job_id=job_id)
 
     try:
         # Get valid credentials (access and refresh tokens)
         access_token, refresh_token = get_gmail_credentials(connection_id)
 
-        # Build Gmail service with both tokens for auto-refresh support
+        # Build Gmail service for pagination and profile fetching only
+        # Fresh services will be created per-batch during message processing
         service = build_gmail_service(access_token, refresh_token)
 
         # Get user profile for history ID
         profile = get_user_profile(service)
         latest_history_id = profile.get('history_id')
-        print(f"   📬 Gmail profile: {profile['email_address']}, history_id={latest_history_id}")
+        logger.info(f"Gmail profile: {profile['email_address']}, history_id={latest_history_id}",
+                   extra={'sync_job_id': job_id})
 
         # Set date range
         if from_date is None:
@@ -229,7 +315,7 @@ def sync_receipts_full(
 
         # Build search query with date range
         query = build_receipt_query(from_date=from_date, to_date=to_date)
-        print(f"   🔍 Search query: {query[:100]}...")
+        logger.info(f"Search query: {query[:100]}...", extra={'sync_job_id': job_id})
 
         # Format dates for progress reporting
         from_date_str = from_date.strftime('%Y-%m-%d') if from_date else None
@@ -261,11 +347,12 @@ def sync_receipts_full(
             all_message_ids.extend([m['id'] for m in messages])
 
             page_count += 1
-            print(f"   📄 Page {page_count}: {len(messages)} messages (total: {len(all_message_ids)})")
+            logger.info(f"Page {page_count}: {len(messages)} messages (total: {len(all_message_ids)})",
+                       extra={'sync_job_id': job_id})
 
             # Safety limit
             if len(all_message_ids) >= MAX_MESSAGES_PER_SYNC:
-                print(f"   ⚠️  Hit message limit ({MAX_MESSAGES_PER_SYNC})")
+                logger.warning(f"Hit message limit ({MAX_MESSAGES_PER_SYNC})", extra={'sync_job_id': job_id})
                 break
 
             page_token = result.get('nextPageToken')
@@ -273,7 +360,7 @@ def sync_receipts_full(
                 break
 
         total_messages = len(all_message_ids)
-        print(f"   📊 Found {total_messages} potential receipt messages")
+        logger.info(f"Found {total_messages} potential receipt messages", extra={'sync_job_id': job_id})
 
         # Update job with total
         database.update_gmail_sync_job_progress(
@@ -293,32 +380,267 @@ def sync_receipts_full(
         duplicates = 0
         filtered = 0
 
+        # Initialize performance tracker
+        perf = SyncPerformanceTracker()
+
+        # Phase 3: Bulk database writes (feature flag)
+        USE_BULK_WRITES = os.getenv('GMAIL_BULK_WRITES', 'true').lower() == 'true'
+
         for i in range(0, total_messages, BATCH_SIZE):
             batch_ids = all_message_ids[i:i + BATCH_SIZE]
 
-            for msg_id in batch_ids:
+            # Create fresh Gmail service for this batch to avoid TLS connection reuse
+            # This prevents SSL errors from corrupted connection state
+            access_token_batch, refresh_token_batch = get_gmail_credentials(connection_id)
+            service = build_gmail_service(access_token_batch, refresh_token_batch)
+
+            # Phase 3: Prepare batch accumulators for bulk operations
+            if USE_BULK_WRITES:
+                email_content_batch = []
+                receipt_batch = []
+                pdf_tasks_batch = []
+
+            if GMAIL_PARALLEL_FETCH and len(batch_ids) > 1:
+                # Parallel processing with ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=min(GMAIL_SYNC_WORKERS, len(batch_ids))) as executor:
+                    # Submit all API calls in parallel
+                    future_to_msg_id = {
+                        executor.submit(get_message_content, service, msg_id): msg_id
+                        for msg_id in batch_ids
+                    }
+
+                    # Process results as they complete
+                    for future in as_completed(future_to_msg_id):
+                        msg_id = future_to_msg_id[future]
+                        try:
+                            # Get message from future with timeout
+                            api_start = time.time()
+                            msg = future.result(timeout=30)
+                            perf.record_api_call(time.time() - api_start)
+
+                            if USE_BULK_WRITES:
+                                # Phase 3: Prepare data for bulk insert
+                                parse_start = time.time()
+                                prepared = prepare_receipt_data(connection_id, msg, service, force_reparse=force_reparse)
+                                parse_duration_ms = int((time.time() - parse_start) * 1000)
+                                perf.record_parse(parse_duration_ms / 1000.0)
+
+                                # Record statistics for this parse attempt (only for stored receipts)
+                                if prepared.get('receipt_data'):
+                                    stats.record_parse_attempt(
+                                        message_id=prepared['message_id'],
+                                        sender_domain=prepared['sender_domain'],
+                                        parse_result=prepared['receipt_data'],
+                                        duration_ms=parse_duration_ms,
+                                        llm_cost_cents=prepared['receipt_data'].get('llm_cost_cents')
+                                    )
+
+                                # Accumulate for bulk insert
+                                email_content_batch.append(prepared['message'])
+                                if prepared['action'] == 'store':
+                                    receipt_batch.append((prepared['connection_id'], prepared['message_id'], prepared['receipt_data']))
+                                    if prepared.get('pdf_task_info'):
+                                        pdf_tasks_batch.append(prepared)
+                                elif prepared['action'] == 'duplicate':
+                                    duplicates += 1
+                                elif prepared['action'] == 'filtered':
+                                    filtered += 1
+                            else:
+                                # Original: Individual inserts
+                                db_start = time.time()
+                                result = store_pending_receipt(connection_id, msg, service, force_reparse=force_reparse)
+                                perf.record_db_write(time.time() - db_start)
+
+                                # Record statistics for this parse attempt (non-bulk path)
+                                if result.get('receipt_data'):
+                                    stats.record_parse_attempt(
+                                        message_id=result['message_id'],
+                                        sender_domain=result['sender_domain'],
+                                        parse_result=result['receipt_data'],
+                                        llm_cost_cents=result['receipt_data'].get('llm_cost_cents')
+                                    )
+
+                                if result.get('stored'):
+                                    parsed += 1
+                                elif result.get('duplicate'):
+                                    duplicates += 1
+                                elif result.get('filtered'):
+                                    filtered += 1
+
+                            processed += 1
+
+                        except Exception as e:
+                            logger.warning(f"Failed to process message {msg_id}: {e}",
+                                         extra={'sync_job_id': job_id, 'message_id': msg_id})
+                            failed += 1
+                            processed += 1
+            else:
+                # Sequential processing (fallback or single message)
+                for msg_id in batch_ids:
+                    retry_count = 0
+                    max_retries = 3
+
+                    while retry_count < max_retries:
+                        try:
+                            # Fetch message content
+                            api_start = time.time()
+                            msg = get_message_content(service, msg_id)
+                            perf.record_api_call(time.time() - api_start)
+
+                            if USE_BULK_WRITES:
+                                # Phase 3: Prepare data for bulk insert
+                                parse_start = time.time()
+                                prepared = prepare_receipt_data(connection_id, msg, service, force_reparse=force_reparse)
+                                perf.record_parse(time.time() - parse_start)
+
+                                # Accumulate for bulk insert
+                                email_content_batch.append(prepared['message'])
+                                if prepared['action'] == 'store':
+                                    receipt_batch.append((prepared['connection_id'], prepared['message_id'], prepared['receipt_data']))
+                                    if prepared.get('pdf_task_info'):
+                                        pdf_tasks_batch.append(prepared)
+                                elif prepared['action'] == 'duplicate':
+                                    duplicates += 1
+                                elif prepared['action'] == 'filtered':
+                                    filtered += 1
+                            else:
+                                # Original: Individual inserts
+                                db_start = time.time()
+                                result = store_pending_receipt(connection_id, msg, service, force_reparse=force_reparse)
+                                perf.record_db_write(time.time() - db_start)
+
+                                # Record statistics for this parse attempt (non-bulk path)
+                                if result.get('receipt_data'):
+                                    stats.record_parse_attempt(
+                                        message_id=result['message_id'],
+                                        sender_domain=result['sender_domain'],
+                                        parse_result=result['receipt_data'],
+                                        llm_cost_cents=result['receipt_data'].get('llm_cost_cents')
+                                    )
+
+                                if result.get('stored'):
+                                    parsed += 1
+                                elif result.get('duplicate'):
+                                    duplicates += 1
+                                elif result.get('filtered'):
+                                    filtered += 1
+
+                            processed += 1
+                            break  # Success, exit retry loop
+
+                        except Exception as e:
+                            import traceback
+                            logger.warning(f"Failed to process message {msg_id}: {e}",
+                                         extra={'sync_job_id': job_id, 'message_id': msg_id},
+                                         exc_info=(os.getenv('DEBUG_GMAIL_SYNC') == 'true'))
+                            retry_count += 1
+                            if retry_count >= max_retries:
+                                failed += 1
+                                processed += 1
+
+            # Phase 3: Bulk database writes after batch processing
+            if USE_BULK_WRITES and (email_content_batch or receipt_batch):
+                db_start = time.time()
                 try:
-                    # Fetch message content
-                    msg = get_message_content(service, msg_id)
+                    logger.info(f"Bulk inserting: {len(email_content_batch)} emails, {len(receipt_batch)} receipts",
+                               extra={'sync_job_id': job_id})
 
-                    # Store as pending receipt (parsing happens separately)
-                    result = store_pending_receipt(connection_id, msg, service)
+                    # Bulk insert email content
+                    if email_content_batch:
+                        database.save_gmail_email_content_bulk(email_content_batch)
 
-                    if result.get('stored'):
-                        parsed += 1
-                    elif result.get('duplicate'):
-                        duplicates += 1
-                    elif result.get('filtered'):
-                        filtered += 1
+                    # Bulk insert receipts and get receipt IDs
+                    receipt_id_mapping = {}
+                    if receipt_batch:
+                        result = database.save_gmail_receipt_bulk(receipt_batch)
+                        receipt_id_mapping = result['message_to_id']
+                        parsed += result['inserted']
 
-                    processed += 1
+                    perf.record_db_write(time.time() - db_start)
+
+                    # Dispatch PDF tasks using receipt IDs from bulk insert
+                    if pdf_tasks_batch and receipt_id_mapping:
+                        from tasks.gmail_tasks import process_pdf_receipt_task
+                        for prepared in pdf_tasks_batch:
+                            message_id = prepared['message_id']
+                            receipt_id = receipt_id_mapping.get(message_id)
+                            if receipt_id:
+                                try:
+                                    process_pdf_receipt_task.delay(
+                                        receipt_id=receipt_id,
+                                        message_id=message_id,
+                                        attachment_info=prepared['pdf_task_info'],
+                                        sender_domain=prepared['sender_domain'],
+                                        connection_id=connection_id,
+                                        received_date=prepared['receipt_data'].get('received_at')
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"PDF task dispatch failed for receipt {receipt_id}: {e}",
+                                                  extra={'sync_job_id': job_id, 'receipt_id': receipt_id})
+
+                                    # CRITICAL FIX: Track PDF task dispatch failures
+                                    try:
+                                        from mcp.error_tracking import GmailError, ErrorStage, ErrorType
+                                        error = GmailError(
+                                            stage=ErrorStage.PDF_PARSE,
+                                            error_type=ErrorType.UNKNOWN,
+                                            message=f"PDF task dispatch failed: {e}",
+                                            exception=e,
+                                            context={'receipt_id': receipt_id, 'message_id': message_id},
+                                            is_retryable=True
+                                        )
+                                        error.log(connection_id=connection_id, sync_job_id=job_id)
+                                    except:
+                                        pass  # Don't let error tracking crash sync
 
                 except Exception as e:
-                    print(f"   ⚠️  Failed to process message {msg_id}: {e}")
-                    failed += 1
-                    processed += 1
+                    logger.warning(f"Bulk insert failed, falling back to individual inserts: {e}",
+                                  extra={'sync_job_id': job_id},
+                                  exc_info=(os.getenv('DEBUG_GMAIL_SYNC') == 'true'))
+                    import traceback
 
-            # Update progress
+                    # Fallback: insert individually
+                    # CRITICAL FIX: Track failures in fallback mode
+                    from mcp.error_tracking import GmailError, ErrorStage
+
+                    for msg in email_content_batch:
+                        try:
+                            database.save_gmail_email_content(msg)
+                        except Exception as e2:
+                            failed += 1  # CRITICAL: Increment failed counter
+                            logger.warning(f"Failed to save email content for {msg.get('message_id')}: {e2}",
+                                          extra={'sync_job_id': job_id, 'message_id': msg.get('message_id')})
+
+                            # Track error for statistics
+                            try:
+                                error = GmailError.from_exception(
+                                    e2, ErrorStage.STORAGE,
+                                    context={'message_id': msg.get('message_id'), 'operation': 'save_email_content'}
+                                )
+                                error.log(connection_id=connection_id, sync_job_id=job_id)
+                            except:
+                                pass  # Don't let error tracking crash sync
+
+                    for conn_id, msg_id, receipt_data in receipt_batch:
+                        try:
+                            database.save_gmail_receipt(conn_id, msg_id, receipt_data)
+                            parsed += 1
+                        except Exception as e2:
+                            failed += 1  # CRITICAL: Increment failed counter
+                            logger.warning(f"Failed to save receipt for {msg_id}: {e2}",
+                                          extra={'sync_job_id': job_id, 'message_id': msg_id})
+
+                            # Track error for statistics
+                            try:
+                                error = GmailError.from_exception(
+                                    e2, ErrorStage.STORAGE,
+                                    context={'message_id': msg_id, 'operation': 'save_receipt'}
+                                )
+                                error.log(connection_id=connection_id, sync_job_id=job_id)
+                            except:
+                                pass  # Don't let error tracking crash sync
+
+            # Update progress after each batch
             database.update_gmail_sync_job_progress(
                 job_id, total_messages, processed, parsed, failed
             )
@@ -354,18 +676,26 @@ def sync_receipts_full(
             'history_id': latest_history_id,
         }
 
-        print(f"   ✅ Sync completed: {parsed} receipts stored, {duplicates} duplicates, {failed} failed")
+        logger.info(f"Sync completed: {parsed} receipts stored, {duplicates} duplicates, {failed} failed",
+                   extra={'sync_job_id': job_id})
+
+        # Report performance metrics
+        perf.report(processed)
+
+        # Flush statistics to database
+        stats.flush()
+        logger.info(f"Statistics summary:\n{stats.get_summary()}", extra={'sync_job_id': job_id})
 
         yield final_result
         return final_result
 
     except Exception as e:
-        print(f"   ❌ Sync failed: {e}")
+        logger.error(f"Sync failed: {e}", extra={'sync_job_id': job_id}, exc_info=True)
         database.complete_gmail_sync_job(job_id, 'failed', str(e))
         raise
 
 
-def sync_receipts_incremental(connection_id: int, job_id: int = None) -> dict:
+def sync_receipts_incremental(connection_id: int, job_id: int = None, force_reparse: bool = False) -> dict:
     """
     Incremental sync using Gmail history API.
 
@@ -373,6 +703,8 @@ def sync_receipts_incremental(connection_id: int, job_id: int = None) -> dict:
 
     Args:
         connection_id: Database connection ID
+        job_id: Optional pre-created job ID for progress tracking
+        force_reparse: If True, re-parse existing emails (bypass duplicate check)
 
     Returns:
         Results dictionary
@@ -384,17 +716,18 @@ def sync_receipts_incremental(connection_id: int, job_id: int = None) -> dict:
 
     history_id = connection.get('history_id')
     if not history_id:
-        print("   ⚠️  No history ID, falling back to full sync")
+        logger.warning("No history ID, falling back to full sync", extra={'connection_id': connection_id})
         # Convert generator to final result
         result = None
-        for progress in sync_receipts_full(connection_id):
+        for progress in sync_receipts_full(connection_id, force_reparse=force_reparse):
             result = progress
         return result
 
     # Create sync job only if not provided (avoids duplicate job creation)
     if job_id is None:
         job_id = database.create_gmail_sync_job(connection_id, job_type='incremental')
-    print(f"📧 Starting incremental Gmail sync: job={job_id}, history_id={history_id}")
+    logger.info("Starting incremental Gmail sync",
+               extra={'sync_job_id': job_id, 'history_id': history_id})
 
     try:
         # Get valid credentials (access and refresh tokens)
@@ -407,17 +740,18 @@ def sync_receipts_incremental(connection_id: int, job_id: int = None) -> dict:
         changes = get_history_changes(service, history_id)
 
         if changes.get('full_sync_required'):
-            print("   ⚠️  History expired, falling back to full sync")
+            logger.warning("History expired, falling back to full sync", extra={'sync_job_id': job_id})
             database.complete_gmail_sync_job(job_id, status='cancelled')
             result = None
-            for progress in sync_receipts_full(connection_id):
+            for progress in sync_receipts_full(connection_id, force_reparse=force_reparse):
                 result = progress
             return result
 
         new_message_ids = changes.get('new_message_ids', [])
         latest_history_id = changes.get('latest_history_id')
 
-        print(f"   📬 Found {len(new_message_ids)} new messages since last sync")
+        logger.info(f"Found {len(new_message_ids)} new messages since last sync",
+                   extra={'sync_job_id': job_id})
 
         if not new_message_ids:
             database.complete_gmail_sync_job(job_id, 'completed')
@@ -442,7 +776,7 @@ def sync_receipts_incremental(connection_id: int, job_id: int = None) -> dict:
         for msg_id in new_message_ids:
             try:
                 msg = get_message_content(service, msg_id)
-                result = store_pending_receipt(connection_id, msg, service)
+                result = store_pending_receipt(connection_id, msg, service, force_reparse=force_reparse)
 
                 if result.get('stored'):
                     parsed += 1
@@ -452,7 +786,8 @@ def sync_receipts_incremental(connection_id: int, job_id: int = None) -> dict:
                     filtered += 1
 
             except Exception as e:
-                print(f"   ⚠️  Failed to process message {msg_id}: {e}")
+                logger.warning(f"Failed to process message {msg_id}: {e}",
+                              extra={'sync_job_id': job_id, 'message_id': msg_id})
                 failed += 1
 
         # Update history ID
@@ -465,7 +800,8 @@ def sync_receipts_incremental(connection_id: int, job_id: int = None) -> dict:
         # Complete job
         database.complete_gmail_sync_job(job_id, 'completed')
 
-        print(f"   ✅ Incremental sync completed: {parsed} new receipts, {filtered} filtered")
+        logger.info(f"Incremental sync completed: {parsed} new receipts, {filtered} filtered",
+                   extra={'sync_job_id': job_id})
 
         return {
             'status': 'completed',
@@ -478,12 +814,12 @@ def sync_receipts_incremental(connection_id: int, job_id: int = None) -> dict:
         }
 
     except Exception as e:
-        print(f"   ❌ Incremental sync failed: {e}")
+        logger.error(f"Incremental sync failed: {e}", extra={'sync_job_id': job_id}, exc_info=True)
         database.complete_gmail_sync_job(job_id, 'failed', str(e))
         raise
 
 
-def store_parsed_receipt(connection_id: int, message: dict, service=None) -> dict:
+def store_parsed_receipt(connection_id: int, message: dict, service=None, force_reparse: bool = False) -> dict:
     """
     Parse email inline and store only extracted data (no raw body).
 
@@ -497,6 +833,7 @@ def store_parsed_receipt(connection_id: int, message: dict, service=None) -> dic
         connection_id: Database connection ID
         message: Parsed message dictionary from gmail_client
         service: Gmail API service (optional, for fetching PDF attachments)
+        force_reparse: If True, re-parse existing emails (bypass duplicate check)
 
     Returns:
         Dictionary with 'stored', 'duplicate', or 'filtered' flag
@@ -520,13 +857,10 @@ def store_parsed_receipt(connection_id: int, message: dict, service=None) -> dic
     try:
         database.save_gmail_email_content(message)
     except Exception as e:
-        print(f"   ⚠️ Failed to store email content: {e}")
+        logger.warning(f"Failed to store email content: {e}", extra={'message_id': message_id})
 
-    # DEV FLAG: Set to True to re-parse all emails (bypass duplicate check)
-    SKIP_DUPLICATE_CHECK_DEV = False  # Set to True for re-parsing during development
-
-    # Check for duplicate by message_id
-    if not SKIP_DUPLICATE_CHECK_DEV:
+    # Check for duplicate by message_id (skip if force_reparse is enabled)
+    if not force_reparse:
         existing = database.get_gmail_receipt_by_message_id(message_id)
         if existing:
             return {'duplicate': True, 'message_id': message_id}
@@ -540,7 +874,8 @@ def store_parsed_receipt(connection_id: int, message: dict, service=None) -> dic
         sender_domain=sender_domain,
         sender_name=sender_name,
         list_unsubscribe=message.get('list_unsubscribe', ''),
-        skip_llm=True  # Faster sync, no LLM cost
+        skip_llm=True,  # Faster sync, no LLM cost
+        received_at=message.get('received_at')  # Fallback date if parsing fails
     )
 
     # Don't store emails rejected by pre-filter (marketing, non-receipts, etc.)
@@ -551,56 +886,103 @@ def store_parsed_receipt(connection_id: int, message: dict, service=None) -> dic
             'message_id': message_id
         }
 
-    # For PDF-based receipts (e.g., Charles Tyrwhitt, Google Cloud, Xero, Atlassian, Suffolk Latch), parse PDF attachment
-    pdf_domains = ('ctshirts.com', 'google.com', 'post.xero.com', 'am.atlassian.com', 'atlassian.com', 'suffolklatchcompany.co.uk')
-    pdfs_to_store = []  # Track PDFs for MinIO storage
+    # PDF FALLBACK - If no amount extracted and PDF attachments exist, try parsing PDFs
+    # This handles merchants like Bax Music where invoice details are only in PDF
+    if not parsed_data.get('total_amount') and service and message.get('attachments'):
+        attachments = message.get('attachments', [])
+        # Look for invoice-like PDFs (filename contains invoice, INV, receipt, bill, etc.)
+        invoice_keywords = ('invoice', 'inv-', 'inv_', 'receipt', 'bill', 'order', 'facture', 'rechnung')
+        # Known PDF vendors that always have invoices in PDFs (even with UUID filenames)
+        pdf_vendor_domains = ('ctshirts.com', 'ctshirts.co.uk', 'suffolklatchcompany.co.uk')
+        # Check if subject mentions invoice/receipt (e.g., "Invoice has been created for your order")
+        subject_mentions_invoice = any(keyword in subject.lower() for keyword in invoice_keywords) if subject else False
+
+        for attachment in attachments:
+            filename = attachment.get('filename', '').lower()
+            is_pdf = attachment.get('mime_type', '').startswith('application/pdf')
+            is_invoice_filename = any(keyword in filename for keyword in invoice_keywords)
+            is_known_pdf_vendor = sender_domain in pdf_vendor_domains
+
+            if is_pdf and (is_invoice_filename or is_known_pdf_vendor or subject_mentions_invoice):
+                logger.info(f"Parsing PDF invoice: {attachment.get('filename')}",
+                           extra={'message_id': message_id, 'merchant': sender_domain})
+                try:
+                    # Download PDF attachment
+                    pdf_bytes = get_attachment_content(
+                        service,
+                        message_id,
+                        attachment.get('attachment_id')
+                    )
+
+                    if pdf_bytes:
+                        # Parse PDF to extract amount and other data
+                        pdf_data = parse_receipt_pdf(
+                            pdf_bytes,
+                            sender_domain=sender_domain,
+                            filename=attachment.get('filename')
+                        )
+
+                        if pdf_data and pdf_data.get('total_amount'):
+                            # Merge PDF data into parsed_data (PDF takes precedence for amount)
+                            parsed_data['total_amount'] = pdf_data['total_amount']
+                            parsed_data['currency_code'] = pdf_data.get('currency_code', parsed_data.get('currency_code', 'GBP'))
+
+                            # Also update order_id and date if PDF has better data
+                            if pdf_data.get('order_id') and not parsed_data.get('order_id'):
+                                parsed_data['order_id'] = pdf_data['order_id']
+                            if pdf_data.get('receipt_date') and not parsed_data.get('receipt_date'):
+                                parsed_data['receipt_date'] = pdf_data['receipt_date']
+                            if pdf_data.get('line_items') and not parsed_data.get('line_items'):
+                                parsed_data['line_items'] = pdf_data['line_items']
+
+                            # Update parse method to indicate PDF was used
+                            if parsed_data.get('parse_method'):
+                                parsed_data['parse_method'] = f"{parsed_data['parse_method']}_pdf_fallback"
+                            else:
+                                parsed_data['parse_method'] = 'pdf_fallback'
+
+                            logger.info(f"Extracted amount from PDF: {pdf_data.get('currency_code', 'GBP')} {pdf_data['total_amount']}",
+                                       extra={'message_id': message_id, 'merchant': sender_domain})
+                            break  # Found amount, stop checking other PDFs
+
+                except Exception as e:
+                    logger.warning(f"PDF parsing failed: {e}",
+                                  extra={'message_id': message_id, 'merchant': sender_domain})
+                    # Continue to next attachment or fall through
+
+    # Track PDF tasks for async processing (Phase 2 Optimization)
+    pdf_task_info = None  # Will contain task dispatch info if PDFs found
+
+    # For PDF-based receipts (e.g., Charles Tyrwhitt, Google Cloud, Xero, Atlassian, Suffolk Latch)
+    pdf_domains = ('ctshirts.com', 'ctshirts.co.uk', 'google.com', 'post.xero.com', 'am.atlassian.com', 'atlassian.com', 'suffolklatchcompany.co.uk')
     if sender_domain in pdf_domains and service:
         attachments = message.get('attachments', [])
         if attachments:
-            from .gmail_client import get_pdf_attachments
-            from .gmail_pdf_parser import parse_receipt_pdf
-
-            pdf_contents = get_pdf_attachments(service, message_id, attachments)
-            for pdf in pdf_contents:
-                pdf_result = parse_receipt_pdf(pdf['content'], sender_domain, pdf.get('filename'))
-                # Use 'is not None' to allow £0.00 amounts (common for Google Cloud free tier)
-                if pdf_result and pdf_result.get('total_amount') is not None:
-                    # Use PDF-extracted data
-                    parsed_data = pdf_result
-                    parsed_data['parsing_status'] = 'parsed'
-                    # Queue PDF for MinIO storage
-                    pdfs_to_store.append({
-                        'content': pdf['content'],
-                        'filename': pdf.get('filename', 'receipt.pdf')
-                    })
+            # Queue PDF for async processing instead of processing inline
+            # This eliminates 2-5s blocking per PDF receipt
+            for attachment in attachments:
+                if attachment.get('mime_type', '').startswith('application/pdf'):
+                    pdf_task_info = {
+                        'attachment_id': attachment.get('attachment_id'),
+                        'filename': attachment.get('filename', 'receipt.pdf')
+                    }
+                    logger.info(f"PDF attachment queued for async processing: {pdf_task_info['filename']}",
+                               extra={'message_id': message_id, 'merchant': sender_domain})
                     break
 
-    # For Translink, extract PDF link from email body and download
-    if sender_domain == 'translink.co.uk':
+    # For Translink, extract PDF link from email body (async processing)
+    if sender_domain == 'translink.co.uk' and not pdf_task_info:
         html_body = message.get('body_html', '')
         # Look for receipt link pattern
         link_match = re.search(r'href="([^"]+)"[^>]*>\s*Click here to view your receipt', html_body, re.IGNORECASE)
         if link_match:
             receipt_url = link_match.group(1)
-            try:
-                import requests
-                response = requests.get(receipt_url, timeout=30)
-                if response.status_code == 200:
-                    content_type = response.headers.get('content-type', '').lower()
-                    if 'pdf' in content_type:
-                        from .gmail_pdf_parser import parse_generic_receipt_pdf
-                        pdf_result = parse_generic_receipt_pdf(response.content, 'Translink')
-                        if pdf_result and pdf_result.get('total_amount') is not None:
-                            parsed_data = pdf_result
-                            parsed_data['parsing_status'] = 'parsed'
-                            parsed_data['parse_method'] = 'vendor_translink_pdf'
-                            # Queue PDF for MinIO storage
-                            pdfs_to_store.append({
-                                'content': response.content,
-                                'filename': 'translink_receipt.pdf'
-                            })
-            except Exception as e:
-                print(f"   ⚠️ Failed to download Translink PDF: {e}")
+            pdf_task_info = {
+                'external_url': receipt_url,
+                'filename': 'translink_receipt.pdf'
+            }
+            logger.info(f"Translink PDF queued for async processing: {receipt_url}",
+                       extra={'message_id': message_id, 'merchant': sender_domain})
 
     # Build receipt data dictionary (with parsed data, NOT raw body)
     receipt_data = {
@@ -643,54 +1025,272 @@ def store_parsed_receipt(connection_id: int, message: dict, service=None) -> dic
             order_id=receipt_data.get('order_id')
         )
 
+    # Set PDF processing status if we have PDFs to process
+    if pdf_task_info:
+        receipt_data['pdf_processing_status'] = 'pending'
+
     # Store parsed receipt
     receipt_id = database.save_gmail_receipt(connection_id, message_id, receipt_data)
 
-    # Store PDFs in MinIO (if available and we have PDFs)
-    pdfs_stored = 0
-    if pdfs_to_store and receipt_id:
+    # Dispatch PDF processing task asynchronously (Phase 2 Optimization)
+    # This eliminates 2-5s blocking per PDF receipt
+    pdf_task_queued = False
+    if pdf_task_info and receipt_id:
         try:
-            from .minio_client import is_available, store_pdf
-            if is_available():
-                received_date = message.get('received_at')
-                if isinstance(received_date, str):
-                    from datetime import datetime
-                    try:
-                        received_date = datetime.fromisoformat(received_date.replace('Z', '+00:00'))
-                    except:
-                        received_date = None
+            from tasks.gmail_tasks import process_pdf_receipt_task
 
-                for pdf_item in pdfs_to_store:
-                    minio_result = store_pdf(
-                        pdf_bytes=pdf_item['content'],
-                        message_id=message_id,
-                        filename=pdf_item['filename'],
-                        received_date=received_date,
-                        metadata={'merchant': parsed_data.get('merchant_name')}
-                    )
-                    if minio_result:
-                        # Save PDF attachment record in database
-                        database.save_pdf_attachment(
-                            gmail_receipt_id=receipt_id,
-                            message_id=message_id,
-                            bucket_name=minio_result['bucket_name'],
-                            object_key=minio_result['object_key'],
-                            filename=minio_result['filename'],
-                            content_hash=minio_result['content_hash'],
-                            size_bytes=minio_result['size_bytes'],
-                            etag=minio_result['etag']
-                        )
-                        pdfs_stored += 1
+            # Dispatch task to Celery (non-blocking, returns immediately)
+            process_pdf_receipt_task.delay(
+                receipt_id=receipt_id,
+                message_id=message_id,
+                attachment_info=pdf_task_info,
+                sender_domain=sender_domain,
+                connection_id=connection_id,
+                received_date=message.get('received_at')
+            )
+
+            pdf_task_queued = True
+            logger.info(f"PDF task queued for receipt {receipt_id}",
+                       extra={'receipt_id': receipt_id, 'message_id': message_id})
         except Exception as e:
-            # Don't fail sync if MinIO storage fails
-            print(f"   ⚠️ MinIO storage error (non-fatal): {e}")
+            # Don't fail sync if task dispatch fails
+            logger.warning(f"PDF task dispatch failed (non-fatal): {e}",
+                          extra={'receipt_id': receipt_id, 'message_id': message_id})
+            # Reset status to 'failed' if task dispatch failed
+            database.update_gmail_receipt_pdf_status(receipt_id, 'failed', error=str(e))
+
+            # CRITICAL FIX: Track PDF task dispatch failures
+            try:
+                from mcp.error_tracking import GmailError, ErrorStage, ErrorType
+                error = GmailError(
+                    stage=ErrorStage.PDF_PARSE,
+                    error_type=ErrorType.UNKNOWN,
+                    message=f"PDF task dispatch failed: {e}",
+                    exception=e,
+                    context={'receipt_id': receipt_id, 'message_id': message_id},
+                    is_retryable=True  # Task dispatch failures are often retryable
+                )
+                error.log(connection_id=connection_id)
+            except:
+                pass  # Don't let error tracking crash sync
 
     return {
         'stored': True,
         'receipt_id': receipt_id,
         'message_id': message_id,
         'parsing_status': receipt_data['parsing_status'],
-        'pdfs_stored': pdfs_stored
+        'pdf_task_queued': pdf_task_queued,
+        # Include data for statistics tracking
+        'sender_domain': sender_domain,
+        'receipt_data': receipt_data
+    }
+
+
+def prepare_receipt_data(connection_id: int, message: dict, service=None, force_reparse: bool = False) -> dict:
+    """
+    Parse email and prepare data for bulk insert (Phase 3 Optimization).
+
+    This is a non-writing version of store_parsed_receipt() that returns data
+    to be bulk inserted later.
+
+    Returns:
+        dict with 'action', 'message', 'email_content', 'receipt_data', 'pdf_task_info'
+        where action can be 'store', 'duplicate', or 'filtered'
+    """
+    message_id = message.get('message_id')
+
+    # Parse sender
+    sender_email, sender_name = parse_sender_email(message.get('from', ''))
+    sender_domain = extract_sender_domain(sender_email)
+
+    # Early filter: reject known non-receipt emails BEFORE parsing
+    subject = message.get('subject', '')
+    body_text = message.get('body_text') or message.get('body_html', '')
+    should_import, filter_reason = should_import_email(subject, sender_email, body_text)
+    if not should_import:
+        return {
+            'action': 'filtered',
+            'reason': filter_reason,
+            'message_id': message_id,
+            'message': message,  # For email_content storage
+            'sender_domain': sender_domain  # Required for statistics tracking
+        }
+
+    # Check for duplicate by message_id (skip if force_reparse is enabled)
+    if not force_reparse:
+        existing = database.get_gmail_receipt_by_message_id(message_id)
+        if existing:
+            return {
+                'action': 'duplicate',
+                'message_id': message_id,
+                'message': message,  # For email_content storage
+                'sender_domain': sender_domain  # Required for statistics tracking
+            }
+
+    # PARSE INLINE - extract structured data
+    parsed_data = parse_receipt_content(
+        html_body=message.get('body_html'),
+        text_body=message.get('body_text'),
+        subject=subject,
+        sender_email=sender_email,
+        sender_domain=sender_domain,
+        sender_name=sender_name,
+        list_unsubscribe=message.get('list_unsubscribe', ''),
+        skip_llm=True,
+        received_at=message.get('received_at')  # Fallback date if parsing fails
+    )
+
+    # Don't store emails rejected by pre-filter
+    if parsed_data.get('parse_method') == 'pre_filter':
+        return {
+            'action': 'filtered',
+            'reason': parsed_data.get('parsing_error', 'Pre-filtered'),
+            'message_id': message_id,
+            'message': message,
+            'sender_domain': sender_domain  # Required for statistics tracking
+        }
+
+    # PDF FALLBACK - If no amount extracted and PDF attachments exist, try parsing PDFs
+    # This handles merchants like Bax Music where invoice details are only in PDF
+    if not parsed_data.get('total_amount') and service and message.get('attachments'):
+        attachments = message.get('attachments', [])
+        # Look for invoice-like PDFs (filename contains invoice, INV, receipt, bill, etc.)
+        invoice_keywords = ('invoice', 'inv-', 'inv_', 'receipt', 'bill', 'order', 'facture', 'rechnung')
+        # Known PDF vendors that always have invoices in PDFs (even with UUID filenames)
+        pdf_vendor_domains = ('ctshirts.com', 'ctshirts.co.uk', 'suffolklatchcompany.co.uk')
+        # Check if subject mentions invoice/receipt (e.g., "Invoice has been created for your order")
+        subject_mentions_invoice = any(keyword in subject.lower() for keyword in invoice_keywords) if subject else False
+
+        for attachment in attachments:
+            filename = attachment.get('filename', '').lower()
+            is_pdf = attachment.get('mime_type', '').startswith('application/pdf')
+            is_invoice_filename = any(keyword in filename for keyword in invoice_keywords)
+            is_known_pdf_vendor = sender_domain in pdf_vendor_domains
+
+            if is_pdf and (is_invoice_filename or is_known_pdf_vendor or subject_mentions_invoice):
+                logger.info(f"Parsing PDF invoice: {attachment.get('filename')}",
+                           extra={'message_id': message_id, 'merchant': sender_domain})
+                try:
+                    # Download PDF attachment
+                    pdf_bytes = get_attachment_content(
+                        service,
+                        message_id,
+                        attachment.get('attachment_id')
+                    )
+
+                    if pdf_bytes:
+                        # Parse PDF to extract amount and other data
+                        pdf_data = parse_receipt_pdf(
+                            pdf_bytes,
+                            sender_domain=sender_domain,
+                            filename=attachment.get('filename')
+                        )
+
+                        if pdf_data and pdf_data.get('total_amount'):
+                            # Merge PDF data into parsed_data (PDF takes precedence for amount)
+                            parsed_data['total_amount'] = pdf_data['total_amount']
+                            parsed_data['currency_code'] = pdf_data.get('currency_code', parsed_data.get('currency_code', 'GBP'))
+
+                            # Also update order_id and date if PDF has better data
+                            if pdf_data.get('order_id') and not parsed_data.get('order_id'):
+                                parsed_data['order_id'] = pdf_data['order_id']
+                            if pdf_data.get('receipt_date') and not parsed_data.get('receipt_date'):
+                                parsed_data['receipt_date'] = pdf_data['receipt_date']
+                            if pdf_data.get('line_items') and not parsed_data.get('line_items'):
+                                parsed_data['line_items'] = pdf_data['line_items']
+
+                            # Update parse method to indicate PDF was used
+                            if parsed_data.get('parse_method'):
+                                parsed_data['parse_method'] = f"{parsed_data['parse_method']}_pdf_fallback"
+                            else:
+                                parsed_data['parse_method'] = 'pdf_fallback'
+
+                            logger.info(f"Extracted amount from PDF: {pdf_data.get('currency_code', 'GBP')} {pdf_data['total_amount']}",
+                                       extra={'message_id': message_id, 'merchant': sender_domain})
+                            break  # Found amount, stop checking other PDFs
+
+                except Exception as e:
+                    logger.warning(f"PDF parsing failed: {e}",
+                                  extra={'message_id': message_id, 'merchant': sender_domain})
+                    # Continue to next attachment or fall through
+
+    # Track PDF tasks for async processing
+    pdf_task_info = None
+
+    # For PDF-based receipts
+    pdf_domains = ('ctshirts.com', 'ctshirts.co.uk', 'google.com', 'post.xero.com', 'am.atlassian.com', 'atlassian.com', 'suffolklatchcompany.co.uk')
+    if sender_domain in pdf_domains and service:
+        attachments = message.get('attachments', [])
+        if attachments:
+            for attachment in attachments:
+                if attachment.get('mime_type', '').startswith('application/pdf'):
+                    pdf_task_info = {
+                        'attachment_id': attachment.get('attachment_id'),
+                        'filename': attachment.get('filename', 'receipt.pdf')
+                    }
+                    break
+
+    # For Translink, extract PDF link from email body
+    if sender_domain == 'translink.co.uk' and not pdf_task_info:
+        html_body = message.get('body_html', '')
+        link_match = re.search(r'href="([^"]+)"[^>]*>\s*Click here to view your receipt', html_body, re.IGNORECASE)
+        if link_match:
+            receipt_url = link_match.group(1)
+            pdf_task_info = {
+                'external_url': receipt_url,
+                'filename': 'translink_receipt.pdf'
+            }
+
+    # Build receipt data dictionary
+    receipt_data = {
+        'thread_id': message.get('thread_id'),
+        'sender_email': sender_email,
+        'sender_name': sender_name,
+        'subject': subject,
+        'received_at': message.get('received_at'),
+        'merchant_domain': sender_domain,
+        'merchant_name': parsed_data.get('merchant_name'),
+        'merchant_name_normalized': parsed_data.get('merchant_name_normalized'),
+        'total_amount': parsed_data.get('total_amount'),
+        'currency_code': parsed_data.get('currency_code', 'GBP'),
+        'receipt_date': parsed_data.get('receipt_date'),
+        'order_id': parsed_data.get('order_id'),
+        'line_items': parsed_data.get('line_items'),
+        'receipt_hash': None,
+        'parse_method': parsed_data.get('parse_method', 'unknown'),
+        'parse_confidence': parsed_data.get('parse_confidence', 0),
+        'parsing_status': parsed_data.get('parsing_status', 'unparseable'),
+        'parsing_error': parsed_data.get('parsing_error'),
+        'llm_cost_cents': parsed_data.get('llm_cost_cents'),
+        'raw_schema_data': {
+            'snippet': message.get('snippet'),
+            'attachments': message.get('attachments', []),
+            'list_unsubscribe': message.get('list_unsubscribe', ''),
+            'x_mailer': message.get('x_mailer', ''),
+        }
+    }
+
+    # Compute receipt hash if we have key data
+    if receipt_data.get('merchant_name') and receipt_data.get('total_amount'):
+        receipt_data['receipt_hash'] = compute_receipt_hash(
+            merchant_name=receipt_data['merchant_name'],
+            amount=receipt_data['total_amount'],
+            receipt_date=receipt_data.get('receipt_date'),
+            order_id=receipt_data.get('order_id')
+        )
+
+    # Set PDF processing status if we have PDFs to process
+    if pdf_task_info:
+        receipt_data['pdf_processing_status'] = 'pending'
+
+    return {
+        'action': 'store',
+        'message_id': message_id,
+        'message': message,  # For email_content storage
+        'connection_id': connection_id,
+        'receipt_data': receipt_data,
+        'pdf_task_info': pdf_task_info,
+        'sender_domain': sender_domain
     }
 
 
@@ -758,7 +1358,8 @@ def start_sync(
         else:
             sync_type = 'full'
 
-    print(f"📧 Starting {sync_type} sync for connection {connection_id}")
+    logger.info(f"Starting {sync_type} sync for connection {connection_id}",
+               extra={'connection_id': connection_id, 'sync_type': sync_type})
 
     if sync_type == 'incremental':
         return sync_receipts_incremental(connection_id)

@@ -15,6 +15,10 @@ Confidence scoring:
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Tuple
 import database_postgres as database
+from mcp.logging_config import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 
 def normalize_datetime(dt: datetime) -> datetime:
@@ -31,9 +35,11 @@ def normalize_datetime(dt: datetime) -> datetime:
 AUTO_MATCH_THRESHOLD = 70  # Auto-match if confidence >= 70
 CONFIRMATION_THRESHOLD = 60  # Suggest match if confidence >= 60
 AMOUNT_TOLERANCE_PERCENT = 2.0  # 2% tolerance for fuzzy amount match
-DATE_TOLERANCE_SAME_DAY = 1  # ±1 day for "same day"
-DATE_TOLERANCE_CLOSE = 3  # ±3 days for close match
-DATE_TOLERANCE_WIDE = 7  # ±7 days for wide match
+# Optimized date tolerances (Phase 3 - based on benchmarking showing receipts often 1-2 days before txn)
+DATE_TOLERANCE_SAME_DAY = 2    # ±2 days (increased from ±1)
+DATE_TOLERANCE_CLOSE = 4       # ±4 days (increased from ±3)
+DATE_TOLERANCE_WIDE = 10       # ±10 days (increased from ±7)
+DATE_PREFERENCE_BEFORE = 5     # Bonus for receipts 1-4 days BEFORE transaction (common pattern)
 
 
 def match_all_gmail_receipts(user_id: int = 1) -> dict:
@@ -141,8 +147,29 @@ def match_all_gmail_receipts(user_id: int = 1) -> dict:
                             )
                             total_sources_added += 1
                         except Exception as e:
-                            # Skip duplicate enrichment sources (CardinalityViolation)
-                            print(f"   ⚠️  Skipping duplicate enrichment source: {e}")
+                            # CRITICAL FIX: Only skip actual duplicates, log real errors
+                            error_msg = str(e).lower()
+                            if 'duplicate' in error_msg or 'unique constraint' in error_msg:
+                                # This is a genuine duplicate - safe to skip
+                                logger.debug("Skipping duplicate enrichment source")
+                            else:
+                                # This is a real error (FK violation, connection error, etc.)
+                                logger.error(
+                                    f"Failed to add enrichment source: {e}",
+                                    extra={'receipt_id': receipt.get('id'), 'transaction_id': match.get('transaction_id')},
+                                    exc_info=True
+                                )
+
+                                # Track error for statistics
+                                try:
+                                    from mcp.error_tracking import GmailError, ErrorStage
+                                    error = GmailError.from_exception(
+                                        e, ErrorStage.MATCH,
+                                        context={'receipt_id': receipt['id'], 'transaction_id': match['transaction_id']}
+                                    )
+                                    error.log()  # connection_id/sync_job_id not available here
+                                except:
+                                    pass  # Don't let error tracking crash matching
 
                     matches_details.append({
                         'receipt_id': receipt['id'],
@@ -266,10 +293,11 @@ def calculate_match_confidence(
     if not amount_exact and not amount_fuzzy:
         return 0, None
 
-    # Date matching
-    date_diff = abs((receipt_date - txn_date).days)
+    # Date matching (keep sign to detect early receipts)
+    date_diff_days = (receipt_date - txn_date).days  # Negative = receipt before txn
+    date_diff_abs = abs(date_diff_days)
 
-    if date_diff > DATE_TOLERANCE_WIDE:
+    if date_diff_abs > DATE_TOLERANCE_WIDE:
         return 0, None
 
     # Merchant matching
@@ -283,31 +311,31 @@ def calculate_match_confidence(
     confidence = 0
     match_method = None
 
-    if amount_exact and date_diff <= DATE_TOLERANCE_SAME_DAY and merchant_match:
+    if amount_exact and date_diff_abs <= DATE_TOLERANCE_SAME_DAY and merchant_match:
         confidence = 100
         match_method = 'exact_amount_date_merchant'
 
-    elif amount_exact and date_diff <= DATE_TOLERANCE_CLOSE and merchant_match:
+    elif amount_exact and date_diff_abs <= DATE_TOLERANCE_CLOSE and merchant_match:
         confidence = 95
         match_method = 'exact_amount_close_date_merchant'
 
-    elif amount_exact and date_diff <= DATE_TOLERANCE_CLOSE:
+    elif amount_exact and date_diff_abs <= DATE_TOLERANCE_CLOSE:
         confidence = 85
         match_method = 'exact_amount_close_date'
 
-    elif amount_exact and date_diff <= DATE_TOLERANCE_WIDE and merchant_match:
+    elif amount_exact and date_diff_abs <= DATE_TOLERANCE_WIDE and merchant_match:
         confidence = 90
         match_method = 'exact_amount_wide_date_merchant'
 
-    elif amount_exact and date_diff <= DATE_TOLERANCE_WIDE:
+    elif amount_exact and date_diff_abs <= DATE_TOLERANCE_WIDE:
         confidence = 75
         match_method = 'exact_amount_wide_date'
 
-    elif amount_fuzzy and date_diff <= DATE_TOLERANCE_WIDE and merchant_match:
+    elif amount_fuzzy and date_diff_abs <= DATE_TOLERANCE_WIDE and merchant_match:
         confidence = 80
         match_method = 'fuzzy_amount_wide_date_merchant'
 
-    elif amount_fuzzy and date_diff <= DATE_TOLERANCE_WIDE:
+    elif amount_fuzzy and date_diff_abs <= DATE_TOLERANCE_WIDE:
         confidence = 70
         match_method = 'fuzzy_amount_wide_date'
 
@@ -315,12 +343,26 @@ def calculate_match_confidence(
         confidence = 65
         match_method = 'fuzzy_amount_merchant'
 
+    # BONUS: Receipt 1-4 days BEFORE transaction (common pattern from benchmarking)
+    if confidence > 0 and -4 <= date_diff_days <= -1:
+        confidence = min(100, confidence + DATE_PREFERENCE_BEFORE)
+        match_method += '_early_receipt'
+
     return confidence, match_method
 
 
 def is_amount_exact_match(receipt_amount: float, txn_amount: float) -> bool:
-    """Check if amounts match exactly (within rounding)."""
-    return abs(float(receipt_amount) - float(txn_amount)) < 0.01
+    """
+    Check if amounts match exactly (within rounding).
+    Phase 3 optimization: Higher tolerance for small amounts to account for fees/rounding.
+    """
+    diff = abs(float(receipt_amount) - float(txn_amount))
+
+    # Small amounts (< £5): ±£0.50 tolerance for fees/rounding
+    # Large amounts: ±£0.01 (original behavior)
+    threshold = 0.50 if receipt_amount < 5.0 else 0.01
+
+    return diff < threshold
 
 
 def is_amount_fuzzy_match(receipt_amount: float, txn_amount: float) -> bool:
@@ -491,13 +533,17 @@ def save_match(
             match_method=match_method
         )
 
-        # Update receipt status
-        database.update_gmail_receipt_status(receipt_id, 'matched')
+        # Match is now recorded in gmail_transaction_matches table
+        # parsing_status remains 'parsed' - matching is an independent dimension
 
         return True
 
     except Exception as e:
-        print(f"   ⚠️  Failed to save match: {e}")
+        logger.error(
+            f"Failed to save match: {e}",
+            extra={'transaction_id': transaction_id, 'receipt_id': receipt_id},
+            exc_info=True
+        )
         return False
 
 

@@ -77,6 +77,12 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      # Logging configuration
+      LOG_DIR: /app/.claude/logs
+
+    volumes:
+      - ./backend:/app
+      - ./.claude/logs:/app/.claude/logs
 
     depends_on:
       postgres:
@@ -118,6 +124,123 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+    networks:
+      - spending-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: spending-backend
+    restart: unless-stopped
+    command: ["python3", "app.py"]
+
+    environment:
+      # Database connection (use Docker service name as host)
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-spending_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spending_password}
+      POSTGRES_DB: ${POSTGRES_DB:-spending_db}
+      DB_TYPE: postgres
+      # Redis configuration (use Docker service name as host)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # Celery broker/backend (use Docker Redis service)
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      # Flask configuration
+      FLASK_ENV: ${FLASK_ENV:-development}
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-your_flask_secret_key_change_me}
+      FRONTEND_URL: http://localhost:${FRONTEND_PORT:-5173}
+      # LLM API keys (passed through from .env)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # LLM Configuration
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-5-20250929}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-30}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+      LLM_BATCH_SIZE: ${LLM_BATCH_SIZE:-10}
+      LLM_CACHE_ENABLED: ${LLM_CACHE_ENABLED:-true}
+      # Google OAuth for Gmail integration
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:5000/api/gmail/callback}
+      # TrueLayer API
+      TRUELAYER_CLIENT_ID: ${TRUELAYER_CLIENT_ID:-}
+      TRUELAYER_CLIENT_SECRET: ${TRUELAYER_CLIENT_SECRET:-}
+      TRUELAYER_REDIRECT_URI: ${TRUELAYER_REDIRECT_URI:-http://localhost:5000/api/truelayer/callback}
+      TRUELAYER_ENVIRONMENT: ${TRUELAYER_ENVIRONMENT:-production}
+      # Amazon Business API
+      AMAZON_BUSINESS_CLIENT_ID: ${AMAZON_BUSINESS_CLIENT_ID:-}
+      AMAZON_BUSINESS_CLIENT_SECRET: ${AMAZON_BUSINESS_CLIENT_SECRET:-}
+      AMAZON_BUSINESS_ENVIRONMENT: ${AMAZON_BUSINESS_ENVIRONMENT:-sandbox}
+      AMAZON_BUSINESS_REGION: ${AMAZON_BUSINESS_REGION:-UK}
+      # Token encryption
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      # MinIO object storage (use Docker service name)
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      # Gmail Configuration
+      GMAIL_BULK_WRITES: ${GMAIL_BULK_WRITES:-true}
+      GMAIL_PARALLEL_FETCH: ${GMAIL_PARALLEL_FETCH:-false}
+
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+
+    volumes:
+      - ./backend:/app
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    networks:
+      - spending-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: spending-frontend
+    restart: unless-stopped
+
+    environment:
+      VITE_BACKEND_URL: http://localhost:${BACKEND_PORT:-5000}
+
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+    depends_on:
+      - backend
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5173 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
     networks:
       - spending-network

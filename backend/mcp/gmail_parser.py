@@ -21,7 +21,11 @@ except ImportError:
     EXTRUCT_AVAILABLE = False
 
 import database_postgres as database
-from mcp.gmail_vendor_parsers import get_vendor_parser
+from mcp.gmail_parsers.base import get_vendor_parser
+from mcp.logging_config import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 
 # Domain to merchant name mappings for known senders
@@ -1447,6 +1451,7 @@ def parse_receipt(receipt_id: int) -> dict:
     sender_name = receipt.get('sender_name', '')
     sender_domain = receipt.get('merchant_domain', '')
     list_unsubscribe = raw_data.get('list_unsubscribe', '')
+    received_at = receipt.get('received_at')  # Get timestamp for date fallback
 
     # Prepare text for filtering
     text_body_cleaned = text_body or html_to_text(html_body)
@@ -1465,19 +1470,23 @@ def parse_receipt(receipt_id: int) -> dict:
     )
 
     if not is_receipt:
-        print(f"   ⏭️  Pre-filter rejected ({filter_reason}): receipt {receipt_id}")
+        logger.debug(f"Pre-filter rejected: {filter_reason}", extra={'receipt_id': receipt_id})
         return mark_receipt_unparseable(
             receipt_id,
             f'Pre-filtered: {filter_reason}'
         )
 
-    print(f"   ✓ Pre-filter passed ({filter_reason}): receipt {receipt_id}")
+    logger.debug(f"Pre-filter passed: {filter_reason}", extra={'receipt_id': receipt_id})
 
     # STEP 3: Try Schema.org extraction (highest confidence)
     if html_body:
         schema_result = extract_schema_org(html_body)
         if schema_result and schema_result.get('merchant_name'):
-            print(f"   ✅ Schema.org parsing succeeded for receipt {receipt_id}")
+            # Fallback: use email received_at timestamp if no date was parsed
+            if not schema_result.get('receipt_date') and received_at:
+                schema_result['receipt_date'] = received_at.strftime('%Y-%m-%d') if hasattr(received_at, 'strftime') else str(received_at)
+                schema_result['date_source'] = 'email_received'
+            logger.info("Schema.org parsing succeeded", extra={'receipt_id': receipt_id, 'parse_method': 'schema_org'})
             return update_receipt_with_parsed_data(receipt_id, schema_result)
 
     # STEP 4: Try vendor-specific parser (high confidence for known formats)
@@ -1487,7 +1496,14 @@ def parse_receipt(receipt_id: int) -> dict:
         # Accept vendor result if it has amount OR at least identified the merchant
         # (e.g., Amazon "Ordered:" emails may not have parseable amounts)
         if vendor_result and (vendor_result.get('total_amount') or vendor_result.get('merchant_name_normalized')):
-            print(f"   ✅ Vendor parsing ({vendor_result.get('parse_method')}) succeeded for receipt {receipt_id}")
+            # Fallback: use email received_at timestamp if no date was parsed
+            if not vendor_result.get('receipt_date') and received_at:
+                vendor_result['receipt_date'] = received_at.strftime('%Y-%m-%d') if hasattr(received_at, 'strftime') else str(received_at)
+                vendor_result['date_source'] = 'email_received'
+            logger.info(
+                f"Vendor parsing succeeded: {vendor_result.get('parse_method')}",
+                extra={'receipt_id': receipt_id, 'parse_method': vendor_result.get('parse_method')}
+            )
             return update_receipt_with_parsed_data(receipt_id, vendor_result)
 
     # STEP 5: Try pattern-based extraction
@@ -1503,10 +1519,14 @@ def parse_receipt(receipt_id: int) -> dict:
     if pattern_result and pattern_result.get('total_amount'):
         merchant = pattern_result.get('merchant_name', '')
         if is_valid_merchant_name(merchant):
-            print(f"   ✅ Pattern parsing succeeded for receipt {receipt_id}")
+            # Fallback: use email received_at timestamp if no date was parsed
+            if not pattern_result.get('receipt_date') and received_at:
+                pattern_result['receipt_date'] = received_at.strftime('%Y-%m-%d') if hasattr(received_at, 'strftime') else str(received_at)
+                pattern_result['date_source'] = 'email_received'
+            logger.info("Pattern parsing succeeded", extra={'receipt_id': receipt_id, 'parse_method': 'pattern'})
             return update_receipt_with_parsed_data(receipt_id, pattern_result)
         else:
-            print(f"   ⚠️  Pattern found invalid merchant name: '{merchant}'")
+            logger.warning(f"Pattern found invalid merchant name: '{merchant}'", extra={'receipt_id': receipt_id})
             pattern_result['merchant_name'] = None  # Clear invalid merchant
 
     # STEP 6: Try LLM extraction as fallback
@@ -1516,18 +1536,26 @@ def parse_receipt(receipt_id: int) -> dict:
         body_text=text_body_cleaned
     )
     if llm_result and llm_result.get('total_amount'):
-        print(f"   ✅ LLM parsing succeeded for receipt {receipt_id}")
+        # Fallback: use email received_at timestamp if no date was parsed
+        if not llm_result.get('receipt_date') and received_at:
+            llm_result['receipt_date'] = received_at.strftime('%Y-%m-%d') if hasattr(received_at, 'strftime') else str(received_at)
+            llm_result['date_source'] = 'email_received'
+        logger.info("LLM parsing succeeded", extra={'receipt_id': receipt_id, 'parse_method': 'llm'})
         return update_receipt_with_parsed_data(receipt_id, llm_result)
 
     # Fall back to pattern data if we have VALID merchant at least
     if pattern_result and pattern_result.get('merchant_name'):
         merchant = pattern_result.get('merchant_name', '')
         if is_valid_merchant_name(merchant):
+            # Fallback: use email received_at timestamp if no date was parsed
+            if not pattern_result.get('receipt_date') and received_at:
+                pattern_result['receipt_date'] = received_at.strftime('%Y-%m-%d') if hasattr(received_at, 'strftime') else str(received_at)
+                pattern_result['date_source'] = 'email_received'
             pattern_result['parse_confidence'] = 50
             pattern_result['parsing_status'] = 'parsed'
             return update_receipt_with_parsed_data(receipt_id, pattern_result)
         else:
-            print(f"   ⚠️  Fallback rejected invalid merchant name: '{merchant}'")
+            logger.warning(f"Fallback rejected invalid merchant name: '{merchant}'", extra={'receipt_id': receipt_id})
 
     # Mark as unparseable
     return mark_receipt_unparseable(receipt_id, 'No structured data, patterns, or LLM extraction succeeded')
@@ -1541,7 +1569,8 @@ def parse_receipt_content(
     sender_domain: str = None,
     sender_name: str = None,
     list_unsubscribe: str = None,
-    skip_llm: bool = True
+    skip_llm: bool = True,
+    received_at: datetime = None
 ) -> dict:
     """
     Parse email content directly (without database).
@@ -1565,12 +1594,14 @@ def parse_receipt_content(
         sender_name: Sender display name from email header
         list_unsubscribe: List-Unsubscribe header value
         skip_llm: Skip LLM extraction (faster, no cost)
+        received_at: Email received timestamp (fallback for receipt_date if not parsed)
 
     Returns:
         Dictionary with parsed data:
         - merchant_name, merchant_name_normalized
         - total_amount, currency_code
-        - order_id, receipt_date
+        - order_id, receipt_date (falls back to received_at if not parsed from body)
+        - date_source ('email_body' or 'email_received' to track date origin)
         - line_items (list)
         - parse_method, parse_confidence
         - parsing_status ('parsed' or 'unparseable')
@@ -1609,16 +1640,51 @@ def parse_receipt_content(
     # Vendor parsers are tailored to specific email formats and should take priority
     vendor_parser = get_vendor_parser(sender_domain)
     if vendor_parser:
-        vendor_result = vendor_parser(html_body or '', text_body or '', subject)
-        # Accept vendor result if it has amount, order_id, OR identified the merchant
-        if vendor_result and (vendor_result.get('total_amount') or vendor_result.get('order_id') or vendor_result.get('merchant_name_normalized')):
-            vendor_result['parsing_status'] = 'parsed'
-            return vendor_result
+        try:
+            vendor_result = vendor_parser(html_body or '', text_body or '', subject)
+            # Accept vendor result if it has amount, order_id, OR identified the merchant
+            if vendor_result and (vendor_result.get('total_amount') or vendor_result.get('order_id') or vendor_result.get('merchant_name_normalized')):
+                # Fallback: use email received_at timestamp if no date was parsed from body
+                if not vendor_result.get('receipt_date') and received_at:
+                    vendor_result['receipt_date'] = received_at.strftime('%Y-%m-%d')
+                    vendor_result['date_source'] = 'email_received'  # Track where date came from
+                vendor_result['parsing_status'] = 'parsed'
+                return vendor_result
+        except Exception as e:
+            # CRITICAL FIX: Vendor parser crashes should not kill entire sync
+            # Log error and fall through to next parser instead
+            from mcp.logging_config import get_logger
+            from mcp.error_tracking import GmailError, ErrorStage
+
+            logger = get_logger(__name__)
+            logger.error(
+                f"Vendor parser failed for {sender_domain}: {e}",
+                extra={'merchant': sender_domain},
+                exc_info=True
+            )
+
+            # Track error for statistics (don't let error tracking itself crash sync)
+            try:
+                error = GmailError.from_exception(
+                    e, ErrorStage.VENDOR_PARSE,
+                    context={'sender_domain': sender_domain, 'message_id': message_id}
+                )
+                # Note: connection_id and sync_job_id not available at this level
+                # Error will be logged but not linked to specific job
+                error.log()
+            except:
+                pass  # Silently ignore error tracking failures
+
+            # Fall through to next parser (schema.org, pattern, etc.)
 
     # STEP 4: Try Schema.org extraction (fallback for vendors without custom parsers)
     if html_body:
         schema_result = extract_schema_org(html_body)
         if schema_result and schema_result.get('merchant_name'):
+            # Fallback: use email received_at timestamp if no date was parsed
+            if not schema_result.get('receipt_date') and received_at:
+                schema_result['receipt_date'] = received_at.strftime('%Y-%m-%d')
+                schema_result['date_source'] = 'email_received'
             schema_result['parsing_status'] = 'parsed'
             return schema_result
 
@@ -1635,6 +1701,10 @@ def parse_receipt_content(
     if pattern_result and pattern_result.get('total_amount'):
         merchant = pattern_result.get('merchant_name', '')
         if is_valid_merchant_name(merchant):
+            # Fallback: use email received_at timestamp if no date was parsed
+            if not pattern_result.get('receipt_date') and received_at:
+                pattern_result['receipt_date'] = received_at.strftime('%Y-%m-%d')
+                pattern_result['date_source'] = 'email_received'
             pattern_result['parsing_status'] = 'parsed'
             return pattern_result
 
@@ -1646,6 +1716,10 @@ def parse_receipt_content(
             body_text=text_body_cleaned
         )
         if llm_result and llm_result.get('total_amount'):
+            # Fallback: use email received_at timestamp if no date was parsed
+            if not llm_result.get('receipt_date') and received_at:
+                llm_result['receipt_date'] = received_at.strftime('%Y-%m-%d')
+                llm_result['date_source'] = 'email_received'
             llm_result['parsing_status'] = 'parsed'
             return llm_result
 
@@ -1653,6 +1727,10 @@ def parse_receipt_content(
     if pattern_result and pattern_result.get('merchant_name'):
         merchant = pattern_result.get('merchant_name', '')
         if is_valid_merchant_name(merchant):
+            # Fallback: use email received_at timestamp if no date was parsed
+            if not pattern_result.get('receipt_date') and received_at:
+                pattern_result['receipt_date'] = received_at.strftime('%Y-%m-%d')
+                pattern_result['date_source'] = 'email_received'
             pattern_result['parse_confidence'] = 50
             pattern_result['parsing_status'] = 'parsed'
             return pattern_result
@@ -1735,7 +1813,7 @@ def _extract_with_extruct(html_body: str) -> Optional[dict]:
                             return parse_schema_org_order(node)
 
     except Exception as e:
-        print(f"   ⚠️ Extruct extraction failed: {e}")
+        logger.warning(f"Extruct extraction failed: {e}", exc_info=True)
 
     return None
 
@@ -2054,12 +2132,12 @@ def extract_with_llm(
             OllamaProvider,
         )
     except ImportError as e:
-        print(f"   ⚠️  LLM providers not available: {e}")
+        logger.warning(f"LLM providers not available: {e}")
         return None
 
     config = load_llm_config()
     if not config:
-        print("   ⚠️  LLM not configured for Gmail parsing")
+        logger.debug("LLM not configured for Gmail parsing")
         return None
 
     # Build provider
@@ -2073,7 +2151,7 @@ def extract_with_llm(
 
     ProviderClass = providers.get(config.provider)
     if not ProviderClass:
-        print(f"   ⚠️  Unknown LLM provider: {config.provider}")
+        logger.warning(f"Unknown LLM provider: {config.provider}")
         return None
 
     try:
@@ -2092,7 +2170,7 @@ def extract_with_llm(
 
         provider = ProviderClass(**provider_kwargs)
     except Exception as e:
-        print(f"   ⚠️  Failed to initialize LLM provider: {e}")
+        logger.error(f"Failed to initialize LLM provider: {e}", exc_info=True)
         return None
 
     # Truncate body to avoid token limits (max ~2000 chars)
@@ -2170,10 +2248,10 @@ Important:
         }
 
     except json.JSONDecodeError as e:
-        print(f"   ⚠️  LLM returned invalid JSON: {e}")
+        logger.warning(f"LLM returned invalid JSON: {e}")
         return None
     except Exception as e:
-        print(f"   ⚠️  LLM extraction failed: {e}")
+        logger.error(f"LLM extraction failed: {e}", exc_info=True)
         return None
 
 
@@ -2636,7 +2714,7 @@ def parse_pending_receipts(connection_id: int, limit: int = 100) -> dict:
                 results['failed'] += 1
 
         except Exception as e:
-            print(f"   ⚠️  Failed to parse receipt {receipt['id']}: {e}")
+            logger.error(f"Failed to parse receipt {receipt['id']}: {e}", extra={'receipt_id': receipt['id']}, exc_info=True)
             results['failed'] += 1
 
     return results

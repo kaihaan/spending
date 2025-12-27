@@ -13,11 +13,12 @@ from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 import os
 import json
+from datetime import datetime
 from dotenv import load_dotenv
 import cache_manager
 
-# Load environment variables (override=True to prefer .env file over shell env)
-load_dotenv(override=True)
+# Load environment variables from .env file (don't override existing env vars for Docker compatibility)
+load_dotenv(override=False)
 
 # Database connection configuration
 DB_CONFIG = {
@@ -3051,8 +3052,9 @@ def backfill_pre_enrichment_status() -> dict:
 
 def save_amazon_business_connection(access_token: str, refresh_token: str,
                                      expires_in: int, region: str = 'UK',
-                                     user_id: int = 1) -> int:
-    """Save Amazon Business OAuth connection.
+                                     user_id: int = 1, marketplace_id: str = None,
+                                     is_sandbox: bool = True) -> int:
+    """Save Amazon SP-API OAuth connection.
 
     Args:
         access_token: OAuth access token
@@ -3060,6 +3062,8 @@ def save_amazon_business_connection(access_token: str, refresh_token: str,
         expires_in: Token expiry in seconds
         region: Amazon region (UK, US, DE, etc.)
         user_id: User ID (default 1)
+        marketplace_id: Amazon marketplace ID (e.g., A1F83G8C2ARO7P for UK)
+        is_sandbox: True for sandbox environment, False for production
 
     Returns:
         Connection ID
@@ -3068,21 +3072,32 @@ def save_amazon_business_connection(access_token: str, refresh_token: str,
 
     expires_at = datetime.now() + timedelta(seconds=expires_in)
 
+    # Set default marketplace ID if not provided
+    if marketplace_id is None:
+        marketplace_ids = {
+            'UK': 'A1F83G8C2ARO7P',
+            'US': 'ATVPDKIKX0DER',
+            'DE': 'A1PA6795UKMFR9'
+        }
+        marketplace_id = marketplace_ids.get(region, 'A1F83G8C2ARO7P')
+
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute('''
                 INSERT INTO amazon_business_connections
-                (user_id, access_token, refresh_token, token_expires_at, region)
-                VALUES (%s, %s, %s, %s, %s)
+                (user_id, access_token, refresh_token, token_expires_at, region,
+                 marketplace_id, is_sandbox)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
-            ''', (user_id, access_token, refresh_token, expires_at, region))
+            ''', (user_id, access_token, refresh_token, expires_at, region,
+                  marketplace_id, is_sandbox))
             connection_id = cursor.fetchone()[0]
             conn.commit()
             return connection_id
 
 
 def get_amazon_business_connection(connection_id: int = None, user_id: int = 1) -> dict:
-    """Get Amazon Business connection details.
+    """Get Amazon SP-API connection details.
 
     Args:
         connection_id: Specific connection ID, or None for user's active connection
@@ -3096,14 +3111,16 @@ def get_amazon_business_connection(connection_id: int = None, user_id: int = 1) 
             if connection_id:
                 cursor.execute('''
                     SELECT id, user_id, access_token, refresh_token, token_expires_at,
-                           region, status, created_at, updated_at
+                           region, status, marketplace_id, is_sandbox, last_synced_at,
+                           created_at, updated_at
                     FROM amazon_business_connections
                     WHERE id = %s
                 ''', (connection_id,))
             else:
                 cursor.execute('''
                     SELECT id, user_id, access_token, refresh_token, token_expires_at,
-                           region, status, created_at, updated_at
+                           region, status, marketplace_id, is_sandbox, last_synced_at,
+                           created_at, updated_at
                     FROM amazon_business_connections
                     WHERE user_id = %s AND status = 'active'
                     ORDER BY created_at DESC
@@ -3477,6 +3494,120 @@ def clear_amazon_business_data() -> dict:
                 'matches_deleted': matches_count,
                 'line_items_deleted': items_count
             }
+
+
+def get_amazon_business_order_by_id(order_id: str) -> dict:
+    """Get Amazon Business order by order_id for duplicate detection.
+
+    Args:
+        order_id: Amazon Order ID (e.g., AmazonOrderId from SP-API)
+
+    Returns:
+        Order dictionary or None if not found
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT * FROM amazon_business_orders
+                WHERE order_id = %s
+            ''', (order_id,))
+            return cursor.fetchone()
+
+
+def insert_amazon_business_order(order: dict) -> int:
+    """Insert a single Amazon Business order.
+
+    Args:
+        order: Order dictionary with normalized fields
+
+    Returns:
+        Order database ID, or None if duplicate
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO amazon_business_orders
+                (order_id, order_date, region, purchase_order_number, order_status,
+                 buyer_name, buyer_email, subtotal, tax, shipping, net_total, currency, item_count)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (order_id) DO NOTHING
+                RETURNING id
+            ''', (
+                order.get('order_id'),
+                order.get('order_date'),
+                order.get('region'),
+                order.get('purchase_order_number'),
+                order.get('order_status'),
+                order.get('buyer_name'),
+                order.get('buyer_email'),
+                order.get('subtotal'),
+                order.get('tax', 0),
+                order.get('shipping', 0),
+                order.get('net_total'),
+                order.get('currency', 'GBP'),
+                order.get('item_count', 0)
+            ))
+
+            result = cursor.fetchone()
+            conn.commit()
+            return result[0] if result else None
+
+
+def insert_amazon_business_line_item(item: dict) -> int:
+    """Insert a single Amazon Business line item.
+
+    Args:
+        item: Line item dictionary with normalized fields
+
+    Returns:
+        Line item database ID
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO amazon_business_line_items
+                (order_id, line_item_id, asin, title, brand, category, quantity, unit_price, total_price, seller_name)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            ''', (
+                item.get('order_id'),
+                item.get('line_item_id'),
+                item.get('asin'),
+                item.get('title'),
+                item.get('brand'),
+                item.get('category'),
+                item.get('quantity', 1),
+                item.get('unit_price', 0),
+                item.get('total_price', 0),
+                item.get('seller_name')
+            ))
+
+            result = cursor.fetchone()
+            conn.commit()
+            return result[0] if result else None
+
+
+def update_amazon_business_product_summaries() -> int:
+    """Update product_summary field by concatenating line items.
+
+    Concatenates all line_items.title for each order into the product_summary field.
+
+    Returns:
+        Number of orders updated
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                UPDATE amazon_business_orders o
+                SET product_summary = (
+                    SELECT string_agg(title, ', ')
+                    FROM amazon_business_line_items
+                    WHERE order_id = o.order_id
+                )
+                WHERE product_summary IS NULL OR product_summary = ''
+            ''')
+            conn.commit()
+            return cursor.rowcount
 
 
 # ============================================================================
@@ -4055,9 +4186,9 @@ def save_gmail_receipt(connection_id: int, message_id: str, receipt_data: dict) 
                  subject, received_at, merchant_name, merchant_name_normalized,
                  merchant_domain, order_id, total_amount, currency_code, receipt_date,
                  line_items, receipt_hash, parse_method, parse_confidence,
-                 raw_schema_data, llm_cost_cents, parsing_status)
+                 raw_schema_data, llm_cost_cents, parsing_status, pdf_processing_status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s)
+                        %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (message_id) DO UPDATE
                 SET merchant_name = EXCLUDED.merchant_name,
                     merchant_name_normalized = EXCLUDED.merchant_name_normalized,
@@ -4065,6 +4196,7 @@ def save_gmail_receipt(connection_id: int, message_id: str, receipt_data: dict) 
                     parse_method = EXCLUDED.parse_method,
                     parse_confidence = EXCLUDED.parse_confidence,
                     parsing_status = EXCLUDED.parsing_status,
+                    pdf_processing_status = EXCLUDED.pdf_processing_status,
                     updated_at = NOW()
                 RETURNING id
             ''', (
@@ -4077,11 +4209,86 @@ def save_gmail_receipt(connection_id: int, message_id: str, receipt_data: dict) 
                 receipt_data.get('receipt_date'), json.dumps(receipt_data.get('line_items')),
                 receipt_data.get('receipt_hash'), receipt_data.get('parse_method'),
                 receipt_data.get('parse_confidence'), json.dumps(receipt_data.get('raw_schema_data')),
-                receipt_data.get('llm_cost_cents'), receipt_data.get('parsing_status', 'parsed')
+                receipt_data.get('llm_cost_cents'), receipt_data.get('parsing_status', 'parsed'),
+                receipt_data.get('pdf_processing_status', 'none')
             ))
             result = cursor.fetchone()
             conn.commit()
             return result[0] if result else None
+
+
+def save_gmail_receipt_bulk(receipts: list) -> dict:
+    """
+    Bulk insert Gmail receipts (Phase 3 Optimization).
+
+    Args:
+        receipts: List of tuples (connection_id, message_id, receipt_data)
+
+    Returns:
+        dict with 'inserted' count, 'receipt_ids' list, 'message_to_id' mapping
+    """
+    if not receipts:
+        return {'inserted': 0, 'receipt_ids': [], 'message_to_id': {}}
+
+    # Prepare data tuples
+    data = []
+    message_ids_order = []
+    for connection_id, message_id, receipt_data in receipts:
+        message_ids_order.append(message_id)
+        data.append((
+            connection_id, message_id, receipt_data.get('thread_id'),
+            receipt_data.get('sender_email'), receipt_data.get('sender_name'),
+            receipt_data.get('subject'), receipt_data.get('received_at'),
+            receipt_data.get('merchant_name'), receipt_data.get('merchant_name_normalized'),
+            receipt_data.get('merchant_domain'), receipt_data.get('order_id'),
+            receipt_data.get('total_amount'), receipt_data.get('currency_code', 'GBP'),
+            receipt_data.get('receipt_date'), json.dumps(receipt_data.get('line_items')),
+            receipt_data.get('receipt_hash'), receipt_data.get('parse_method'),
+            receipt_data.get('parse_confidence'), json.dumps(receipt_data.get('raw_schema_data')),
+            receipt_data.get('llm_cost_cents'), receipt_data.get('parsing_status', 'parsed'),
+            receipt_data.get('pdf_processing_status', 'none')
+        ))
+
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            # Use execute_values for efficient bulk insert with RETURNING
+            from psycopg2.extras import execute_values
+
+            results = execute_values(
+                cursor,
+                '''
+                INSERT INTO gmail_receipts
+                (connection_id, message_id, thread_id, sender_email, sender_name,
+                 subject, received_at, merchant_name, merchant_name_normalized,
+                 merchant_domain, order_id, total_amount, currency_code, receipt_date,
+                 line_items, receipt_hash, parse_method, parse_confidence,
+                 raw_schema_data, llm_cost_cents, parsing_status, pdf_processing_status)
+                VALUES %s
+                ON CONFLICT (message_id) DO UPDATE
+                SET merchant_name = EXCLUDED.merchant_name,
+                    merchant_name_normalized = EXCLUDED.merchant_name_normalized,
+                    total_amount = EXCLUDED.total_amount,
+                    parse_method = EXCLUDED.parse_method,
+                    parse_confidence = EXCLUDED.parse_confidence,
+                    parsing_status = EXCLUDED.parsing_status,
+                    pdf_processing_status = EXCLUDED.pdf_processing_status,
+                    updated_at = NOW()
+                RETURNING id, message_id
+                ''',
+                data,
+                fetch=True
+            )
+            conn.commit()
+
+            # Build message_id -> receipt_id mapping
+            receipt_ids = [row[0] for row in results]
+            message_to_id = {row[1]: row[0] for row in results}
+
+            return {
+                'inserted': len(results),
+                'receipt_ids': receipt_ids,
+                'message_to_id': message_to_id
+            }
 
 
 def save_gmail_email_content(message: dict) -> int:
@@ -4127,6 +4334,64 @@ def save_gmail_email_content(message: dict) -> int:
             result = cursor.fetchone()
             conn.commit()
             return result[0] if result else None
+
+
+def save_gmail_email_content_bulk(messages: list) -> dict:
+    """
+    Bulk insert email content (Phase 3 Optimization).
+
+    Args:
+        messages: List of message dicts from gmail_client.get_message_content()
+
+    Returns:
+        dict with 'inserted' count and 'failed' list of message_ids
+    """
+    if not messages:
+        return {'inserted': 0, 'failed': []}
+
+    # Prepare data tuples
+    data = []
+    for msg in messages:
+        data.append((
+            msg.get('message_id'),
+            msg.get('thread_id'),
+            msg.get('subject'),
+            msg.get('from'),
+            msg.get('to'),
+            msg.get('date'),
+            msg.get('list_unsubscribe'),
+            msg.get('x_mailer'),
+            msg.get('body_html'),
+            msg.get('body_text'),
+            msg.get('snippet'),
+            json.dumps(msg.get('attachments', [])),
+            msg.get('size_estimate'),
+            msg.get('received_at')
+        ))
+
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            # Use execute_values for efficient bulk insert
+            from psycopg2.extras import execute_values
+
+            execute_values(
+                cursor,
+                '''
+                INSERT INTO gmail_email_content
+                (message_id, thread_id, subject, from_header, to_header, date_header,
+                 list_unsubscribe, x_mailer, body_html, body_text, snippet,
+                 attachments, size_estimate, received_at)
+                VALUES %s
+                ON CONFLICT (message_id) DO UPDATE
+                SET body_html = EXCLUDED.body_html,
+                    body_text = EXCLUDED.body_text,
+                    attachments = EXCLUDED.attachments,
+                    fetched_at = NOW()
+                ''',
+                data
+            )
+            conn.commit()
+            return {'inserted': cursor.rowcount, 'failed': []}
 
 
 def get_gmail_email_content(message_id: str) -> dict:
@@ -4293,15 +4558,9 @@ def save_gmail_match(truelayer_transaction_id: int, gmail_receipt_id: int,
             result = cursor.fetchone()
             conn.commit()
 
-            # Update receipt status to matched
+            # Match is now recorded in gmail_transaction_matches table
+            # parsing_status remains 'parsed' - matching is an independent dimension
             if result:
-                cursor.execute('''
-                    UPDATE gmail_receipts
-                    SET parsing_status = 'matched', updated_at = NOW()
-                    WHERE id = %s
-                ''', (gmail_receipt_id,))
-                conn.commit()
-
                 # --- Add to multi-source enrichment table ---
                 # Get Gmail receipt details for enrichment source
                 cursor.execute('''
@@ -4740,8 +4999,8 @@ def get_source_coverage_dates(user_id: int = 1) -> dict:
 
             # Get max Apple transaction date
             cursor.execute('''
-                SELECT MAX(transaction_date) as max_date,
-                       MIN(transaction_date) as min_date,
+                SELECT MAX(order_date) as max_date,
+                       MIN(order_date) as min_date,
                        COUNT(*) as count
                 FROM apple_transactions
             ''')
@@ -4900,6 +5159,125 @@ def update_gmail_receipt_status(
             ''', (parsing_status, parsing_error, receipt_id))
             conn.commit()
             return cursor.rowcount > 0
+
+
+def update_gmail_receipt_pdf_status(
+    receipt_id: int,
+    pdf_status: str,
+    error: str = None
+) -> bool:
+    """
+    Update PDF processing status for a Gmail receipt.
+
+    Args:
+        receipt_id: Receipt ID
+        pdf_status: Status ('none', 'pending', 'processing', 'completed', 'failed')
+        error: Error message if failed (optional)
+
+    Returns:
+        bool: True if update succeeded
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            if error:
+                cursor.execute('''
+                    UPDATE gmail_receipts
+                    SET pdf_processing_status = %s,
+                        pdf_retry_count = pdf_retry_count + 1,
+                        pdf_last_error = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                ''', (pdf_status, error, receipt_id))
+            else:
+                cursor.execute('''
+                    UPDATE gmail_receipts
+                    SET pdf_processing_status = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                ''', (pdf_status, receipt_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+
+def update_gmail_receipt_from_pdf(
+    receipt_id: int,
+    pdf_data: dict,
+    minio_object_key: str = None
+) -> bool:
+    """
+    Update receipt with data parsed from PDF.
+
+    Args:
+        receipt_id: Receipt ID
+        pdf_data: Parsed data from PDF (merchant_name, total_amount, etc.)
+        minio_object_key: MinIO object key for the stored PDF (optional)
+
+    Returns:
+        bool: True if update succeeded
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            # Build UPDATE statement dynamically based on available PDF data
+            updates = []
+            params = []
+
+            if 'merchant_name' in pdf_data and pdf_data['merchant_name']:
+                updates.append('merchant_name = %s')
+                params.append(pdf_data['merchant_name'])
+                # Also set normalized name
+                updates.append('merchant_name_normalized = LOWER(%s)')
+                params.append(pdf_data['merchant_name'])
+
+            if 'total_amount' in pdf_data and pdf_data['total_amount'] is not None:
+                updates.append('total_amount = %s')
+                params.append(float(pdf_data['total_amount']))
+
+            if 'currency_code' in pdf_data and pdf_data['currency_code']:
+                updates.append('currency_code = %s')
+                params.append(pdf_data['currency_code'])
+
+            if 'receipt_date' in pdf_data and pdf_data['receipt_date']:
+                updates.append('receipt_date = %s')
+                params.append(pdf_data['receipt_date'])
+
+            if 'order_id' in pdf_data and pdf_data['order_id']:
+                updates.append('order_id = %s')
+                params.append(pdf_data['order_id'])
+
+            if 'line_items' in pdf_data and pdf_data['line_items']:
+                import json
+                updates.append('line_items = %s::jsonb')
+                params.append(json.dumps(pdf_data['line_items']))
+
+            if 'parse_method' in pdf_data and pdf_data['parse_method']:
+                updates.append('parse_method = %s')
+                params.append(pdf_data['parse_method'])
+
+            if 'parse_confidence' in pdf_data and pdf_data['parse_confidence'] is not None:
+                updates.append('parse_confidence = %s')
+                params.append(int(pdf_data['parse_confidence']))
+
+            # Always update parsing status to 'parsed' if we got data
+            updates.append('parsing_status = %s')
+            params.append('parsed')
+
+            # Always update timestamp
+            updates.append('updated_at = NOW()')
+
+            # Add receipt_id for WHERE clause
+            params.append(receipt_id)
+
+            if updates:
+                query = f'''
+                    UPDATE gmail_receipts
+                    SET {', '.join(updates)}
+                    WHERE id = %s
+                '''
+                cursor.execute(query, params)
+                conn.commit()
+                return cursor.rowcount > 0
+
+            return False
 
 
 def get_pending_gmail_receipts(connection_id: int, limit: int = 100) -> list:
@@ -5187,7 +5565,7 @@ def get_gmail_merchants_summary(user_id: int = 1) -> dict:
                             SUBSTRING(r.sender_email FROM '@(.+)$')) as display_name,
                         COUNT(*) as receipt_count,
                         COUNT(*) FILTER (WHERE r.parsing_status = 'parsed') as parsed_count,
-                        COUNT(*) FILTER (WHERE r.parsing_status = 'matched') as matched_count,
+                        COUNT(DISTINCT m.id) as matched_count,
                         COUNT(*) FILTER (WHERE r.parsing_status = 'pending') as pending_count,
                         COUNT(*) FILTER (WHERE r.parsing_status IN ('failed', 'unparseable')) as failed_count,
                         MIN(r.received_at) as earliest_receipt,
@@ -5201,6 +5579,7 @@ def get_gmail_merchants_summary(user_id: int = 1) -> dict:
                         COUNT(*) FILTER (WHERE r.parse_method = 'pattern') as pattern_parsed_count,
                         COUNT(*) FILTER (WHERE r.parse_method = 'llm') as llm_parsed_count
                     FROM gmail_receipts r
+                    LEFT JOIN gmail_transaction_matches m ON r.id = m.gmail_receipt_id
                     JOIN gmail_connections c ON r.connection_id = c.id
                     WHERE c.user_id = %s
                       AND c.connection_status = 'active'
@@ -7113,6 +7492,516 @@ def delete_pdf_attachment(attachment_id: int) -> bool:
             cursor.execute('DELETE FROM pdf_attachments WHERE id = %s', (attachment_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+
+# ============================================================================
+# USER AUTHENTICATION FUNCTIONS
+# ============================================================================
+
+def insert_user(username: str, email: str, password_hash: str, is_admin: bool = False) -> int:
+    """Create a new user account.
+
+    Args:
+        username: Unique username for login
+        email: Unique email address
+        password_hash: Hashed password (pbkdf2:sha256:600000)
+        is_admin: Admin privilege flag (default False)
+
+    Returns:
+        User ID of created user
+
+    Raises:
+        Exception: If username or email already exists
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO users (username, email, password_hash, is_admin, is_active)
+                VALUES (%s, %s, %s, %s, TRUE)
+                RETURNING id
+            ''', (username, email, password_hash, is_admin))
+            user_id = cursor.fetchone()[0]
+            conn.commit()
+            return user_id
+
+
+def get_user_by_id(user_id: int) -> dict:
+    """Get user by ID (for Flask-Login user_loader).
+
+    Args:
+        user_id: User ID to lookup
+
+    Returns:
+        Dictionary with user data or None if not found
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, username, email, password_hash, is_admin, is_active,
+                       last_login_at, created_at, updated_at
+                FROM users
+                WHERE id = %s AND is_active = TRUE
+            ''', (user_id,))
+            result = cursor.fetchone()
+            return dict(result) if result else None
+
+
+def get_user_by_username(username: str) -> dict:
+    """Get user by username (for login).
+
+    Args:
+        username: Username to lookup
+
+    Returns:
+        Dictionary with user data or None if not found
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, username, email, password_hash, is_admin, is_active,
+                       last_login_at, created_at, updated_at
+                FROM users
+                WHERE username = %s
+            ''', (username,))
+            result = cursor.fetchone()
+            return dict(result) if result else None
+
+
+def get_user_by_email(email: str) -> dict:
+    """Get user by email.
+
+    Args:
+        email: Email address to lookup
+
+    Returns:
+        Dictionary with user data or None if not found
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, username, email, password_hash, is_admin, is_active,
+                       last_login_at, created_at, updated_at
+                FROM users
+                WHERE email = %s
+            ''', (email,))
+            result = cursor.fetchone()
+            return dict(result) if result else None
+
+
+def update_user_last_login(user_id: int, timestamp: datetime) -> bool:
+    """Update user's last login timestamp.
+
+    Args:
+        user_id: User ID
+        timestamp: Login timestamp
+
+    Returns:
+        True if updated successfully
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                UPDATE users
+                SET last_login_at = %s
+                WHERE id = %s
+            ''', (timestamp, user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+
+def log_security_event(
+    user_id: int,
+    event_type: str,
+    success: bool,
+    ip_address: str = None,
+    user_agent: str = None,
+    metadata: dict = None
+) -> int:
+    """Log security-related event to audit table.
+
+    Args:
+        user_id: User ID (can be None for anonymous events)
+        event_type: Event type (login_success, login_failed, rate_limit_exceeded, etc.)
+        success: Whether event was successful
+        ip_address: Client IP address (optional)
+        user_agent: Client user agent (optional)
+        metadata: Additional context as JSON (optional)
+
+    Returns:
+        Audit log entry ID
+    """
+    import json
+
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO security_audit_log
+                (user_id, event_type, success, ip_address, user_agent, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+            ''', (
+                user_id,
+                event_type,
+                success,
+                ip_address,
+                user_agent,
+                json.dumps(metadata or {})
+            ))
+            log_id = cursor.fetchone()[0]
+            conn.commit()
+            return log_id
+
+
+# =============================================================================
+# GMAIL ERROR TRACKING & STATISTICS
+# =============================================================================
+
+def save_gmail_error(
+    connection_id: int = None,
+    sync_job_id: int = None,
+    message_id: str = None,
+    receipt_id: int = None,
+    error_stage: str = None,
+    error_type: str = None,
+    error_message: str = None,
+    stack_trace: str = None,
+    error_context: dict = None,
+    is_retryable: bool = False
+) -> int:
+    """Save Gmail processing error to database.
+
+    Args:
+        connection_id: Gmail connection ID (optional)
+        sync_job_id: Sync job ID (optional)
+        message_id: Gmail message ID where error occurred (optional)
+        receipt_id: Receipt ID where error occurred (optional)
+        error_stage: Error stage (fetch, parse, vendor_parse, etc.)
+        error_type: Error type (api_error, timeout, parse_error, etc.)
+        error_message: Human-readable error message
+        stack_trace: Full exception stack trace (optional)
+        error_context: Additional context as dict (sender_domain, etc.)
+        is_retryable: Whether error is retryable
+
+    Returns:
+        Error record ID
+    """
+    import json
+
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO gmail_processing_errors
+                (connection_id, sync_job_id, message_id, receipt_id,
+                 error_stage, error_type, error_message, stack_trace,
+                 error_context, is_retryable)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            ''', (
+                connection_id,
+                sync_job_id,
+                message_id,
+                receipt_id,
+                error_stage,
+                error_type,
+                error_message,
+                stack_trace,
+                json.dumps(error_context or {}),
+                is_retryable
+            ))
+            error_id = cursor.fetchone()[0]
+            conn.commit()
+            return error_id
+
+
+def save_gmail_parse_statistic(
+    connection_id: int,
+    sync_job_id: int = None,
+    message_id: str = None,
+    sender_domain: str = None,
+    merchant_normalized: str = None,
+    parse_method: str = None,
+    merchant_extracted: bool = None,
+    brand_extracted: bool = None,
+    amount_extracted: bool = None,
+    date_extracted: bool = None,
+    order_id_extracted: bool = None,
+    line_items_extracted: bool = None,
+    match_attempted: bool = False,
+    match_success: bool = None,
+    match_confidence: int = None,
+    parse_duration_ms: int = None,
+    llm_cost_cents: int = None,
+    parsing_status: str = 'unparseable',
+    parsing_error: str = None
+) -> int:
+    """Save parse statistics for a single message.
+
+    Args:
+        connection_id: Gmail connection ID (required)
+        sync_job_id: Sync job ID (optional)
+        message_id: Gmail message ID
+        sender_domain: Email sender domain
+        merchant_normalized: Normalized merchant name
+        parse_method: Parse method used (vendor_amazon, schema_org, etc.)
+        merchant_extracted: Whether merchant name was extracted
+        brand_extracted: Whether brand was extracted
+        amount_extracted: Whether amount was extracted
+        date_extracted: Whether date was extracted
+        order_id_extracted: Whether order ID was extracted
+        line_items_extracted: Whether line items were extracted
+        match_attempted: Whether transaction matching was attempted
+        match_success: Whether matching succeeded
+        match_confidence: Match confidence score (0-100)
+        parse_duration_ms: Parse duration in milliseconds
+        llm_cost_cents: LLM cost in cents (if LLM used)
+        parsing_status: Status (parsed, unparseable, filtered, failed)
+        parsing_error: Error message if parsing failed
+
+    Returns:
+        Statistics record ID
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO gmail_parse_statistics
+                (connection_id, sync_job_id, message_id, sender_domain,
+                 merchant_normalized, parse_method,
+                 merchant_extracted, brand_extracted, amount_extracted,
+                 date_extracted, order_id_extracted, line_items_extracted,
+                 match_attempted, match_success, match_confidence,
+                 parse_duration_ms, llm_cost_cents,
+                 parsing_status, parsing_error)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            ''', (
+                connection_id, sync_job_id, message_id, sender_domain,
+                merchant_normalized, parse_method,
+                merchant_extracted, brand_extracted, amount_extracted,
+                date_extracted, order_id_extracted, line_items_extracted,
+                match_attempted, match_success, match_confidence,
+                parse_duration_ms, llm_cost_cents,
+                parsing_status, parsing_error
+            ))
+            stat_id = cursor.fetchone()[0]
+            conn.commit()
+            return stat_id
+
+
+def update_gmail_sync_job_stats(sync_job_id: int, stats: dict) -> bool:
+    """Update sync job with aggregated statistics.
+
+    Args:
+        sync_job_id: Sync job ID
+        stats: Statistics dict with structure:
+            {
+                "by_parse_method": {"vendor_amazon": {"parsed": 45, "failed": 2}},
+                "by_merchant": {"amazon.co.uk": {"parsed": 45, "failed": 2}},
+                "datapoint_extraction": {
+                    "merchant": {"attempted": 100, "success": 95}
+                },
+                "errors": {"api_error": 3, "parse_error": 5}
+            }
+
+    Returns:
+        True if updated successfully
+    """
+    import json
+
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                UPDATE gmail_sync_jobs
+                SET stats = %s
+                WHERE id = %s
+            ''', (json.dumps(stats), sync_job_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+
+def get_gmail_error_summary(
+    connection_id: int = None,
+    sync_job_id: int = None,
+    days: int = 7
+) -> dict:
+    """Get error summary for dashboard.
+
+    Args:
+        connection_id: Filter by connection ID (optional)
+        sync_job_id: Filter by sync job ID (optional)
+        days: Look back N days (default 7)
+
+    Returns:
+        Dictionary with error statistics:
+        {
+            "total_errors": 150,
+            "by_stage": {"vendor_parse": 45, "fetch": 30, ...},
+            "by_type": {"parse_error": 60, "timeout": 20, ...},
+            "retryable_count": 50,
+            "recent_errors": [...]
+        }
+    """
+    from datetime import datetime, timedelta
+    from psycopg2.extras import RealDictCursor
+
+    cutoff = datetime.now() - timedelta(days=days)
+
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Build WHERE clause
+            where_clauses = ["occurred_at >= %s"]
+            params = [cutoff]
+
+            if connection_id:
+                where_clauses.append("connection_id = %s")
+                params.append(connection_id)
+
+            if sync_job_id:
+                where_clauses.append("sync_job_id = %s")
+                params.append(sync_job_id)
+
+            where_sql = " AND ".join(where_clauses)
+
+            # Get total count
+            cursor.execute(f'''
+                SELECT COUNT(*) as total
+                FROM gmail_processing_errors
+                WHERE {where_sql}
+            ''', params)
+            total = cursor.fetchone()['total']
+
+            # Get errors by stage
+            cursor.execute(f'''
+                SELECT error_stage, COUNT(*) as count
+                FROM gmail_processing_errors
+                WHERE {where_sql}
+                GROUP BY error_stage
+                ORDER BY count DESC
+            ''', params)
+            by_stage = {row['error_stage']: row['count'] for row in cursor.fetchall()}
+
+            # Get errors by type
+            cursor.execute(f'''
+                SELECT error_type, COUNT(*) as count
+                FROM gmail_processing_errors
+                WHERE {where_sql}
+                GROUP BY error_type
+                ORDER BY count DESC
+            ''', params)
+            by_type = {row['error_type']: row['count'] for row in cursor.fetchall()}
+
+            # Get retryable count
+            cursor.execute(f'''
+                SELECT COUNT(*) as count
+                FROM gmail_processing_errors
+                WHERE {where_sql} AND is_retryable = TRUE
+            ''', params)
+            retryable_count = cursor.fetchone()['count']
+
+            # Get recent errors
+            cursor.execute(f'''
+                SELECT id, error_stage, error_type, error_message,
+                       message_id, occurred_at, is_retryable
+                FROM gmail_processing_errors
+                WHERE {where_sql}
+                ORDER BY occurred_at DESC
+                LIMIT 20
+            ''', params)
+            recent_errors = []
+            for row in cursor.fetchall():
+                error = dict(row)
+                if error['occurred_at']:
+                    error['occurred_at'] = error['occurred_at'].isoformat()
+                recent_errors.append(error)
+
+            return {
+                'total_errors': total,
+                'by_stage': by_stage,
+                'by_type': by_type,
+                'retryable_count': retryable_count,
+                'recent_errors': recent_errors
+            }
+
+
+def get_gmail_merchant_statistics(
+    connection_id: int = None,
+    merchant: str = None,
+    parse_method: str = None,
+    days: int = 30
+) -> list:
+    """Get merchant parsing statistics.
+
+    Args:
+        connection_id: Filter by connection ID (optional)
+        merchant: Filter by merchant normalized name (optional)
+        parse_method: Filter by parse method (optional)
+        days: Look back N days (default 30)
+
+    Returns:
+        List of merchant statistics dictionaries
+    """
+    from datetime import datetime, timedelta
+    from psycopg2.extras import RealDictCursor
+
+    cutoff = datetime.now() - timedelta(days=days)
+
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Build WHERE clause
+            where_clauses = ["created_at >= %s"]
+            params = [cutoff]
+
+            if connection_id:
+                where_clauses.append("connection_id = %s")
+                params.append(connection_id)
+
+            if merchant:
+                where_clauses.append("merchant_normalized = %s")
+                params.append(merchant)
+
+            if parse_method:
+                where_clauses.append("parse_method = %s")
+                params.append(parse_method)
+
+            where_sql = " AND ".join(where_clauses)
+
+            # Aggregate statistics by merchant and parse method
+            cursor.execute(f'''
+                SELECT
+                    merchant_normalized,
+                    sender_domain,
+                    parse_method,
+                    COUNT(*) as total_attempts,
+                    SUM(CASE WHEN parsing_status = 'parsed' THEN 1 ELSE 0 END) as parsed_count,
+                    SUM(CASE WHEN parsing_status != 'parsed' THEN 1 ELSE 0 END) as failed_count,
+                    SUM(CASE WHEN merchant_extracted THEN 1 ELSE 0 END) as merchant_extracted_count,
+                    SUM(CASE WHEN brand_extracted THEN 1 ELSE 0 END) as brand_extracted_count,
+                    SUM(CASE WHEN amount_extracted THEN 1 ELSE 0 END) as amount_extracted_count,
+                    SUM(CASE WHEN date_extracted THEN 1 ELSE 0 END) as date_extracted_count,
+                    SUM(CASE WHEN order_id_extracted THEN 1 ELSE 0 END) as order_id_extracted_count,
+                    SUM(CASE WHEN line_items_extracted THEN 1 ELSE 0 END) as line_items_extracted_count,
+                    SUM(CASE WHEN match_attempted THEN 1 ELSE 0 END) as match_attempted_count,
+                    SUM(CASE WHEN match_success THEN 1 ELSE 0 END) as match_success_count,
+                    AVG(match_confidence) as avg_match_confidence,
+                    AVG(parse_duration_ms) as avg_parse_duration_ms,
+                    SUM(COALESCE(llm_cost_cents, 0)) as total_llm_cost_cents
+                FROM gmail_parse_statistics
+                WHERE {where_sql}
+                GROUP BY merchant_normalized, sender_domain, parse_method
+                ORDER BY total_attempts DESC
+            ''', params)
+
+            stats = []
+            for row in cursor.fetchall():
+                stat = dict(row)
+                # Calculate success rates
+                total = stat['total_attempts']
+                if total > 0:
+                    stat['success_rate'] = round(stat['parsed_count'] / total * 100, 1)
+                    stat['merchant_extraction_rate'] = round(stat['merchant_extracted_count'] / total * 100, 1)
+                    stat['amount_extraction_rate'] = round(stat['amount_extracted_count'] / total * 100, 1)
+                stats.append(stat)
+
+            return stats
 
 
 # Initialize connection pool on import
