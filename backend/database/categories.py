@@ -1219,3 +1219,11 @@ def get_essential_category_names():
 
 
 # =============================================================================
+
+
+def get_all_categories():
+    """Get all categories from database."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('SELECT id, name, rule_pattern, ai_suggested FROM categories')
+            return cursor.fetchall()

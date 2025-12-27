@@ -190,10 +190,10 @@ def get_cache_stats() -> dict:
     stats = cache_manager.get_cache_stats()
 
     return {
-        'total_cached': stats['total'],
+        'total_cached': stats.get('total_keys', 0),
         'providers': {},
         'pending_retries': 0,
-        'cache_size_bytes': stats['size_bytes']
+        'cache_size_bytes': stats.get('used_memory', 'N/A')
     }
 
 

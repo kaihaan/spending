@@ -148,11 +148,16 @@ def get_receipts(user_id: int, limit: int = 100, offset: int = 0,
     Returns:
         List of receipt dicts
     """
+    # Get connection for user
+    connection = get_connection(user_id)
+    if not connection:
+        return []
+
     return gmail.get_gmail_receipts(
-        user_id=user_id,
+        connection_id=connection['id'],
         limit=limit,
         offset=offset,
-        parsing_status=parsing_status
+        status=parsing_status
     )
 
 
