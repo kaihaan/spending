@@ -76,14 +76,34 @@ Anthropic (Claude), OpenAI, Google (Gemini), DeepSeek, Ollama (local)
 
 ### Gmail Integration Architecture
 
+**CRITICAL: Gmail sync runs in Celery background workers**
+- All Gmail sync operations execute via Celery tasks (not in Flask process)
+- Output (print statements, PERFORMANCE SUMMARY) appears in **Celery worker logs**, not Flask terminal
+- To view sync output: `docker logs -f spending-celery` or check Celery worker terminal
+- Celery code changes require **rebuild**: `docker-compose build celery && docker-compose up -d celery`
+- Simple restart does NOT load new code!
+
 **Parsing flow** (`gmail_parser.py`):
 1. Pre-filter (reject marketing emails)
-2. **Vendor-specific parsers** (highest priority) → `gmail_vendor_parsers.py`
+2. **Vendor-specific parsers** (highest priority) → `gmail_parsers/` package
 3. Schema.org extraction (fallback)
 4. Pattern extraction
 5. LLM enrichment (optional)
 
-**Amazon email types** (each has own parser in `gmail_vendor_parsers.py`):
+**Gmail Parser Organization** (`backend/mcp/gmail_parsers/`):
+- `base.py` - Parser registry, decorator, and shared utilities (parse_amount, parse_date_text)
+- `amazon.py` - Amazon orders, Fresh, Business, cancellations, refunds (7 parsers)
+- `apple.py` - Apple App Store and iTunes receipts
+- `financial.py` - PayPal and payment processors
+- `rides.py` - Uber, Lyft, Lime
+- `food_delivery.py` - Deliveroo
+- `ecommerce.py` - eBay, Etsy, Vinted
+- `retail.py` - John Lewis, Uniqlo, CEX, World of Books
+- `digital_services.py` - Microsoft, Google, Figma, Atlassian, Anthropic
+- `travel.py` - Airbnb, British Airways, DHL
+- `specialty.py` - All other specialty vendors
+
+**Amazon email types** (parsers in `gmail_parsers/amazon.py`):
 | Type | Detection | Parser Function |
 |------|-----------|-----------------|
 | `fresh` | Subject contains "Fresh" | `parse_amazon_fresh()` |
@@ -92,6 +112,11 @@ Anthropic (Claude), OpenAI, Google (Gemini), DeepSeek, Ollama (local)
 
 **Development flags** in `gmail_sync.py`:
 - `SKIP_DUPLICATE_CHECK_DEV = True` → Re-parse existing emails (set False for production)
+
+**Performance tracking** (Phase 1 optimization):
+- `SyncPerformanceTracker` class measures API calls, DB writes, throughput
+- PERFORMANCE SUMMARY logged at end of each sync
+- Configuration via `.env`: `GMAIL_SYNC_WORKERS`, `GMAIL_PARALLEL_FETCH`
 
 **Data Storage Architecture:**
 
@@ -116,6 +141,81 @@ Anthropic (Claude), OpenAI, Google (Gemini), DeepSeek, Ollama (local)
 
 ---
 
+### Amazon Selling Partner API (SP-API) Integration
+
+**CRITICAL: SP-API is NOT for consumer purchases - it's for Seller accounts**
+- SP-API provides access to orders placed **with you as a seller**, not your personal purchases
+- This integration works because the user has an Amazon Seller/Business account
+- Uses Login with Amazon (LWA) OAuth, NOT standard consumer OAuth
+
+**Authentication Flow** (`amazon_sp_auth.py`):
+1. OAuth URL: `https://sellercentral.amazon.com/apps/authorize/consent`
+2. **NO scopes** - Uses Application ID instead
+3. Restricted Data Tokens (RDT) for personally identifiable information
+4. Token encryption at rest using Fernet cipher
+
+**API Client** (`amazon_sp_client.py`):
+- Base URL varies by environment and region:
+  - Sandbox: `https://sandbox.sellingpartnerapi-na.amazon.com`
+  - Production EU: `https://sellingpartnerapi-eu.amazon.com`
+  - Production NA: `https://sellingpartnerapi-na.amazon.com`
+- **Custom auth header:** `x-amz-access-token` (NOT `Authorization: Bearer`)
+- Marketplace-based requests (UK: `A1F83G8C2ARO7P`)
+
+**Endpoints Used** (Orders API v0):
+| Endpoint | Purpose | Rate Limit |
+|----------|---------|------------|
+| `GET /orders/v0/orders` | List orders with filters | 0.0167 req/sec (1 per 6s) |
+| `GET /orders/v0/orders/{orderId}/orderItems` | Get line items | 0.5 req/sec (1 per 2s) |
+
+**Rate Limiting CRITICAL:**
+- getOrders: **1 request per 6 seconds** (much stricter than other APIs)
+- getOrderItems: **1 request per 2 seconds**
+- 429 responses trigger automatic retry with Retry-After header
+
+**Data Storage:**
+| Table | Purpose |
+|-------|---------|
+| `amazon_business_connections` | OAuth tokens, marketplace config |
+| `amazon_business_orders` | Order summaries (reused from old integration) |
+| `amazon_business_line_items` | Individual items (reused) |
+| `truelayer_amazon_business_matches` | Links to bank transactions |
+
+**Environment Configuration:**
+```bash
+AMAZON_SP_ENVIRONMENT=sandbox  # or 'production'
+AMAZON_SP_MARKETPLACE_ID=A1F83G8C2ARO7P  # UK
+AMAZON_SP_REGION=UK
+AMAZON_BUSINESS_CLIENT_ID=amzn1.application-oa2-client.xxx
+AMAZON_BUSINESS_CLIENT_SECRET=amzn1.oa2-cs.v1.xxx
+```
+
+**Marketplace IDs:**
+- UK: `A1F83G8C2ARO7P`
+- US: `ATVPDKIKX0DER`
+- Germany: `A1PA6795UKMFR9`
+
+**Sandbox vs Production:**
+- Sandbox provides test data for development
+- Different base URL: `sandbox.sellingpartnerapi-na.amazon.com`
+- Connection table tracks `is_sandbox` boolean
+- Must disconnect and re-authorize to switch modes
+
+**Key Differences from Other Integrations:**
+1. **No OAuth scopes** - Application ID-based authorization
+2. **Marketplace-specific** - Each request needs marketplace ID
+3. **Strict rate limits** - 6-second intervals for order fetching
+4. **Custom header** - `x-amz-access-token` instead of standard `Authorization`
+5. **Seller-centric** - API designed for business operations, not consumer use
+
+**Implementation Files:**
+- `backend/mcp/amazon_sp_auth.py` - OAuth and token management
+- `backend/mcp/amazon_sp_client.py` - API client with rate limiting
+- `backend/mcp/amazon_business_matcher.py` - Transaction matching (unchanged)
+- `postgres/init/08_amazon_sp_api_migration.sql` - Database schema updates
+
+---
+
 ## Development Commands
 
 ### Service Ports (non-standard)
@@ -123,40 +223,60 @@ Anthropic (Claude), OpenAI, Google (Gemini), DeepSeek, Ollama (local)
 |---------|------|
 | PostgreSQL | **5433** |
 | Redis | **6380** |
+| MinIO API | **9000** |
+| MinIO Console | **9001** |
 | Flask Backend | 5000 |
 | Vite Frontend | 5173 |
 
-### Prerequisites
+### Quick Start (All Services in Docker)
 ```bash
-# Start PostgreSQL and Redis
+# Start all services (backend, frontend, postgres, redis, celery, minio)
 docker-compose up -d
 
-# Verify running
-docker-compose ps
+# View logs for all services
+docker-compose logs -f
+
+# View logs for specific service
+docker-compose logs -f backend
+docker-compose logs -f frontend
+docker-compose logs -f celery
+
+# Rebuild after code changes (automatic with volume mounts)
+docker-compose restart backend
+docker-compose restart frontend
+
+# Rebuild Celery after code changes (requires full rebuild)
+docker-compose build celery && docker-compose up -d celery
+
+# Stop all services
+docker-compose down
+
+# Access the application
+# Frontend: http://localhost:5173
+# Backend API: http://localhost:5000
+# MinIO Console: http://localhost:9001
 ```
 
-### Backend
+### Alternative: Local Development (Legacy)
+If you prefer running backend/frontend locally outside Docker:
+
+**Backend:**
 ```bash
 source ./backend/venv/bin/activate
 cd ./backend
 export DB_TYPE=postgres
-python app.py
+python3 app.py
 # → http://localhost:5000
 ```
 
-### Frontend
+**Frontend:**
 ```bash
 cd ./frontend
 npm run dev
 # → http://localhost:5173
 ```
 
-### Celery Worker (for background enrichment)
-```bash
-source ./backend/venv/bin/activate
-cd ./backend
-celery -A celery_app worker --loglevel=info
-```
+**Note:** You still need to run `docker-compose up -d postgres redis minio` for infrastructure services.
 
 ### Database Admin
 ```bash
@@ -175,6 +295,7 @@ docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
    ```bash
    source ./backend/venv/bin/activate
    ```
+   **IMPORTANT**: Shells use `python3` NOT `python`. Always use `python3` in bash commands.
 
 2. **Database Configuration**:
    - **Primary DB:** PostgreSQL (via Docker, port **5433**)
@@ -191,33 +312,80 @@ docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
 4. **Context7 Documentation MCP Server**: Always use Context7 for code generation, setup/configuration steps, or library/API documentation. Use Context7 MCP tools to resolve library ID and get library docs automatically.
 
 5. **Docker Services (CRITICAL)**
-   All backend services run in Docker containers - `pkill` commands do NOT work:
+   All services run in Docker containers - `pkill` commands do NOT work:
    | Service | Container | Port |
    |---------|-----------|------|
    | PostgreSQL | `spending-postgres` | 5433 |
    | Redis | `spending-redis` | 6380 |
+   | Backend | `spending-backend` | 5000 |
+   | Frontend | `spending-frontend` | 5173 |
    | Celery | `spending-celery` | - |
    | MinIO | `spending-minio` | 9000 (API), 9001 (Console) |
 
-   **Celery code changes require REBUILD, not restart:**
-   ```bash
-   # For backend code changes (tasks, imports, config):
-   docker-compose build celery && docker-compose up -d celery
+   **Code changes and hot-reloading:**
+   - **Backend & Frontend:** Code changes auto-reload via mounted volumes (no rebuild needed)
+   - **Celery:** Code changes require REBUILD: `docker-compose build celery && docker-compose up -d celery`
 
-   # Simple restart does NOT pick up code changes:
-   docker restart spending-celery  # WRONG for code changes!
+   ```bash
+   # Backend/Frontend changes (hot-reload automatic):
+   # Just save your file - Flask and Vite will detect changes
+
+   # Force restart if needed:
+   docker-compose restart backend
+   docker-compose restart frontend
+
+   # Celery changes (requires rebuild):
+   docker-compose build celery && docker-compose up -d celery
    ```
 
    **Debug logging in Docker containers:**
-   - `print()` in Celery tasks is NOT visible in terminal
-   - Use `docker logs spending-celery` or write to files inside container
-   - Dev pattern: Write to `/tmp/debug.txt`, then `docker exec spending-celery cat /tmp/debug.txt`
+   - View logs: `docker-compose logs -f backend` or `docker-compose logs -f celery`
+   - `print()` statements in Flask/Celery appear in Docker logs, NOT local terminal
+   - Dev pattern: Use `docker-compose logs -f` in a separate terminal window
 
 6. **PostgreSQL Syntax Notes**
    PostgreSQL does NOT support `DELETE ... LIMIT`. Use subquery:
    ```sql
    DELETE FROM table WHERE id = (SELECT id FROM table WHERE condition LIMIT 1)
    ```
+
+7. **File Organization & Length (Python Best Practices)**
+
+   **File Length Guidelines:**
+   - **200-500 lines** is the sweet spot for maintainability and context management
+   - **Under 1000 lines** is a reasonable upper bound before considering splitting
+   - Very short files (< 50 lines) are fine for utilities, constants, or type definitions
+
+   **Why File Length Matters for Claude Code:**
+   - **Context window efficiency** — Shorter, focused files mean Claude can hold more relevant codebase in context
+   - **Edit precision** — Smaller files reduce unintended side effects
+   - **Faster iteration** — Less to re-read and re-process on each interaction
+
+   **Organizational Principles:**
+   - **Single responsibility** — Each file/module should do one thing well
+   - **Clear module boundaries** — Group related functionality, separate unrelated concerns
+   - **Explicit interfaces** — Use `__init__.py` to expose public APIs, keep implementation details in separate files
+   - **Flat is better than nested** — Avoid deep directory structures when a flatter layout suffices
+
+   **Python-Specific Structure:**
+   ```
+   backend/
+   ├── mcp/              # MCP components
+   │   ├── models/       # Data structures (one file per domain entity)
+   │   ├── services/     # Business logic (one file per service)
+   │   ├── utils/        # Small, focused utility modules
+   │   └── api/          # Endpoints/handlers
+   ├── tasks/            # Celery background tasks
+   ├── config/           # Configuration modules
+   └── tests/            # Mirror the source structure
+   ```
+
+   **Practical Tips:**
+   - If a file has multiple classes that don't interact much, split them
+   - Extract large functions (50+ lines) or complex logic into separate modules
+   - Keep configuration, constants, and type definitions in dedicated files
+   - Use descriptive filenames that indicate content without needing to open the file
+   - Goal: Make it easy for both humans and Claude to understand structure at a glance
 
 ---
 

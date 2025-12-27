@@ -10,40 +10,35 @@ Transaction management and analysis web application with bank integration and AI
 
 ## Prerequisites
 
+- Docker + Docker Compose
+
+**Optional (for local development without Docker):**
 - Node.js 18+
 - Python 3.12+
-- Docker + Docker Compose
 
 ## Quick Start
 
 ```bash
-# Environment
+# Environment setup
 cp .env.example .env
 # Edit .env with required credentials
 
-# Services
+# Start all services (backend, frontend, database, cache, workers)
 docker-compose up -d
 
-# Backend
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-export DB_TYPE=postgres
-python app.py
+# View logs
+docker-compose logs -f
 
-# Frontend
-cd frontend
-npm install
-npm run dev
+# Stop all services
+docker-compose down
 ```
 
-**Services:**
-- Backend: http://localhost:5000
+**Access:**
 - Frontend: http://localhost:5173
+- Backend API: http://localhost:5000
+- MinIO Console: http://localhost:9001
 - PostgreSQL: localhost:5433
 - Redis: localhost:6380
-- MinIO Console: http://localhost:9001
 
 ## Features
 
@@ -75,29 +70,47 @@ postgres/
 
 ## Development
 
-**Backend:**
-```bash
-source backend/venv/bin/activate
-cd backend
-export DB_TYPE=postgres
-python app.py
-```
+**All services run in Docker with hot-reloading enabled:**
 
-**Frontend:**
 ```bash
-cd frontend
-npm run dev
-```
+# Start all services
+docker-compose up -d
 
-**Celery Worker:**
-```bash
+# View logs for specific service
+docker-compose logs -f backend
+docker-compose logs -f frontend
+docker-compose logs -f celery
+
+# Restart after code changes (usually not needed - hot-reload is automatic)
+docker-compose restart backend
+docker-compose restart frontend
+
+# Celery requires rebuild for code changes
 docker-compose build celery && docker-compose up -d celery
-docker logs -f spending-celery
+
+# Database access
+docker exec -it spending-postgres psql -U spending_user -d spending_db
 ```
 
-**Database:**
+**Alternative: Local Development (without Docker)**
+If you prefer running backend/frontend outside Docker:
+
 ```bash
-docker exec -it spending-postgres psql -U spending_user -d spending_db
+# Start infrastructure services only
+docker-compose up -d postgres redis minio
+
+# Backend (separate terminal)
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+export DB_TYPE=postgres
+python3 app.py
+
+# Frontend (separate terminal)
+cd frontend
+npm install
+npm run dev
 ```
 
 ## Service Ports
@@ -113,17 +126,21 @@ docker exec -it spending-postgres psql -U spending_user -d spending_db
 
 ## Docker Containers
 
-| Container | Purpose |
-|-----------|---------|
-| `spending-postgres` | PostgreSQL 16 |
-| `spending-redis` | Redis 7 |
-| `spending-celery` | Background worker |
-| `spending-minio` | S3-compatible storage |
+| Container | Purpose | Hot-Reload |
+|-----------|---------|------------|
+| `spending-backend` | Flask API | ✅ Yes |
+| `spending-frontend` | Vite dev server | ✅ Yes |
+| `spending-postgres` | PostgreSQL 16 | N/A |
+| `spending-redis` | Redis 7 | N/A |
+| `spending-celery` | Background worker | ❌ No (requires rebuild) |
+| `spending-minio` | S3-compatible storage | N/A |
 
-**Note:** Code changes in Celery tasks require rebuild, not just restart:
-```bash
-docker-compose build celery && docker-compose up -d celery
-```
+**Hot-Reload:**
+- Backend & Frontend: Code changes automatically reload (no action needed)
+- Celery: Requires rebuild for code changes:
+  ```bash
+  docker-compose build celery && docker-compose up -d celery
+  ```
 
 ## License
 
