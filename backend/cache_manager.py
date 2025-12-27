@@ -7,6 +7,7 @@ Uses Redis DB 1 (DB 0 is reserved for Celery task queue).
 import json
 import redis
 import logging
+import os
 from functools import wraps
 from typing import Any, Optional, Callable
 from datetime import timedelta
@@ -29,9 +30,13 @@ def get_redis_client() -> Optional[redis.Redis]:
 
     if _redis_client is None:
         try:
+            # Use environment variables for Docker compatibility
+            redis_host = os.getenv('REDIS_HOST', 'localhost')
+            redis_port = int(os.getenv('REDIS_PORT', '6379'))
+
             _redis_client = redis.Redis(
-                host='localhost',
-                port=6380,
+                host=redis_host,
+                port=redis_port,
                 db=1,  # Use DB 1 for caching (DB 0 is for Celery)
                 decode_responses=True,
                 socket_connect_timeout=2,
