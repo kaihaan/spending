@@ -8,10 +8,10 @@ Includes rate limiting, pagination, and error handling.
 import os
 import time
 import base64
+import requests
 from datetime import datetime, timedelta
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import AuthorizedSession
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -25,17 +25,23 @@ BACKOFF_MULTIPLIER = 2
 # Google OAuth configuration (needed for automatic token refresh)
 GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 
+# Gmail API base URL
+GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1'
+
 
 def build_gmail_service(access_token: str, refresh_token: str = None):
     """
-    Build Gmail API service with credentials.
+    Build Gmail API session with credentials.
+
+    Uses requests-based AuthorizedSession to completely avoid httplib2
+    and its TLS compatibility issues. Returns session object for direct API calls.
 
     Args:
         access_token: Valid OAuth access token
         refresh_token: Optional refresh token for automatic refresh
 
     Returns:
-        Gmail API service object
+        AuthorizedSession object for making Gmail API requests
     """
     credentials = Credentials(
         token=access_token,
@@ -45,23 +51,30 @@ def build_gmail_service(access_token: str, refresh_token: str = None):
         client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
     )
 
-    service = build('gmail', 'v1', credentials=credentials)
-    return service
+    # Create requests-based session (completely avoids httplib2)
+    # This eliminates all SSL/TLS errors from httplib2 + OpenSSL incompatibility
+    session = AuthorizedSession(credentials)
+    session.timeout = 60  # Set default timeout for all requests
+
+    return session
 
 
-def fetch_with_backoff(request, max_retries: int = MAX_RETRIES):
+def fetch_with_backoff(session, method: str, url: str, max_retries: int = MAX_RETRIES, **kwargs):
     """
-    Execute Gmail API request with exponential backoff.
+    Execute Gmail API request with exponential backoff using requests.
 
     Args:
-        request: Gmail API request object
+        session: AuthorizedSession object
+        method: HTTP method ('GET', 'POST', etc.)
+        url: Full API URL
         max_retries: Maximum number of retries
+        **kwargs: Additional arguments to pass to session.request()
 
     Returns:
-        API response
+        Response JSON dict
 
     Raises:
-        HttpError: If request fails after all retries
+        requests.HTTPError: If request fails after all retries
     """
     delay = 1
     last_error = None
@@ -70,17 +83,27 @@ def fetch_with_backoff(request, max_retries: int = MAX_RETRIES):
         try:
             # Rate limiting
             time.sleep(RATE_LIMIT_DELAY)
-            return request.execute()
-        except HttpError as e:
+
+            response = session.request(method, url, timeout=60, **kwargs)
+            response.raise_for_status()
+
+            return response.json()
+
+        except requests.HTTPError as e:
             last_error = e
             # Check if retryable (429 rate limit, 500 server error)
-            if e.resp.status in [429, 500, 503]:
+            if e.response.status_code in [429, 500, 503]:
                 print(f"   ⚠️  Gmail API rate limited (attempt {attempt + 1}/{max_retries}), retrying in {delay}s...")
                 time.sleep(delay)
                 delay *= BACKOFF_MULTIPLIER
             else:
                 # Non-retryable error
                 raise
+        except requests.RequestException as e:
+            last_error = e
+            print(f"   ⚠️  Gmail API request failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s...")
+            time.sleep(delay)
+            delay *= BACKOFF_MULTIPLIER
 
     raise last_error
 
@@ -163,16 +186,16 @@ def build_receipt_query(from_date: datetime = None, to_date: datetime = None) ->
 
 
 def list_receipt_messages(
-    service,
+    session,
     query: str = None,
     page_token: str = None,
     max_results: int = 100
 ) -> dict:
     """
-    List messages matching receipt query.
+    List messages matching receipt query using requests.
 
     Args:
-        service: Gmail API service object
+        session: AuthorizedSession object
         query: Search query (defaults to receipt query)
         page_token: Pagination token
         max_results: Maximum messages per page (max 500)
@@ -184,14 +207,15 @@ def list_receipt_messages(
         query = build_receipt_query()
 
     try:
-        request = service.users().messages().list(
-            userId='me',
-            q=query,
-            maxResults=min(max_results, 500),
-            pageToken=page_token
-        )
+        url = f"{GMAIL_API_BASE}/users/me/messages"
+        params = {
+            'q': query,
+            'maxResults': min(max_results, 500)
+        }
+        if page_token:
+            params['pageToken'] = page_token
 
-        result = fetch_with_backoff(request)
+        result = fetch_with_backoff(session, 'GET', url, params=params)
 
         return {
             'messages': result.get('messages', []),
@@ -199,30 +223,27 @@ def list_receipt_messages(
             'resultSizeEstimate': result.get('resultSizeEstimate', 0)
         }
 
-    except HttpError as e:
+    except requests.HTTPError as e:
         print(f"❌ Gmail list messages error: {e}")
         raise
 
 
-def get_message_content(service, message_id: str) -> dict:
+def get_message_content(session, message_id: str) -> dict:
     """
-    Fetch full email content including body.
+    Fetch full email content including body using requests.
 
     Args:
-        service: Gmail API service object
+        session: AuthorizedSession object
         message_id: Gmail message ID
 
     Returns:
         Dictionary with email metadata and decoded body
     """
     try:
-        request = service.users().messages().get(
-            userId='me',
-            id=message_id,
-            format='full'
-        )
+        url = f"{GMAIL_API_BASE}/users/me/messages/{message_id}"
+        params = {'format': 'full'}
 
-        message = fetch_with_backoff(request)
+        message = fetch_with_backoff(session, 'GET', url, params=params)
 
         # Parse headers
         headers = {h['name'].lower(): h['value'] for h in message.get('payload', {}).get('headers', [])}
@@ -319,17 +340,17 @@ def get_message_content(service, message_id: str) -> dict:
             'attachments': attachments,
         }
 
-    except HttpError as e:
+    except requests.HTTPError as e:
         print(f"❌ Gmail get message error: {e}")
         raise
 
 
-def get_attachment_content(service, message_id: str, attachment_id: str) -> bytes:
+def get_attachment_content(session, message_id: str, attachment_id: str) -> bytes:
     """
-    Fetch attachment content from a Gmail message.
+    Fetch attachment content from a Gmail message using requests.
 
     Args:
-        service: Gmail API service object
+        session: AuthorizedSession object
         message_id: Gmail message ID
         attachment_id: Attachment ID from message parts
 
@@ -337,13 +358,9 @@ def get_attachment_content(service, message_id: str, attachment_id: str) -> byte
         Raw attachment bytes (decoded from base64)
     """
     try:
-        request = service.users().messages().attachments().get(
-            userId='me',
-            messageId=message_id,
-            id=attachment_id
-        )
+        url = f"{GMAIL_API_BASE}/users/me/messages/{message_id}/attachments/{attachment_id}"
 
-        attachment = fetch_with_backoff(request)
+        attachment = fetch_with_backoff(session, 'GET', url)
 
         # Attachment data is base64url encoded
         data = attachment.get('data', '')
@@ -352,17 +369,17 @@ def get_attachment_content(service, message_id: str, attachment_id: str) -> byte
 
         return b''
 
-    except HttpError as e:
+    except requests.HTTPError as e:
         print(f"❌ Gmail get attachment error: {e}")
         raise
 
 
-def get_pdf_attachments(service, message_id: str, attachments: list) -> list:
+def get_pdf_attachments(session, message_id: str, attachments: list) -> list:
     """
-    Fetch all PDF attachments from a message.
+    Fetch all PDF attachments from a message using requests.
 
     Args:
-        service: Gmail API service object
+        session: AuthorizedSession object
         message_id: Gmail message ID
         attachments: List of attachment metadata from get_message_content()
 
@@ -379,7 +396,7 @@ def get_pdf_attachments(service, message_id: str, attachments: list) -> list:
         if mime_type == 'application/pdf' or filename.endswith('.pdf'):
             attachment_id = attachment.get('attachment_id')
             if attachment_id:
-                content = get_attachment_content(service, message_id, attachment_id)
+                content = get_attachment_content(session, message_id, attachment_id)
                 if content:
                     pdf_attachments.append({
                         'filename': attachment.get('filename'),
@@ -390,12 +407,12 @@ def get_pdf_attachments(service, message_id: str, attachments: list) -> list:
     return pdf_attachments
 
 
-def get_message_batch(service, message_ids: list) -> list:
+def get_message_batch(session, message_ids: list) -> list:
     """
-    Fetch multiple messages efficiently using batch requests.
+    Fetch multiple messages using requests.
 
     Args:
-        service: Gmail API service object
+        session: AuthorizedSession object
         message_ids: List of message IDs to fetch
 
     Returns:
@@ -411,21 +428,21 @@ def get_message_batch(service, message_ids: list) -> list:
 
         for msg_id in batch:
             try:
-                msg = get_message_content(service, msg_id)
+                msg = get_message_content(session, msg_id)
                 messages.append(msg)
-            except HttpError as e:
+            except requests.HTTPError as e:
                 print(f"   ⚠️  Failed to fetch message {msg_id}: {e}")
                 continue
 
     return messages
 
 
-def get_history_changes(service, start_history_id: str) -> dict:
+def get_history_changes(session, start_history_id: str) -> dict:
     """
-    Get incremental changes since last sync using history API.
+    Get incremental changes since last sync using history API with requests.
 
     Args:
-        service: Gmail API service object
+        session: AuthorizedSession object
         start_history_id: History ID from last sync
 
     Returns:
@@ -437,14 +454,15 @@ def get_history_changes(service, start_history_id: str) -> dict:
         page_token = None
 
         while True:
-            request = service.users().history().list(
-                userId='me',
-                startHistoryId=start_history_id,
-                historyTypes=['messageAdded'],
-                pageToken=page_token
-            )
+            url = f"{GMAIL_API_BASE}/users/me/history"
+            params = {
+                'startHistoryId': start_history_id,
+                'historyTypes': 'messageAdded'
+            }
+            if page_token:
+                params['pageToken'] = page_token
 
-            result = fetch_with_backoff(request)
+            result = fetch_with_backoff(session, 'GET', url, params=params)
 
             # Process history records
             history_records = result.get('history', [])
@@ -467,9 +485,9 @@ def get_history_changes(service, start_history_id: str) -> dict:
             'latest_history_id': latest_history_id
         }
 
-    except HttpError as e:
+    except requests.HTTPError as e:
         # History ID might be too old (404)
-        if e.resp.status == 404:
+        if e.response.status_code == 404:
             print("   ⚠️  History ID expired, full sync required")
             return {
                 'new_message_ids': [],
@@ -479,19 +497,19 @@ def get_history_changes(service, start_history_id: str) -> dict:
         raise
 
 
-def get_user_profile(service) -> dict:
+def get_user_profile(session) -> dict:
     """
-    Get Gmail user profile including email and history ID.
+    Get Gmail user profile including email and history ID using requests.
 
     Args:
-        service: Gmail API service object
+        session: AuthorizedSession object
 
     Returns:
         User profile dictionary with email and historyId
     """
     try:
-        request = service.users().getProfile(userId='me')
-        profile = fetch_with_backoff(request)
+        url = f"{GMAIL_API_BASE}/users/me/profile"
+        profile = fetch_with_backoff(session, 'GET', url)
 
         return {
             'email_address': profile.get('emailAddress'),
@@ -500,7 +518,7 @@ def get_user_profile(service) -> dict:
             'history_id': profile.get('historyId'),
         }
 
-    except HttpError as e:
+    except requests.HTTPError as e:
         print(f"❌ Gmail profile error: {e}")
         raise
 

@@ -12,7 +12,8 @@ def sync_gmail_receipts_task(
     sync_type: str = 'auto',
     job_id: int = None,
     from_date_str: str = None,
-    to_date_str: str = None
+    to_date_str: str = None,
+    force_reparse: bool = False
 ):
     """
     Celery task to sync Gmail receipts in the background.
@@ -23,6 +24,7 @@ def sync_gmail_receipts_task(
         job_id: Optional pre-created job ID for progress tracking
         from_date_str: ISO format start date (YYYY-MM-DD)
         to_date_str: ISO format end date (YYYY-MM-DD)
+        force_reparse: If True, re-parse existing emails (bypass duplicate check)
 
     Returns:
         dict: Sync statistics
@@ -74,7 +76,7 @@ def sync_gmail_receipts_task(
                 'job_id': job_id,
             })
 
-            result = sync_receipts_incremental(connection_id, job_id=job_id)
+            result = sync_receipts_incremental(connection_id, job_id=job_id, force_reparse=force_reparse)
 
             if result.get('error'):
                 return {
@@ -92,7 +94,7 @@ def sync_gmail_receipts_task(
             job_id = result.get('job_id', job_id)
         else:
             # Full sync with progress tracking
-            for progress in sync_receipts_full(connection_id, from_date=from_date, to_date=to_date, job_id=job_id):
+            for progress in sync_receipts_full(connection_id, from_date=from_date, to_date=to_date, job_id=job_id, force_reparse=force_reparse):
                 status = progress.get('status')
 
                 if status == 'started':
@@ -358,4 +360,188 @@ def full_gmail_pipeline_task(self, connection_id: int, user_id: int = 1):
         return {
             'status': 'failed',
             'error': str(e)
+        }
+
+
+@celery_app.task(bind=True, time_limit=120, soft_time_limit=110, max_retries=3)
+def process_pdf_receipt_task(
+    self,
+    receipt_id: int,
+    message_id: str,
+    attachment_info: dict,
+    sender_domain: str,
+    connection_id: int,
+    received_date=None
+):
+    """
+    Process PDF receipt asynchronously (Phase 2 Optimization).
+
+    Downloads PDF attachment, parses it, uploads to MinIO, and updates receipt.
+    Runs in background to avoid blocking sync loop.
+
+    Args:
+        receipt_id: Gmail receipt ID
+        message_id: Gmail message ID
+        attachment_info: Dict with 'attachment_id', 'filename', or 'external_url'
+        sender_domain: Email sender domain (for parser selection)
+        connection_id: Gmail connection ID (for API access)
+        received_date: Email received date (optional, for MinIO path)
+
+    Returns:
+        dict: Processing result with status and timing
+    """
+    import time
+    from celery.utils.log import get_task_logger
+
+    logger = get_task_logger(__name__)
+    task_start = time.time()
+
+    try:
+        # Update status to 'processing'
+        db.update_gmail_receipt_pdf_status(receipt_id, 'processing')
+        logger.info(f"[PDF] Starting processing for receipt {receipt_id}")
+
+        # 1. Fetch PDF content
+        fetch_start = time.time()
+        pdf_bytes = None
+        filename = attachment_info.get('filename', 'receipt.pdf')
+
+        if 'external_url' in attachment_info:
+            # Download from external URL (e.g., Translink)
+            import requests
+            url = attachment_info['external_url']
+            logger.info(f"[PDF] Downloading from external URL: {url}")
+            response = requests.get(url, timeout=30)
+            if response.status_code == 200:
+                pdf_bytes = response.content
+            else:
+                raise Exception(f"Failed to download PDF: HTTP {response.status_code}")
+
+        elif 'attachment_id' in attachment_info:
+            # Download from Gmail API
+            from mcp.gmail_client import build_gmail_service, get_pdf_attachments
+            from mcp.gmail_auth import get_gmail_credentials
+            logger.info(f"[PDF] Downloading from Gmail attachment: {attachment_info['attachment_id']}")
+
+            # Get valid credentials (handles token refresh if needed)
+            logger.info(f"[PDF] Refreshing access token if needed...")
+            access_token, refresh_token = get_gmail_credentials(connection_id)
+            logger.info(f"[PDF] Token refresh check complete")
+
+            # Build Gmail service with fresh tokens
+            service = build_gmail_service(access_token, refresh_token)
+
+            # Download PDF
+            attachments = [{'attachment_id': attachment_info['attachment_id'], 'filename': filename}]
+            pdf_contents = get_pdf_attachments(service, message_id, attachments)
+
+            if pdf_contents and len(pdf_contents) > 0:
+                pdf_bytes = pdf_contents[0]['content']
+            else:
+                raise Exception("No PDF content retrieved from Gmail")
+        else:
+            raise Exception("No valid PDF source (attachment_id or external_url)")
+
+        fetch_time = time.time() - fetch_start
+        logger.info(f"[PERF] PDF fetch for receipt {receipt_id}: {fetch_time:.3f}s")
+
+        if not pdf_bytes:
+            raise Exception("PDF bytes are empty")
+
+        # 2. Parse PDF with pdfplumber
+        parse_start = time.time()
+        from mcp.gmail_pdf_parser import parse_receipt_pdf
+
+        pdf_result = parse_receipt_pdf(pdf_bytes, sender_domain, filename)
+        parse_time = time.time() - parse_start
+        logger.info(f"[PERF] PDF parse for receipt {receipt_id}: {parse_time:.3f}s")
+
+        if not pdf_result or pdf_result.get('total_amount') is None:
+            # Parsing failed but don't retry
+            db.update_gmail_receipt_pdf_status(receipt_id, 'failed', error='PDF parsing returned no data')
+            return {
+                'status': 'failed',
+                'reason': 'parse_failed',
+                'duration': time.time() - task_start
+            }
+
+        # 3. Upload to MinIO
+        upload_start = time.time()
+        minio_object_key = None
+
+        try:
+            from mcp.minio_client import is_available, store_pdf
+            from datetime import datetime
+
+            if is_available():
+                # Convert received_date to datetime if it's a string
+                minio_received_date = received_date
+                if isinstance(received_date, str):
+                    try:
+                        minio_received_date = datetime.fromisoformat(received_date.replace('Z', '+00:00'))
+                    except Exception:
+                        minio_received_date = None
+
+                minio_result = store_pdf(
+                    pdf_bytes=pdf_bytes,
+                    message_id=message_id,
+                    filename=filename,
+                    received_date=minio_received_date,
+                    metadata={'merchant': pdf_result.get('merchant_name')}
+                )
+
+                if minio_result:
+                    # Save PDF attachment record in database
+                    db.save_pdf_attachment(
+                        gmail_receipt_id=receipt_id,
+                        message_id=message_id,
+                        bucket_name=minio_result['bucket_name'],
+                        object_key=minio_result['object_key'],
+                        filename=minio_result['filename'],
+                        content_hash=minio_result['content_hash'],
+                        size_bytes=minio_result['size_bytes'],
+                        etag=minio_result['etag']
+                    )
+                    minio_object_key = minio_result['object_key']
+                    logger.info(f"[PDF] Stored to MinIO: {minio_object_key}")
+        except Exception as e:
+            # MinIO failure is non-fatal, continue with receipt update
+            logger.warning(f"[PDF] MinIO storage failed (non-fatal): {e}")
+
+        upload_time = time.time() - upload_start
+        logger.info(f"[PERF] MinIO upload for receipt {receipt_id}: {upload_time:.3f}s")
+
+        # 4. Update receipt with parsed data
+        db.update_gmail_receipt_from_pdf(receipt_id, pdf_result, minio_object_key)
+
+        # 5. Set status to 'completed'
+        total_time = time.time() - task_start
+        db.update_gmail_receipt_pdf_status(receipt_id, 'completed')
+
+        logger.info(f"[PERF] Total PDF processing for receipt {receipt_id}: {total_time:.3f}s")
+        return {
+            'status': 'completed',
+            'duration': total_time,
+            'fetch_time': fetch_time,
+            'parse_time': parse_time,
+            'upload_time': upload_time,
+            'merchant': pdf_result.get('merchant_name'),
+            'amount': pdf_result.get('total_amount')
+        }
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"[PDF] Processing failed for receipt {receipt_id}: {error_msg}")
+        db.update_gmail_receipt_pdf_status(receipt_id, 'failed', error=error_msg)
+
+        # Retry with exponential backoff
+        if self.request.retries < self.max_retries:
+            countdown = 2 ** self.request.retries  # 2, 4, 8 seconds
+            logger.info(f"[PDF] Retrying in {countdown}s (attempt {self.request.retries + 1}/{self.max_retries})")
+            raise self.retry(exc=e, countdown=countdown)
+
+        return {
+            'status': 'failed',
+            'error': error_msg,
+            'duration': time.time() - task_start
         }

@@ -15,9 +15,22 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 import database_postgres as database
+import redis
+import time
 
 # Load environment variables
 load_dotenv(override=True)
+
+# Redis client for distributed locking
+_redis_client = None
+
+def get_redis_client():
+    """Get or create Redis client for token refresh locking."""
+    global _redis_client
+    if _redis_client is None:
+        redis_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+        _redis_client = redis.from_url(redis_url)
+    return _redis_client
 
 # Gmail OAuth Configuration
 GMAIL_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
@@ -391,19 +404,52 @@ def get_gmail_credentials(connection_id: int) -> tuple:
             if not refresh_token:
                 raise ValueError("Access token expired and no refresh token available")
 
-            print(f"   🔄 Access token expired, refreshing...")
-            new_tokens = refresh_access_token(refresh_token)
+            # Use distributed lock to prevent concurrent token refreshes
+            lock_key = f"gmail_token_refresh:{connection_id}"
+            redis_client = get_redis_client()
+            lock = redis_client.lock(lock_key, timeout=30, blocking_timeout=35)
 
-            # Update database with new tokens
-            database.update_gmail_tokens(
-                connection_id=connection_id,
-                access_token=encrypt_token(new_tokens['access_token']),
-                refresh_token=encrypt_token(new_tokens.get('refresh_token', refresh_token)),
-                token_expires_at=new_tokens['expires_at']
-            )
+            try:
+                if lock.acquire(blocking=True):
+                    try:
+                        # Re-check token expiry after acquiring lock (another worker may have refreshed)
+                        connection_recheck = database.get_gmail_connection_by_id(connection_id)
+                        expires_at_recheck = connection_recheck.get('token_expires_at')
+                        if isinstance(expires_at_recheck, str):
+                            expires_at_recheck = datetime.fromisoformat(expires_at_recheck.replace('Z', '+00:00'))
+                        if expires_at_recheck.tzinfo is None:
+                            expires_at_recheck = expires_at_recheck.replace(tzinfo=timezone.utc)
 
-            access_token = new_tokens['access_token']
-            refresh_token = new_tokens.get('refresh_token', refresh_token)
+                        # If token was refreshed by another worker, use the new token
+                        if expires_at_recheck > datetime.now(timezone.utc) + timedelta(minutes=5):
+                            print(f"   ✓ Token already refreshed by another worker")
+                            access_token = decrypt_token(connection_recheck['access_token'])
+                            refresh_token = decrypt_token(connection_recheck['refresh_token'])
+                        else:
+                            # Still expired, refresh it
+                            print(f"   🔄 Access token expired, refreshing...")
+                            new_tokens = refresh_access_token(refresh_token)
+
+                            # Update database with new tokens
+                            database.update_gmail_tokens(
+                                connection_id=connection_id,
+                                access_token=encrypt_token(new_tokens['access_token']),
+                                refresh_token=encrypt_token(new_tokens.get('refresh_token', refresh_token)),
+                                token_expires_at=new_tokens['expires_at']
+                            )
+
+                            access_token = new_tokens['access_token']
+                            refresh_token = new_tokens.get('refresh_token', refresh_token)
+                    finally:
+                        lock.release()
+                else:
+                    raise Exception(f"Failed to acquire token refresh lock for connection {connection_id}")
+            except redis.exceptions.LockError as e:
+                print(f"   ⚠️ Redis lock error during token refresh: {e}")
+                # If lock fails, try to get latest token from database (may have been refreshed)
+                connection_fallback = database.get_gmail_connection_by_id(connection_id)
+                access_token = decrypt_token(connection_fallback['access_token'])
+                refresh_token = decrypt_token(connection_fallback['refresh_token'])
 
     return access_token, refresh_token
 
