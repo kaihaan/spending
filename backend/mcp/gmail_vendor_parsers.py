@@ -344,6 +344,21 @@ def parse_amazon_fresh(soup, text_body: str) -> dict:
         elif '$' in text:
             result['currency_code'] = 'USD'
 
+        # Extract date - Fresh orders have delivery date
+        date_patterns = [
+            r'Delivery\s+date[:\s]+(\d{1,2}\s+\w+\s+\d{4})',
+            r'Arriving[:\s]+(?:\w+day,?\s+)?(\d{1,2}\s+\w+\s+\d{4})',
+            r'Arriving[:\s]+(?:\w+day,?\s+)?(\w+\s+\d{1,2}(?:,\s+\d{4})?)',
+            r'(\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4})',
+        ]
+        for pattern in date_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                parsed = parse_date_text(match.group(1))
+                if parsed:
+                    result['receipt_date'] = parsed
+                    break
+
     return result
 
 
@@ -400,7 +415,14 @@ def parse_amazon_business(soup, text_body: str, subject: str) -> dict:
 
     # Extract date
     date_patterns = [
+        # Order placement dates
         (r'Order\s+placed[:\s]+(\d{1,2}\s+\w+\s+\d{4})', None),
+        (r'Order\s+placed[:\s]+(\w+\s+\d{1,2},?\s+\d{4})', None),
+        # Arriving dates (with optional weekday)
+        (r'Arriving[:\s]+(?:\w+day,?\s+)?(\w+\s+\d{1,2},?\s+\d{4})', None),
+        (r'Arriving[:\s]+(?:\w+day,?\s+)?(\d{1,2}\s+\w+\s+\d{4})', None),
+        (r'Arriving[:\s]+(?:\w+day,?\s+)?(\w+\s+\d{1,2})', None),
+        # Generic patterns
         (r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4})', None),
         (r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2},?\s+\d{4})', None),
     ]
@@ -469,6 +491,7 @@ def parse_amazon_order(soup, text_body: str, subject: str) -> dict:
 
     # Try to find date - Amazon uses many formats
     date_patterns = [
+        # Explicit order/dispatch dates with full year
         (r'Order\s+placed[:\s]+(\d{1,2}\s+\w+\s+\d{4})', None),
         (r'Order\s+placed[:\s]+(\w+\s+\d{1,2},?\s+\d{4})', None),
         (r'Ordered\s+on[:\s]+(\d{1,2}\s+\w+\s+\d{4})', None),
@@ -477,6 +500,11 @@ def parse_amazon_order(soup, text_body: str, subject: str) -> dict:
         (r'Dispatched[:\s]+(\d{1,2}\s+\w+\s+\d{4})', None),
         (r'Delivered[:\s]+(\d{1,2}\s+\w+\s+\d{4})', None),
         (r'Delivered\s+on[:\s]+(\d{1,2}\s+\w+\s+\d{4})', None),
+        # Arriving dates - common in order confirmations (with optional weekday)
+        (r'Arriving[:\s]+(?:\w+day,?\s+)?(\w+\s+\d{1,2},?\s+\d{4})', None),  # "Arriving: Saturday, June 14, 2025"
+        (r'Arriving[:\s]+(?:\w+day,?\s+)?(\d{1,2}\s+\w+\s+\d{4})', None),   # "Arriving: Saturday 14 June 2025"
+        (r'Arriving[:\s]+(?:\w+day,?\s+)?(\w+\s+\d{1,2})', None),  # "Arriving: Saturday, June 14" (no year)
+        # Generic date patterns
         (r'(\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4})', None),
         (r'((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4})', None),
     ]
@@ -555,18 +583,25 @@ def parse_amazon_ordered(soup, text_body: str, subject: str) -> dict:
     line_items = []
     # Normalize line endings to \n for consistent matching
     normalized_text = text.replace('\r\n', '\n').replace('\r', '\n')
-    item_pattern = r'\*\s*([^\n*]+)\s*\n\s*Quantity:\s*(\d+)\s*\n\s*([0-9,.]+)\s*(GBP|EUR|USD)'
-    for match in re.finditer(item_pattern, normalized_text):
+    # Use ^* anchor with MULTILINE to match line-starting asterisks only (not asterisks within product names)
+    # Use .+? non-greedy match to capture full product name including embedded asterisks (e.g., "3x stronger*")
+    item_pattern = r'^\*\s*(.+?)\s+Quantity:\s*(\d+)\s+([0-9,.]+)\s*(GBP|EUR|USD)'
+    for match in re.finditer(item_pattern, normalized_text, re.MULTILINE):
         item_name = match.group(1).strip()
         quantity = int(match.group(2))
         unit_price = parse_amount(match.group(3))
         currency = match.group(4)
-        line_items.append({
+        item = {
             'name': item_name,
             'quantity': quantity,
             'unit_price': unit_price,
             'currency': currency
-        })
+        }
+        # Extract and add brand
+        brand = extract_amazon_brand(item_name)
+        if brand:
+            item['brand'] = brand
+        line_items.append(item)
 
     if line_items:
         result['line_items'] = line_items
@@ -576,17 +611,35 @@ def parse_amazon_ordered(soup, text_body: str, subject: str) -> dict:
         # Handle both straight quotes (') and curly quotes (\u2018, \u2019)
         item_match = re.search(r"Ordered:\s*(?:\d+\s*)?['\u2018]([^'\u2019]+)['\u2019]", subject)
         if item_match:
-            result['line_items'] = [{'name': item_match.group(1).strip()}]
+            item_name = item_match.group(1).strip()
+            item = {'name': item_name}
+            brand = extract_amazon_brand(item_name)
+            if brand:
+                item['brand'] = brand
+            result['line_items'] = [item]
         else:
             # Additional fallback for straight quotes
             item_match2 = re.search(r"Ordered:\s*(?:\d+\s*)?'([^']+)'", subject)
             if item_match2:
-                result['line_items'] = [{'name': item_match2.group(1).strip()}]
+                item_name = item_match2.group(1).strip()
+                item = {'name': item_name}
+                brand = extract_amazon_brand(item_name)
+                if brand:
+                    item['brand'] = brand
+                result['line_items'] = [item]
 
     # Try to extract date
     date_patterns = [
-        (r'Arriving\s+(\w+day)', None),  # "Arriving Saturday"
+        # Arriving dates with full month/day (most common in "Ordered:" emails)
+        (r'Arriving[:\s]+(?:\w+day,?\s+)?(\w+\s+\d{1,2},?\s+\d{4})', None),  # "Arriving: Saturday, June 14, 2025"
+        (r'Arriving[:\s]+(?:\w+day,?\s+)?(\d{1,2}\s+\w+\s+\d{4})', None),   # "Arriving: Saturday 14 June 2025"
+        (r'Arriving[:\s]+(?:\w+day,?\s+)?(\w+\s+\d{1,2})', None),  # "Arriving: Saturday, June 14" (no year)
+        # Delivery dates
+        (r'Delivery[:\s]+(?:\w+day,?\s+)?(\w+\s+\d{1,2},?\s+\d{4})', None),
+        (r'Delivery[:\s]+(?:\w+day,?\s+)?(\d{1,2}\s+\w+\s+\d{4})', None),
+        # Generic full date patterns
         (r'(\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4})', None),
+        (r'((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4})', None),
     ]
 
     for pattern, _ in date_patterns:
@@ -658,6 +711,89 @@ def parse_amazon_receipt(html_body: str, text_body: str, subject: str) -> Option
     return None
 
 
+def extract_amazon_brand(product_name: str) -> Optional[str]:
+    """
+    Extract brand name from Amazon product name.
+
+    Amazon product names typically follow pattern: "[Brand] [Product Description]"
+    Examples:
+    - "WoodWick Scented Candle..." → "WoodWick"
+    - "Sure Men Maximum Protection..." → "Sure Men"
+    - "Apple AirPods Pro..." → "Apple"
+    - "tesamoll Thermo Cover..." → "tesamoll" (lowercase brand)
+
+    Args:
+        product_name: Full product name from Amazon
+
+    Returns:
+        Brand name or None
+    """
+    if not product_name or len(product_name) < 3:
+        return None
+
+    # Strategy 1: Extract first 1-3 capitalized words (most common)
+    # Stop at lowercase word, punctuation, or numbers
+    brand_match = re.match(r'^([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,2})', product_name)
+    if brand_match:
+        brand = brand_match.group(1).strip()
+        # Validate: brand should be 2-30 chars
+        if 2 <= len(brand) <= 30:
+            return brand
+
+    # Strategy 2: Fallback for lowercase brands (e.g., "tesamoll", "bananair")
+    # Extract first word if it's meaningful (>= 3 chars, not a number)
+    first_word = product_name.split()[0] if product_name.split() else None
+    if first_word and len(first_word) >= 3 and not first_word.isdigit():
+        # Exclude common non-brand prefixes
+        if not first_word.lower().startswith(('pack', 'set', 'bundle', 'qty')):
+            return first_word
+
+    return None
+
+
+def extract_product_brand(product_name: str) -> Optional[str]:
+    """
+    Generic brand extraction for retail products (eBay, Uniqlo, etc.).
+
+    Handles multiple formats:
+    - Capitalized brand: "Sony WH-1000XM4..." -> "Sony"
+    - Lowercase brand: "bananair sun lounger..." -> "bananair"
+    - Multi-word brand: "Dell UltraSharp 27..." -> "Dell UltraSharp"
+    - Delimiter-based: "designacable.com - USB Cable" -> "designacable.com"
+
+    Args:
+        product_name: Product name string
+
+    Returns:
+        Brand name or None
+    """
+    if not product_name or len(product_name) < 2:
+        return None
+
+    # Strategy 1: Try capitalized brand first (most common)
+    brand_match = re.match(r'^([A-Z][A-Za-z0-9&\'\.]*(?:\s+[A-Z][A-Za-z0-9&\'\.]*){0,2})', product_name)
+    if brand_match:
+        brand = brand_match.group(1).strip()
+        if 2 <= len(brand) <= 40:
+            return brand
+
+    # Strategy 2: Delimiter-based (dash, comma, colon, parenthesis)
+    delim_match = re.match(r'^([^-,:\(]+?)[\s]*[\-,:\(]', product_name)
+    if delim_match:
+        brand = delim_match.group(1).strip()
+        # Exclude quantity prefixes
+        if brand and not brand.lower().startswith(('pack of', 'set of', 'bundle', 'x ', 'qty')):
+            if 2 <= len(brand) <= 40:
+                return brand
+
+    # Strategy 3: First word if meaningful (>= 3 chars, not a number)
+    first_word = product_name.split()[0] if product_name.split() else None
+    if first_word and len(first_word) >= 3 and not first_word.isdigit():
+        return first_word
+
+    return None
+
+
 def extract_amazon_line_items(soup: BeautifulSoup, text: str) -> list:
     """
     Extract structured line items from Amazon email HTML.
@@ -702,13 +838,19 @@ def extract_amazon_line_items(soup: BeautifulSoup, text: str) -> list:
 
             if link_text not in seen_names:
                 seen_names.add(link_text)
-                items.append({
-                    'name': clean_product_name(link_text),
+                cleaned_name = clean_product_name(link_text)
+                item = {
+                    'name': cleaned_name,
                     'description': infer_product_description(link_text),
                     'category_hint': infer_amazon_category(link_text),
                     'quantity': 1,
                     'price': price
-                })
+                }
+                # Extract and add brand
+                brand = extract_amazon_brand(cleaned_name)
+                if brand:
+                    item['brand'] = brand
+                items.append(item)
 
     # Strategy 3: Fallback - find text that looks like product names
     if not items:
@@ -723,13 +865,19 @@ def extract_amazon_line_items(soup: BeautifulSoup, text: str) -> list:
                 # Check it's likely a product (has uppercase, reasonable structure)
                 if re.search(r'[A-Z]', elem_text) and not elem_text.isupper():
                     seen_names.add(elem_text)
-                    items.append({
-                        'name': clean_product_name(elem_text),
+                    cleaned_name = clean_product_name(elem_text)
+                    item = {
+                        'name': cleaned_name,
                         'description': infer_product_description(elem_text),
                         'category_hint': infer_amazon_category(elem_text),
                         'quantity': 1,
                         'price': None
-                    })
+                    }
+                    # Extract and add brand
+                    brand = extract_amazon_brand(cleaned_name)
+                    if brand:
+                        item['brand'] = brand
+                    items.append(item)
 
     # Limit to 10 items max
     return items[:10]
@@ -776,13 +924,19 @@ def extract_item_from_row(cells: list) -> Optional[dict]:
                 name = cell_text
 
     if name:
-        return {
-            'name': clean_product_name(name),
+        cleaned_name = clean_product_name(name)
+        item = {
+            'name': cleaned_name,
             'description': infer_product_description(name),
             'category_hint': infer_amazon_category(name),
             'quantity': quantity,
             'price': price
         }
+        # Extract and add brand
+        brand = extract_amazon_brand(cleaned_name)
+        if brand:
+            item['brand'] = brand
+        return item
 
     return None
 
@@ -977,6 +1131,8 @@ def parse_apple_receipt(html_body: str, text_body: str, subject: str) -> Optiona
             'category_hint': infer_apple_category(result['product_name']),
             'quantity': 1,
             'price': result.get('total_amount'),
+            'brand': result['product_name'],  # App/service name (normalized from app_name)
+            'app_name': result['product_name'],  # Kept for backward compatibility
         }
         # Add renewal info if available
         for detail in subscription_details:
@@ -1360,9 +1516,17 @@ def parse_paypal_receipt(html_body: str, text_body: str, subject: str) -> Option
 
     # Set line_items with payee information
     if result.get('payee_name'):
-        result['line_items'] = [{'name': f"Payment to {result['payee_name']}"}]
+        result['line_items'] = [{
+            'name': f"Payment to {result['payee_name']}",
+            'merchant': result['payee_name'],
+            'payment_method': 'PayPal'
+        }]
     else:
-        result['line_items'] = [{'name': 'PayPal payment'}]
+        result['line_items'] = [{
+            'name': 'PayPal payment',
+            'merchant': 'Unknown',
+            'payment_method': 'PayPal'
+        }]
 
     # Validate - must have at least amount or transaction ID
     if result.get('total_amount') or result.get('order_id'):
@@ -1483,11 +1647,19 @@ def parse_uber_receipt(html_body: str, text_body: str, subject: str) -> Optional
                     restaurant = match.group(1).strip()
                     if len(restaurant) > 2 and len(restaurant) < 100:
                         result['restaurant_name'] = restaurant
-                        result['line_items'] = [{'name': f"Order from {restaurant}"}]
+                        result['line_items'] = [{
+                            'name': f"Order from {restaurant}",
+                            'restaurant': restaurant,
+                            'brand': restaurant  # Restaurant is the brand for food delivery
+                        }]
                         break
             # Fallback: just note it's a food order
             if 'line_items' not in result:
-                result['line_items'] = [{'name': 'Uber Eats order'}]
+                result['line_items'] = [{
+                    'name': 'Uber Eats order',
+                    'restaurant': 'Unknown',
+                    'brand': 'Uber Eats'  # Service brand when restaurant unknown
+                }]
         else:
             # For rides, create a trip description
             trip_desc_parts = []
@@ -1497,9 +1669,15 @@ def parse_uber_receipt(html_body: str, text_body: str, subject: str) -> Optional
                 trip_desc_parts.append(result['trip_time'])
 
             if trip_desc_parts:
-                result['line_items'] = [{'name': f"Uber ride ({', '.join(trip_desc_parts)})"}]
+                result['line_items'] = [{
+                    'name': f"Uber ride ({', '.join(trip_desc_parts)})",
+                    'brand': 'Uber'  # Service brand
+                }]
             else:
-                result['line_items'] = [{'name': 'Uber ride'}]
+                result['line_items'] = [{
+                    'name': 'Uber ride',
+                    'brand': 'Uber'  # Service brand
+                }]
 
     if result.get('total_amount'):
         return result
@@ -1671,17 +1849,26 @@ def parse_deliveroo_receipt(html_body: str, text_body: str, subject: str) -> Opt
         price = parse_amount(match.group(3))
         # Skip modifiers (lines starting with --)
         if not name.startswith('--'):
-            line_items.append({
+            item = {
                 'name': name,
                 'quantity': qty,
                 'price': price
-            })
+            }
+            # Add restaurant as brand/source for food items
+            if restaurant:
+                item['restaurant'] = restaurant
+                item['brand'] = restaurant  # Restaurant is the brand for food delivery
+            line_items.append(item)
 
     # Set line_items - prefer extracted items, fallback to restaurant name
     if line_items:
         result['line_items'] = line_items
     elif restaurant:
-        result['line_items'] = [{'name': f"Order from {restaurant}"}]
+        result['line_items'] = [{
+            'name': f"Order from {restaurant}",
+            'restaurant': restaurant,
+            'brand': restaurant  # Restaurant is the brand for food delivery
+        }]
 
     if restaurant:
         result['restaurant_name'] = restaurant
@@ -1690,6 +1877,28 @@ def parse_deliveroo_receipt(html_body: str, text_body: str, subject: str) -> Opt
     order_match = re.search(r'Order #(\d+)', text)
     if order_match:
         result['order_id'] = order_match.group(1)
+
+    # Extract delivery completion date
+    date_patterns = [
+        r'Delivered on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})',  # "Delivered on June 15, 2024"
+        r'Order completed[:\s]+(\d{1,2}/\d{1,2}/\d{4})',   # "Order completed: 15/06/2024"
+        r'(\d{1,2}\s+[A-Za-z]+\s+\d{4})',                   # "15 June 2024"
+    ]
+
+    for pattern in date_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            date_str = match.group(1)
+            # Try multiple formats
+            for fmt in ['%B %d, %Y', '%d/%m/%Y', '%d %B %Y']:
+                try:
+                    from datetime import datetime
+                    result['receipt_date'] = datetime.strptime(date_str, fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if result.get('receipt_date'):
+                break
 
     if result.get('total_amount'):
         return result
@@ -1779,13 +1988,22 @@ def parse_ebay_receipt(html_body: str, text_body: str, subject: str) -> Optional
 
     # Build line items
     if item_name:
-        result['line_items'] = [{
-            'name': clean_ebay_product_name(item_name),
+        cleaned_name = clean_ebay_product_name(item_name)
+        item = {
+            'name': cleaned_name,
             'description': infer_ebay_description(item_name),
             'category_hint': infer_ebay_category(item_name),
             'quantity': 1,
             'price': result.get('total_amount'),
-        }]
+        }
+        # Extract brand from product name
+        brand = extract_product_brand(cleaned_name)
+        if brand:
+            item['brand'] = brand
+        # Add seller name if available
+        if result.get('seller_name'):
+            item['seller'] = result['seller_name']
+        result['line_items'] = [item]
 
     # Validate we have essential data
     if result.get('total_amount') or result.get('order_id'):
@@ -2100,7 +2318,8 @@ def parse_microsoft_receipt(html_body: str, text_body: str, subject: str) -> Opt
 
     if product_name:
         result['product_name'] = product_name
-        result['line_items'] = [{'name': product_name}]
+        # Microsoft only sells own-branded products, so brand = Microsoft
+        result['line_items'] = [{'name': product_name, 'brand': 'Microsoft'}]
 
     if html_body:
         soup = BeautifulSoup(html_body, 'html.parser')
@@ -2224,6 +2443,32 @@ def parse_google_receipt(html_body: str, text_body: str, subject: str) -> Option
             if subject_match:
                 result['order_id'] = subject_match.group(1)
 
+        # Extract invoice date for Google Cloud
+        if 'cloud' in result.get('merchant_name_normalized', ''):
+            # Pattern 1: "Invoice date: Month DD, YYYY"
+            date_match = re.search(r'Invoice date[:\s]+([A-Za-z]+\s+\d{1,2},\s+\d{4})', text, re.IGNORECASE)
+            if date_match:
+                parsed = parse_date_text(date_match.group(1))
+                if parsed:
+                    result['receipt_date'] = parsed
+
+            # Pattern 2: "Billing period: YYYY-MM-DD to YYYY-MM-DD" (use end date)
+            if not result.get('receipt_date'):
+                period_match = re.search(r'to\s+(\d{4}-\d{2}-\d{2})', text, re.IGNORECASE)
+                if period_match:
+                    parsed = parse_date_text(period_match.group(1))
+                    if parsed:
+                        result['receipt_date'] = parsed
+
+            # Pattern 3: Subject line "Invoice for [ID] (Month YYYY)" - use first day of month
+            if not result.get('receipt_date'):
+                subject_date = re.search(r'\(([A-Za-z]+\s+\d{4})\)', subject)
+                if subject_date:
+                    # Use first day of month as approximation
+                    parsed = parse_date_text(subject_date.group(1) + ' 01')
+                    if parsed:
+                        result['receipt_date'] = parsed
+
         # Extract amount (Google Play has in HTML)
         amount_patterns = [
             r'[£$€]\s*([0-9,]+\.?\d*)/(?:year|month)',
@@ -2249,12 +2494,16 @@ def parse_google_receipt(html_body: str, text_body: str, subject: str) -> Option
         product_patterns = [
             r'(?:Product|Item)[:\s]+(.+?)(?:\n|Auto-renewing)',
             r'(\d+ GB.*?)\s+(?:Google One|storage)',
+            r'(?:for|of)\s+([A-Za-z0-9\s]+(?:subscription|plan|membership))',  # App subscriptions
         ]
         for pattern in product_patterns:
             match = re.search(pattern, text)
             if match:
-                result['product_name'] = match.group(1).strip()
-                break
+                product = match.group(1).strip()
+                # Avoid extracting just "Price" or other generic terms
+                if product and len(product) > 5 and product.lower() not in ['price', 'total', 'amount', 'order']:
+                    result['product_name'] = product
+                    break
 
         # Extract subscription period if present
         period_match = re.search(r'([£$€][0-9,\.]+)/(\w+)', text)
@@ -2262,13 +2511,15 @@ def parse_google_receipt(html_body: str, text_body: str, subject: str) -> Option
             result['billing_period'] = period_match.group(2)
 
     # Set line_items from product name
+    # Google only sells own-branded products, so brand = merchant name
+    merchant_brand = result.get('merchant_name', 'Google')
     if result.get('product_name'):
         period_suffix = f" ({result['billing_period']})" if result.get('billing_period') else ""
-        result['line_items'] = [{'name': f"{result['product_name']}{period_suffix}"}]
+        result['line_items'] = [{'name': f"{result['product_name']}{period_suffix}", 'brand': merchant_brand}]
     elif 'google_cloud' in result.get('merchant_name_normalized', ''):
-        result['line_items'] = [{'name': 'Google Cloud Platform services'}]
+        result['line_items'] = [{'name': 'Google Cloud Platform services', 'brand': 'Google Cloud'}]
     elif 'google_play' in result.get('merchant_name_normalized', ''):
-        result['line_items'] = [{'name': 'Google Play purchase'}]
+        result['line_items'] = [{'name': 'Google Play purchase', 'brand': 'Google Play'}]
 
     # Note: Google Cloud amounts are in PDF attachments
     # We can still extract invoice ID for matching
@@ -2358,9 +2609,9 @@ def parse_anthropic_receipt(html_body: str, text_body: str, subject: str) -> Opt
 
     # Set line_items from product name or default
     if result.get('product_name'):
-        result['line_items'] = [{'name': result['product_name']}]
+        result['line_items'] = [{'name': result['product_name'], 'brand': 'Anthropic'}]
     else:
-        result['line_items'] = [{'name': 'Claude API usage'}]
+        result['line_items'] = [{'name': 'Claude API usage', 'brand': 'Anthropic'}]
 
     # Validate
     if result.get('total_amount') or result.get('order_id'):
@@ -2454,6 +2705,18 @@ def parse_airbnb_receipt(html_body: str, text_body: str, subject: str) -> Option
     payment_match = re.search(r'(MASTERCARD|VISA|AMEX)[^\d]*(\d{4})', text, re.IGNORECASE)
     if payment_match:
         result['payment_method'] = f"{payment_match.group(1)} •••• {payment_match.group(2)}"
+
+    # Set line_items with property name and stay dates
+    if result.get('product_name'):
+        item = {
+            'name': f"Stay in {result['product_name']}",
+            'property_name': result['product_name']
+        }
+        if result.get('stay_start') and result.get('stay_end'):
+            item['stay_dates'] = f"{result['stay_start']} - {result['stay_end']}"
+        result['line_items'] = [item]
+    else:
+        result['line_items'] = [{'name': 'Airbnb stay', 'property_name': 'Unknown'}]
 
     # Validate
     if result.get('total_amount') or result.get('order_id'):
@@ -3006,12 +3269,21 @@ def parse_etsy_receipt(html_body: str, text_body: str, subject: str) -> Optional
             if item_name and len(item_name) > 3 and len(item_name) < 200:
                 # Filter out common non-item text
                 if not any(skip in item_name.lower() for skip in ['order', 'total', 'shipping', 'subtotal', 'tax', 'etsy']):
-                    items.append({'name': item_name})
+                    item = {'name': item_name}
+                    if result.get('seller_name'):
+                        item['seller'] = result['seller_name']
+                    items.append(item)
         if items:
             break
 
     if items:
         result['line_items'] = items
+    elif result.get('seller_name'):
+        # Fallback: Create basic item with seller
+        result['line_items'] = [{
+            'name': f"Purchase from {result['seller_name']}",
+            'seller': result['seller_name']
+        }]
 
     # Validate - need at least order_id (from subject) or amount
     if result.get('total_amount') or result.get('order_id'):
@@ -3094,12 +3366,21 @@ def parse_black_sheep_coffee_receipt(html_body: str, text_body: str, subject: st
                         price = parse_amount(match[1])
                         if price:
                             item_data['price'] = price
+                    # Add location if available
+                    if result.get('location'):
+                        item_data['location'] = result['location']
                     items.append(item_data)
         if items:
             break
 
     if items:
         result['line_items'] = items[:10]  # Limit to 10 items
+    else:
+        # Fallback: Create basic line item with location
+        fallback_item = {'name': 'Coffee order'}
+        if result.get('location'):
+            fallback_item['location'] = result['location']
+        result['line_items'] = [fallback_item]
 
     # Validate - need at least order_id or amount
     if result.get('total_amount') or result.get('order_id'):
