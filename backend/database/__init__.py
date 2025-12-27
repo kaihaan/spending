@@ -77,6 +77,7 @@ from .apple import (
     get_apple_transaction_by_id,
     get_apple_transactions,
     import_apple_transactions,
+    match_apple_transaction,
 )
 from .base import DB_CONFIG, close_pool, execute_query, get_db, init_pool
 
@@ -524,6 +525,7 @@ __all__ = [
     "get_apple_transaction_by_id",
     "get_apple_statistics",
     "clear_apple_transactions",
+    "match_apple_transaction",
     # Direct debit mapping operations
     "get_direct_debit_payees",
     "get_direct_debit_mappings",

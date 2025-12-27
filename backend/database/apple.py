@@ -142,6 +142,47 @@ def get_apple_statistics():
             }
 
 
+def match_apple_transaction(bank_transaction_id, apple_transaction_db_id, confidence):
+    """Record a match between a bank transaction and an Apple purchase."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Check if transaction already matched
+            cursor.execute(
+                """
+                SELECT id FROM apple_transaction_matches
+                WHERE bank_transaction_id = %s
+                """,
+                (bank_transaction_id,),
+            )
+
+            existing = cursor.fetchone()
+            if existing:
+                # Update existing match
+                cursor.execute(
+                    """
+                    UPDATE apple_transaction_matches
+                    SET apple_transaction_id = %s, confidence = %s, matched_at = CURRENT_TIMESTAMP
+                    WHERE bank_transaction_id = %s
+                    """,
+                    (apple_transaction_db_id, confidence, bank_transaction_id),
+                )
+                conn.commit()
+                return existing["id"]
+            # Insert new match
+            cursor.execute(
+                """
+                    INSERT INTO apple_transaction_matches (
+                        bank_transaction_id, apple_transaction_id, confidence
+                    ) VALUES (%s, %s, %s)
+                    RETURNING id
+                    """,
+                (bank_transaction_id, apple_transaction_db_id, confidence),
+            )
+            match_id = cursor.fetchone()[0]
+            conn.commit()
+            return match_id
+
+
 def clear_apple_transactions():
     """Delete all Apple transactions from database."""
     with get_db() as conn, conn.cursor() as cursor:
