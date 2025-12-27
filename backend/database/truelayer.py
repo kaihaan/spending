@@ -299,31 +299,36 @@ def get_all_truelayer_transactions_with_enrichment(account_id=None):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             query = '''
                 SELECT
-                    id, account_id, transaction_id, normalised_provider_transaction_id,
-                    timestamp, description, amount, currency, transaction_type,
-                    transaction_category, merchant_name, running_balance,
-                    pre_enrichment_status, metadata, created_at,
-                    enrichment_required,
+                    t.id, t.account_id, t.transaction_id, t.normalised_provider_transaction_id,
+                    t.timestamp, t.description, t.amount, t.currency, t.transaction_type,
+                    t.transaction_category, t.merchant_name, t.running_balance,
+                    t.pre_enrichment_status, t.metadata, t.created_at,
+                    t.enrichment_required,
+                    -- Get category and subcategory names from normalized tables
+                    c.name as category,
+                    s.name as subcategory,
                     -- Extract enrichment from JSONB in single query
-                    metadata->'enrichment'->>'primary_category' as enrichment_primary_category,
-                    metadata->'enrichment'->>'subcategory' as enrichment_subcategory,
-                    metadata->'enrichment'->>'merchant_clean_name' as enrichment_merchant_clean_name,
-                    metadata->'enrichment'->>'merchant_type' as enrichment_merchant_type,
-                    metadata->'enrichment'->>'essential_discretionary' as enrichment_essential_discretionary,
-                    metadata->'enrichment'->>'payment_method' as enrichment_payment_method,
-                    metadata->'enrichment'->>'payment_method_subtype' as enrichment_payment_method_subtype,
-                    metadata->'enrichment'->>'confidence_score' as enrichment_confidence_score,
-                    metadata->'enrichment'->>'llm_provider' as enrichment_llm_provider,
-                    metadata->'enrichment'->>'llm_model' as enrichment_llm_model,
-                    (metadata->'enrichment'->>'enriched_at')::timestamp as enrichment_enriched_at,
-                    metadata->>'huququllah_classification' as manual_huququllah_classification
-                FROM truelayer_transactions
+                    t.metadata->'enrichment'->>'primary_category' as enrichment_primary_category,
+                    t.metadata->'enrichment'->>'subcategory' as enrichment_subcategory,
+                    t.metadata->'enrichment'->>'merchant_clean_name' as enrichment_merchant_clean_name,
+                    t.metadata->'enrichment'->>'merchant_type' as enrichment_merchant_type,
+                    t.metadata->'enrichment'->>'essential_discretionary' as enrichment_essential_discretionary,
+                    t.metadata->'enrichment'->>'payment_method' as enrichment_payment_method,
+                    t.metadata->'enrichment'->>'payment_method_subtype' as enrichment_payment_method_subtype,
+                    t.metadata->'enrichment'->>'confidence_score' as enrichment_confidence_score,
+                    t.metadata->'enrichment'->>'llm_provider' as enrichment_llm_provider,
+                    t.metadata->'enrichment'->>'llm_model' as enrichment_llm_model,
+                    (t.metadata->'enrichment'->>'enriched_at')::timestamp as enrichment_enriched_at,
+                    t.metadata->>'huququllah_classification' as manual_huququllah_classification
+                FROM truelayer_transactions t
+                LEFT JOIN normalized_categories c ON t.category_id = c.id
+                LEFT JOIN normalized_subcategories s ON t.subcategory_id = s.id
             '''
 
             if account_id:
-                cursor.execute(query + ' WHERE account_id = %s ORDER BY timestamp DESC', (account_id,))
+                cursor.execute(query + ' WHERE t.account_id = %s ORDER BY t.timestamp DESC', (account_id,))
             else:
-                cursor.execute(query + ' ORDER BY timestamp DESC')
+                cursor.execute(query + ' ORDER BY t.timestamp DESC')
 
             return cursor.fetchall()
 
