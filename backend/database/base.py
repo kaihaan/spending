@@ -92,11 +92,8 @@ def get_db():
     if connection_pool is None:
         init_pool()
 
-    # Get connection with explicit thread key for ThreadedConnectionPool
-    import threading
-
-    key = threading.get_ident()
-    conn = connection_pool.getconn(key)
+    # Get connection - ThreadedConnectionPool handles thread safety automatically
+    conn = connection_pool.getconn()
     try:
         yield conn
     except Exception:
@@ -104,8 +101,8 @@ def get_db():
         conn.rollback()
         raise
     finally:
-        # Always return connection to pool with the same key
-        connection_pool.putconn(conn, key)
+        # Always return connection to pool
+        connection_pool.putconn(conn)
 
 
 def close_pool():
