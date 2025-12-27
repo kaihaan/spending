@@ -122,7 +122,7 @@ def main():
     # Transaction Routes (routes/transactions.py + database/transactions.py)
     print("Transactions (routes/transactions.py):")
     test("Get All Transactions", "/api/transactions")
-    test("Get Transaction Summary", "/api/summary")
+    test("Get Transaction Summary", "/api/categories/summary")
     print()
     
     # Category Routes (routes/categories_v1.py, routes/categories_v2.py + database/categories.py)
@@ -135,12 +135,12 @@ def main():
     # Rules Routes (routes/rules.py + database/matching.py)
     print("Rules & Merchant Normalization (routes/rules.py):")
     test("Get Category Rules", "/api/rules/category")
-    test("Get Merchant Normalizations", "/api/rules/merchant-normalizations")
+    test("Get Merchant Normalizations", "/api/rules/merchant")
     print()
     
     # Settings Routes (routes/settings.py)
     print("Settings (routes/settings.py):")
-    test("Get User Settings", "/api/settings/user/1")
+    test("Get User Settings", "/api/settings/account-mappings")
     print()
     
     # Amazon Routes (routes/amazon.py + database/amazon.py)
@@ -151,7 +151,7 @@ def main():
     
     # Apple Routes (routes/apple.py + database/apple.py)
     print("Apple Integration (routes/apple.py):")
-    test("Get Apple Transactions", "/api/apple/transactions")
+    test("Get Apple Transactions", "/api/apple")
     test("Get Apple Statistics", "/api/apple/statistics")
     print()
     
@@ -162,7 +162,7 @@ def main():
     
     # Huququllah Routes (routes/huququllah.py + database/huququllah.py)
     print("Huququllah (routes/huququllah.py):")
-    test("Get Huququllah Calculations", "/api/huququllah/calculate")
+    test("Get Huququllah Calculations", "/api/huququllah/summary")
     print()
     
     # Print summary

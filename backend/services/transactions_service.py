@@ -11,7 +11,7 @@ Orchestrates transaction data operations including:
 Separates business logic from HTTP routing concerns.
 """
 
-from database import transactions as db_transactions, truelayer
+from database import transactions as db_transactions, truelayer, enrichment as db_enrichment
 import cache_manager
 
 
@@ -131,7 +131,7 @@ def get_all_transactions() -> list:
     transaction_ids = [t.get('id') for t in all_transactions if t.get('id')]
     enrichment_sources_map = {}
     if transaction_ids:
-        enrichment_sources_map = db_transactions.get_all_enrichment_sources_for_transactions(transaction_ids)
+        enrichment_sources_map = db_enrichment.get_all_enrichment_sources_for_transactions(transaction_ids)
 
     # Normalize and build response
     normalized = []
