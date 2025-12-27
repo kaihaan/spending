@@ -13,7 +13,7 @@ Supports: Anthropic (Claude), OpenAI, Google (Gemini), DeepSeek, Ollama (local)
 Separates business logic from HTTP routing concerns.
 """
 
-from database import enrichment
+from database import enrichment, truelayer
 from config.llm_config import (
     load_llm_config,
     get_provider_info,
@@ -187,7 +187,7 @@ def get_cache_stats() -> dict:
     Returns:
         Cache statistics dict
     """
-    stats = enrichment.get_llm_cache_stats()
+    stats = cache_manager.get_cache_stats()
 
     return {
         'total_cached': stats['total'],
@@ -205,14 +205,14 @@ def get_stats() -> dict:
         Enrichment statistics dict
     """
     # Count total and enriched transactions
-    all_transactions = enrichment.get_all_truelayer_transactions() or []
+    all_transactions = truelayer.get_all_truelayer_transactions() or []
     total_transactions = len(all_transactions)
 
-    enriched_count = enrichment.count_enriched_truelayer_transactions()
+    enriched_count = truelayer.count_enriched_truelayer_transactions()
     unenriched_count = total_transactions - enriched_count
 
     # Cache stats
-    cache_stats = enrichment.get_llm_cache_stats()
+    cache_stats = cache_manager.get_cache_stats()
 
     return {
         'total_transactions': total_transactions,
@@ -223,7 +223,7 @@ def get_stats() -> dict:
             1
         ),
         'cache_stats': {
-            'total_cached': cache_stats['total']
+            'total_cached': cache_stats.get('total_keys', 0)
         }
     }
 
@@ -270,12 +270,12 @@ def estimate_cost(transaction_ids: list = None, force_refresh: bool = False) -> 
     # Get transactions to estimate
     if transaction_ids:
         transactions = [
-            enrichment.get_truelayer_transaction_by_id(tid)
+            truelayer.get_truelayer_transaction_by_id(tid)
             for tid in transaction_ids
-            if enrichment.get_truelayer_transaction_by_id(tid)
+            if truelayer.get_truelayer_transaction_by_id(tid)
         ]
     else:
-        transactions = enrichment.get_unenriched_truelayer_transactions() or []
+        transactions = truelayer.get_unenriched_truelayer_transactions() or []
 
     # Count cached vs API calls needed
     cached_count = 0
@@ -484,7 +484,7 @@ def prepare_stream_enrichment(transaction_ids: list = None, mode: str = 'require
                 elif direction == 'in':
                     all_transactions = [t for t in all_transactions if t.get('transaction_type') == 'CREDIT']
             else:
-                all_transactions = enrichment.get_all_truelayer_transactions() or []
+                all_transactions = truelayer.get_all_truelayer_transactions() or []
 
                 # Filter by direction
                 if direction == 'out':

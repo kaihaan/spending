@@ -529,3 +529,90 @@ def clear_enrichment_required_after_success(transaction_id: int) -> bool:
 
 
 # ============================================================================
+
+# ============================================================================
+# LLM ENRICHMENT CACHE
+# ============================================================================
+
+
+def get_enrichment_from_cache(description, direction):
+    """
+    Retrieve cached enrichment for a transaction description.
+
+    Args:
+        description: Transaction description to look up
+        direction: Transaction direction ('in' or 'out')
+
+    Returns:
+        Enrichment object or None if not cached
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT enrichment_data
+                FROM llm_enrichment_cache
+                WHERE transaction_description = %s AND transaction_direction = %s
+                LIMIT 1
+            ''', (description, direction))
+
+            row = cursor.fetchone()
+            if row and row['enrichment_data']:
+                try:
+                    from mcp.llm_enricher import EnrichmentResult
+                    data = json.loads(row['enrichment_data'])
+                    return EnrichmentResult(**data)
+                except (json.JSONDecodeError, Exception):
+                    return None
+    return None
+
+
+def cache_enrichment(description, direction, enrichment, provider, model):
+    """
+    Cache enrichment result for a transaction description.
+
+    Args:
+        description: Transaction description
+        direction: Transaction direction ('in' or 'out')
+        enrichment: EnrichmentResult object with enrichment data
+        provider: LLM provider name
+        model: Model name used
+
+    Returns:
+        Cache entry ID
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            enrichment_json = json.dumps(enrichment.__dict__)
+
+            cursor.execute('''
+                INSERT INTO llm_enrichment_cache
+                (transaction_description, transaction_direction, enrichment_data, provider, model)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (transaction_description, transaction_direction)
+                DO UPDATE SET
+                    enrichment_data = EXCLUDED.enrichment_data,
+                    provider = EXCLUDED.provider,
+                    model = EXCLUDED.model,
+                    created_at = NOW()
+                RETURNING id
+            ''', (description, direction, enrichment_json, provider, model))
+
+            cache_id = cursor.fetchone()[0]
+            conn.commit()
+            return cache_id
+
+
+def get_failed_enrichment_transaction_ids() -> list:
+    """Get transaction IDs that have failed enrichments.
+
+    Returns:
+        List of transaction IDs
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT id
+                FROM truelayer_transactions
+                WHERE metadata->'enrichment'->>'status' = 'failed'
+            ''')
+            return [row[0] for row in cursor.fetchall()]

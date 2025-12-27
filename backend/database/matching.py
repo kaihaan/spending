@@ -11,6 +11,124 @@ from datetime import datetime
 
 
 # ============================================================================
+# SOURCE COVERAGE & STALENESS DETECTION
+# ============================================================================
+
+
+def get_source_coverage_dates(user_id: int = 1) -> dict:
+    """
+    Get the max date coverage for each enrichment source vs bank transactions.
+
+    Used to detect when source data is stale (bank transactions are newer
+    than the last synced source data).
+
+    Args:
+        user_id: User ID to check coverage for
+
+    Returns:
+        dict with date ranges and list of stale sources needing refresh
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get max bank transaction date
+            cursor.execute('''
+                SELECT MAX(timestamp::date) as max_date,
+                       MIN(timestamp::date) as min_date,
+                       COUNT(*) as count
+                FROM truelayer_transactions
+            ''')
+            bank_result = cursor.fetchone()
+            bank_max = bank_result['max_date'] if bank_result else None
+            bank_min = bank_result['min_date'] if bank_result else None
+            bank_count = bank_result['count'] if bank_result else 0
+
+            # Get max Amazon order date
+            cursor.execute('''
+                SELECT MAX(order_date) as max_date,
+                       MIN(order_date) as min_date,
+                       COUNT(*) as count
+                FROM amazon_orders
+            ''')
+            amazon_result = cursor.fetchone()
+            amazon_max = amazon_result['max_date'] if amazon_result else None
+            amazon_min = amazon_result['min_date'] if amazon_result else None
+            amazon_count = amazon_result['count'] if amazon_result else 0
+
+            # Get max Apple transaction date
+            cursor.execute('''
+                SELECT MAX(order_date) as max_date,
+                       MIN(order_date) as min_date,
+                       COUNT(*) as count
+                FROM apple_transactions
+            ''')
+            apple_result = cursor.fetchone()
+            apple_max = apple_result['max_date'] if apple_result else None
+            apple_min = apple_result['min_date'] if apple_result else None
+            apple_count = apple_result['count'] if apple_result else 0
+
+            # Get max Gmail receipt date
+            cursor.execute('''
+                SELECT MAX(receipt_date) as max_date,
+                       MIN(receipt_date) as min_date,
+                       COUNT(*) as count
+                FROM gmail_receipts r
+                JOIN gmail_connections c ON r.connection_id = c.id
+                WHERE c.user_id = %s AND r.deleted_at IS NULL
+            ''', (user_id,))
+            gmail_result = cursor.fetchone()
+            gmail_max = gmail_result['max_date'] if gmail_result else None
+            gmail_min = gmail_result['min_date'] if gmail_result else None
+            gmail_count = gmail_result['count'] if gmail_result else 0
+
+            # Determine which sources are stale (> 7 days behind bank data)
+            stale_sources = []
+            stale_threshold_days = 7
+
+            if bank_max:
+                from datetime import timedelta
+                threshold_date = bank_max - timedelta(days=stale_threshold_days)
+
+                if amazon_count > 0 and amazon_max and amazon_max < threshold_date:
+                    stale_sources.append('amazon')
+                if apple_count > 0 and apple_max and apple_max < threshold_date:
+                    stale_sources.append('apple')
+                if gmail_count > 0 and gmail_max and gmail_max < threshold_date:
+                    stale_sources.append('gmail')
+
+            # Convert dates to strings for JSON serialization
+            def date_to_str(d):
+                return d.isoformat() if d else None
+
+            return {
+                'bank_transactions': {
+                    'max_date': date_to_str(bank_max),
+                    'min_date': date_to_str(bank_min),
+                    'count': bank_count
+                },
+                'amazon': {
+                    'max_date': date_to_str(amazon_max),
+                    'min_date': date_to_str(amazon_min),
+                    'count': amazon_count,
+                    'is_stale': 'amazon' in stale_sources
+                },
+                'apple': {
+                    'max_date': date_to_str(apple_max),
+                    'min_date': date_to_str(apple_min),
+                    'count': apple_count,
+                    'is_stale': 'apple' in stale_sources
+                },
+                'gmail': {
+                    'max_date': date_to_str(gmail_max),
+                    'min_date': date_to_str(gmail_min),
+                    'count': gmail_count,
+                    'is_stale': 'gmail' in stale_sources
+                },
+                'stale_sources': stale_sources,
+                'stale_threshold_days': stale_threshold_days
+            }
+
+
+# ============================================================================
 # CONSISTENCY ENGINE FUNCTIONS
 # ============================================================================
 
