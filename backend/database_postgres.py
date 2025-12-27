@@ -15,6 +15,7 @@ from datetime import datetime
 import cache_manager
 import psycopg2
 from dotenv import load_dotenv
+from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 
 # Load environment variables from .env file (don't override existing env vars for Docker compatibility)
@@ -37,7 +38,7 @@ def init_pool():
     """Initialize PostgreSQL connection pool"""
     global connection_pool
     try:
-        connection_pool = psycopg2.pool.SimpleConnectionPool(
+        connection_pool = pool.SimpleConnectionPool(
             1,  # Minimum connections
             10,  # Maximum connections
             **DB_CONFIG,
