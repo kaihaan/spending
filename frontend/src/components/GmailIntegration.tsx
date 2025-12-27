@@ -35,6 +35,7 @@ export default function GmailIntegration() {
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  const [forceReparse, setForceReparse] = useState(false);
 
   useEffect(() => {
     fetchConnection();
@@ -95,7 +96,8 @@ export default function GmailIntegration() {
 
       const response = await axios.post(`${API_URL}/gmail/sync`, {
         connection_id: connection.id,
-        sync_type: 'auto'
+        sync_type: 'auto',
+        force_reparse: forceReparse
       });
 
       const result = response.data;
@@ -223,7 +225,17 @@ export default function GmailIntegration() {
                 </div>
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-xs checkbox-primary"
+                    checked={forceReparse}
+                    onChange={(e) => setForceReparse(e.target.checked)}
+                    disabled={syncing}
+                  />
+                  <span className="text-xs text-base-content/70">Re-parse existing</span>
+                </label>
                 <button
                   className="btn btn-sm btn-primary"
                   onClick={handleSync}

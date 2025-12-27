@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { GmailDateRangeSelector, getDefaultDateRange } from '../GmailDateRangeSelector';
 import { GmailSyncProgressBar } from '../GmailSyncProgressBar';
@@ -904,8 +904,8 @@ export default function DataSourcesTab() {
           </thead>
           <tbody>
             {vendors.map(({ key, label }) => (
-              <>
-                <tr key={key} className="hover">
+              <React.Fragment key={key}>
+                <tr className="hover">
                   <td className="font-medium">
                     <div className="flex items-center gap-2">
                       {label}
@@ -1439,15 +1439,20 @@ export default function DataSourcesTab() {
                                     <td className="max-w-xs truncate">{receipt.subject}</td>
                                     <td>{receipt.total_amount ? formatCurrency(receipt.total_amount) : '—'}</td>
                                     <td>
-                                      {receipt.matched_transaction_id ? (
-                                        <span className="badge badge-success badge-xs">Matched</span>
-                                      ) : receipt.parsing_status === 'parsed' ? (
-                                        <span className="badge badge-info badge-xs">Parsed</span>
-                                      ) : receipt.parsing_status === 'pending' ? (
-                                        <span className="badge badge-warning badge-xs">Pending</span>
-                                      ) : (
-                                        <span className="badge badge-error badge-xs">Failed</span>
-                                      )}
+                                      <div className="flex gap-1">
+                                        {receipt.parsing_status === 'parsed' && (
+                                          <span className="badge badge-success badge-xs">Parsed</span>
+                                        )}
+                                        {receipt.parsing_status === 'pending' && (
+                                          <span className="badge badge-warning badge-xs">Pending</span>
+                                        )}
+                                        {(receipt.parsing_status === 'failed' || receipt.parsing_status === 'unparseable') && (
+                                          <span className="badge badge-error badge-xs">Failed</span>
+                                        )}
+                                        {receipt.matched_transaction_id && (
+                                          <span className="badge badge-primary badge-xs">Matched</span>
+                                        )}
+                                      </div>
                                     </td>
                                   </tr>
                                 ))}
@@ -1464,7 +1469,7 @@ export default function DataSourcesTab() {
                     </td>
                   </tr>
                 )}
-              </>
+              </React.Fragment>
             ))}
           </tbody>
         </table>

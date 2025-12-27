@@ -25,6 +25,12 @@ const DATA_TYPE_GROUPS = {
     { id: 'apple_transactions', label: 'Apple Transactions' },
     { id: 'truelayer_apple_matches', label: 'Apple Transaction Matches' }
   ],
+  'Gmail Data': [
+    { id: 'gmail_receipts', label: 'Gmail Receipts (parsed data)' },
+    { id: 'gmail_email_content', label: 'Gmail Email Content (raw emails)' },
+    { id: 'gmail_transaction_matches', label: 'Gmail Transaction Matches' },
+    { id: 'gmail_sync_jobs', label: 'Gmail Sync Job History' }
+  ],
   'Metadata': [
     { id: 'enrichment_cache', label: 'LLM Enrichment Cache' },
     { id: 'import_history', label: 'Import Job History' },
@@ -136,6 +142,10 @@ export default function TestingDashboard() {
       'truelayer_amazon_matches': 'Amazon Transaction Matches',
       'apple_transactions': 'Apple Transactions',
       'truelayer_apple_matches': 'Apple Transaction Matches',
+      'gmail_receipts': 'Gmail Receipts',
+      'gmail_email_content': 'Gmail Email Content',
+      'gmail_transaction_matches': 'Gmail Transaction Matches',
+      'gmail_sync_jobs': 'Gmail Sync Job History',
       'enrichment_cache': 'LLM Enrichment Cache',
       'import_history': 'Import Job History',
       'category_rules': 'Category Rules'

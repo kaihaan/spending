@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 const API_URL = 'http://localhost:5000/api';
@@ -219,6 +219,54 @@ export default function GmailMerchantsTab() {
     return displayItems.join(', ') + suffix;
   };
 
+  // Extract brand information from line items
+  const extractBrand = (items: LineItem[] | null): string => {
+    if (!items || items.length === 0) return '-';
+
+    // Check first item for brand metadata
+    const firstItem = items[0] as any;
+
+    // Deliveroo/Uber Eats have restaurant field
+    if (firstItem.restaurant) {
+      return firstItem.restaurant;
+    }
+
+    // PayPal has merchant field
+    if (firstItem.merchant) {
+      return firstItem.merchant;
+    }
+
+    // Black Sheep Coffee has location field
+    if (firstItem.location) {
+      return firstItem.location;
+    }
+
+    // Airbnb has property_name field
+    if (firstItem.property_name) {
+      return firstItem.property_name;
+    }
+
+    // eBay/Etsy/Vinted have seller field
+    if (firstItem.seller) {
+      return firstItem.seller;
+    }
+
+    // Apple has developer field (if we add it)
+    if (firstItem.developer) {
+      return firstItem.developer;
+    }
+
+    // Amazon has brand/manufacturer (if we add it)
+    if (firstItem.brand) {
+      return firstItem.brand;
+    }
+    if (firstItem.manufacturer) {
+      return firstItem.manufacturer;
+    }
+
+    return '-';
+  };
+
   // Get template badge
   const getTemplateBadge = (merchant: GmailMerchant) => {
     if (merchant.has_vendor_parser) {
@@ -239,7 +287,6 @@ export default function GmailMerchantsTab() {
   const getStatusBadge = (status: string) => {
     const statusMap: Record<string, { color: string; label: string }> = {
       'parsed': { color: 'badge-success', label: 'Parsed' },
-      'matched': { color: 'badge-primary', label: 'Matched' },
       'pending': { color: 'badge-warning', label: 'Pending' },
       'failed': { color: 'badge-error', label: 'Failed' },
       'unparseable': { color: 'badge-ghost', label: 'Unparseable' }
@@ -347,15 +394,15 @@ export default function GmailMerchantsTab() {
               <th>Domain</th>
               <th className="text-right">Total</th>
               <th className="text-center">Parsed</th>
+              <th className="text-center">Matched</th>
               <th className="text-center">Template</th>
             </tr>
           </thead>
           <tbody>
             {merchants.map((merchant) => (
-              <>
+              <React.Fragment key={merchant.merchant_normalized}>
                 {/* Main Row */}
                 <tr
-                  key={merchant.merchant_normalized}
                   className={`hover cursor-pointer ${expandedMerchant === merchant.merchant_normalized ? 'bg-base-200' : ''}`}
                   onClick={() => toggleExpand(merchant.merchant_normalized)}
                 >
@@ -385,6 +432,11 @@ export default function GmailMerchantsTab() {
                     )}
                   </td>
                   <td className="text-center">
+                    <span className={merchant.matched_count > 0 ? 'text-success font-semibold' : 'text-base-content/50'}>
+                      {merchant.matched_count}
+                    </span>
+                  </td>
+                  <td className="text-center">
                     {getTemplateBadge(merchant)}
                   </td>
                 </tr>
@@ -392,7 +444,7 @@ export default function GmailMerchantsTab() {
                 {/* Expanded Row - Receipts */}
                 {expandedMerchant === merchant.merchant_normalized && (
                   <tr key={`${merchant.merchant_normalized}-expanded`}>
-                    <td colSpan={5} className="bg-base-200 p-4">
+                    <td colSpan={6} className="bg-base-200 p-4">
                       {loadingReceipts ? (
                         <div className="flex justify-center py-4">
                           <span className="loading loading-spinner loading-sm"></span>
@@ -409,9 +461,10 @@ export default function GmailMerchantsTab() {
                                 <th>Date</th>
                                 <th>Subject</th>
                                 <th>Products</th>
+                                <th>Brand</th>
                                 <th className="text-right">Amount</th>
-                                <th className="text-center">Status</th>
-                                <th>Matched Transaction</th>
+                                <th className="text-center">Parsed</th>
+                                <th className="text-center">Matched</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -428,19 +481,30 @@ export default function GmailMerchantsTab() {
                                       {formatLineItems(receipt.line_items)}
                                     </span>
                                   </td>
+                                  <td className="max-w-32 truncate">
+                                    <span className={extractBrand(receipt.line_items) !== '-' ? 'text-info font-medium' : 'opacity-50'}>
+                                      {extractBrand(receipt.line_items)}
+                                    </span>
+                                  </td>
                                   <td className="text-right whitespace-nowrap">
                                     {formatCurrency(receipt.total_amount, receipt.currency_code)}
                                   </td>
                                   <td className="text-center">
-                                    {getStatusBadge(receipt.parsing_status)}
-                                  </td>
-                                  <td className="max-w-xs truncate">
-                                    {receipt.transaction_id ? (
-                                      <span className="text-success text-xs" title={receipt.transaction_description || ''}>
-                                        {formatCurrency(receipt.transaction_amount)} - {receipt.transaction_description?.substring(0, 30)}...
-                                      </span>
+                                    {receipt.parsing_status === 'parsed' ? (
+                                      <span className="badge badge-success badge-xs">Parsed</span>
+                                    ) : receipt.parsing_status === 'pending' ? (
+                                      <span className="badge badge-warning badge-xs">Pending</span>
+                                    ) : receipt.parsing_status === 'failed' ? (
+                                      <span className="badge badge-error badge-xs">Failed</span>
                                     ) : (
-                                      <span className="text-xs opacity-50">-</span>
+                                      <span className="badge badge-ghost badge-xs">Unparseable</span>
+                                    )}
+                                  </td>
+                                  <td className="text-center">
+                                    {receipt.transaction_id ? (
+                                      <span className="badge badge-success badge-xs">Yes</span>
+                                    ) : (
+                                      <span className="badge badge-ghost badge-xs">No</span>
                                     )}
                                   </td>
                                 </tr>
@@ -457,7 +521,7 @@ export default function GmailMerchantsTab() {
                     </td>
                   </tr>
                 )}
-              </>
+              </React.Fragment>
             ))}
           </tbody>
         </table>
