@@ -8837,3 +8837,9 @@ def get_gmail_merchant_statistics(
 
 # Initialize connection pool on import
 init_pool()
+
+# BRIDGE TO MODULAR DATABASE PACKAGE
+# Re-export all functions from the new modular structure
+# This allows existing code using database_postgres to access new functions
+# without requiring immediate migration
+from database import *  # noqa: F401, F403, E402

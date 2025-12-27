@@ -184,7 +184,9 @@
       "Bash(npm run lint:*)",
       "Bash(npx eslint --version)",
       "Bash(./node_modules/.bin/eslint:*)",
-      "Bash(pre-commit:*)"
+      "Bash(pre-commit:*)",
+      "Bash(/home/kaihaan/prj/spending/frontend/fix-remaining.sh)",
+      "Bash(npx eslint:*)"
     ],
     "deny": [],
     "ask": []

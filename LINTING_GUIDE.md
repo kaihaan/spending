@@ -106,6 +106,264 @@ Most IDEs auto-detect ESLint:
 - **Cursor:** Built-in support
 - **WebStorm:** ESLint enabled by default
 
+## How to Fix Remaining Errors (161 Critical Issues)
+
+### Overview
+
+After downgrading non-critical rules to warnings, **161 critical errors** remain. These are real runtime safety issues worth fixing. This guide shows you how to fix each pattern.
+
+### Error Categories
+
+1. **Floating Promises** (54 errors) - Promises called but not awaited
+2. **Misused Promises** (80 errors) - Async functions in event handlers
+3. **Unused Variables** (20 errors) - Variables defined but never used
+4. **Require Await** (7 errors) - Async functions without await
+
+---
+
+## Pattern 1: Floating Promises in useEffect
+
+**Problem:** Promise calls without `.catch()` or `void` can fail silently.
+
+### ❌ Before (Error)
+```typescript
+useEffect(() => {
+  fetchConnections();  // Error: floating promise
+}, []);
+
+const handleClick = () => {
+  loadData();  // Error: floating promise
+};
+```
+
+### ✅ After (Fixed)
+```typescript
+useEffect(() => {
+  void fetchConnections();  // Option 1: Mark as intentional
+}, []);
+
+// OR
+
+useEffect(() => {
+  fetchConnections().catch(console.error);  // Option 2: Add error handler
+}, []);
+
+const handleClick = () => {
+  void loadData();  // Mark as fire-and-forget
+};
+```
+
+**When to use which:**
+- Use `void` for fire-and-forget operations (logging, background tasks)
+- Use `.catch()` when you want to handle errors
+
+---
+
+## Pattern 2: Floating Promises in Event Handlers
+
+**Problem:** Axios calls without error handling.
+
+### ❌ Before (Error)
+```typescript
+const deleteItem = async (id: number) => {
+  axios.delete(`/api/items/${id}`);  // Error: floating promise
+  setItems(items.filter(i => i.id !== id));
+};
+```
+
+### ✅ After (Fixed)
+```typescript
+const deleteItem = async (id: number) => {
+  await axios.delete(`/api/items/${id}`);  // Option 1: Await
+  setItems(items.filter(i => i.id !== id));
+};
+
+// OR
+
+const deleteItem = async (id: number) => {
+  void axios.delete(`/api/items/${id}`).catch(err => {
+    console.error('Delete failed:', err);
+    alert('Failed to delete item');
+  });
+  setItems(items.filter(i => i.id !== id));
+};
+```
+
+---
+
+## Pattern 3: Misused Promises in onClick Handlers
+
+**Problem:** React event handlers expect `void`, not `Promise<void>`.
+
+### ❌ Before (Error)
+```typescript
+const handleDelete = async () => {
+  await axios.delete('/api/item');
+};
+
+<button onClick={handleDelete}>Delete</button>
+// Error: Promise-returning function in onClick
+```
+
+### ✅ After (Fixed - Option 1: Wrapper)
+```typescript
+const handleDelete = async () => {
+  await axios.delete('/api/item');
+};
+
+<button onClick={() => void handleDelete()}>Delete</button>
+```
+
+### ✅ After (Fixed - Option 2: Non-async)
+```typescript
+const handleDelete = () => {
+  void axios.delete('/api/item').catch(console.error);
+};
+
+<button onClick={handleDelete}>Delete</button>
+```
+
+### ✅ After (Fixed - Option 3: Helper Utility)
+```typescript
+import { handleAsync } from '../utils/promiseHandlers';
+
+const handleDelete = async () => {
+  await axios.delete('/api/item');
+};
+
+<button onClick={handleAsync(handleDelete)}>Delete</button>
+```
+
+---
+
+## Pattern 4: Unused Variables
+
+**Problem:** Variables defined but never used.
+
+### ❌ Before (Error)
+```typescript
+const [loading, setLoading] = useState(false);
+// Error: 'loading' is never used
+
+catch (err) {
+  // Error: 'err' is never used
+  console.log('Failed');
+}
+
+items.map((item, index) => (
+  // Error: 'index' is never used
+  <div key={item.id}>{item.name}</div>
+))
+```
+
+### ✅ After (Fixed)
+```typescript
+const [_loading, _setLoading] = useState(false);
+// Prefix with _ to indicate intentionally unused
+
+catch (_err) {
+  // Prefix with _ for unused error
+  console.log('Failed');
+}
+
+items.map((item, _index) => (
+  // Prefix with _ for unused index
+  <div key={item.id}>{item.name}</div>
+))
+
+// OR remove entirely if truly not needed
+const [, setLoading] = useState(false);
+```
+
+---
+
+## Pattern 5: Require Await
+
+**Problem:** Async functions that don't use `await`.
+
+### ❌ Before (Error)
+```typescript
+const handleCallback = async () => {
+  // No await in function body
+  window.location.href = '/dashboard';
+};
+```
+
+### ✅ After (Fixed)
+```typescript
+// Option 1: Remove async if not needed
+const handleCallback = () => {
+  window.location.href = '/dashboard';
+};
+
+// Option 2: Add await if you plan to use it
+const handleCallback = async () => {
+  await someAsyncOperation();
+  window.location.href = '/dashboard';
+};
+```
+
+---
+
+## Pattern 6: Promise Chains Without Catch
+
+**Problem:** `.then()` without `.catch()`.
+
+### ❌ Before (Error)
+```typescript
+axios.post('/api/sync')
+  .then(response => {
+    setSyncing(false);
+  });  // Error: no .catch()
+```
+
+### ✅ After (Fixed)
+```typescript
+axios.post('/api/sync')
+  .then(response => {
+    setSyncing(false);
+  })
+  .catch(error => {
+    console.error('Sync failed:', error);
+    setSyncing(false);
+  });
+```
+
+---
+
+## Reference Example: Fixed Component
+
+See `src/components/BankGiroMigration.tsx` for a fully fixed migration component demonstrating all patterns.
+
+---
+
+## Quick Fix Checklist
+
+For each file with errors:
+
+1. **Find floating promises:**
+   - Search for: `fetchConnections();`, `loadData();`, `syncAccounts();`
+   - Fix: Add `void` prefix: `void fetchConnections();`
+
+2. **Find misused promises in handlers:**
+   - Search for: `onClick={handleSomething}` where `handleSomething` is async
+   - Fix: Wrap: `onClick={() => void handleSomething()}`
+
+3. **Find unused variables:**
+   - Look for linter errors about unused vars
+   - Fix: Prefix with `_` or remove entirely
+
+4. **Find unnecessary async:**
+   - Search for `async` functions without `await`
+   - Fix: Remove `async` keyword
+
+5. **Test your changes:**
+   ```bash
+   npm run lint src/components/YourFile.tsx
+   ```
+
+---
+
 ## Troubleshooting
 
 ### "ESLint couldn't find config"
@@ -127,8 +385,16 @@ pre-commit autoupdate
 pre-commit install --install-hooks
 ```
 
+### "Still getting errors after fix"
+- Make sure you saved the file
+- Check for syntax errors (missing brackets, etc.)
+- Run `npm run lint:fix` to auto-fix formatting
+
+---
+
 ## Resources
 
 - [TypeScript ESLint Rules](https://typescript-eslint.io/rules/)
 - [ESLint Config Guide](https://eslint.org/docs/latest/use/configure/)
 - [React Hooks Rules](https://react.dev/reference/rules/rules-of-hooks)
+- Promise Handlers Utility: `src/utils/promiseHandlers.ts`
