@@ -309,6 +309,29 @@ def get_sync_status():
         return jsonify({"error": str(e)}), 500
 
 
+@gmail_bp.route("/sync/<int:job_id>", methods=["GET"])
+def get_job_status(job_id):
+    """
+    Get status of a specific Gmail sync job.
+
+    Path params:
+        job_id (int): Job ID to query
+
+    Returns:
+        Job dict with status, progress, and results
+    """
+    try:
+        job = gmail_service.get_job_status(job_id)
+        return jsonify(job)
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        print(f"❌ Gmail job status error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @gmail_bp.route("/match", methods=["POST"])
 def run_matching():
     """
