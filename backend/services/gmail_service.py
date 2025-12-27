@@ -83,8 +83,27 @@ def get_sync_status(user_id: int) -> dict:
     if not connection:
         return {"connected": False, "message": "No Gmail connection found"}
 
-    status = gmail_sync.get_sync_status(connection["id"])
-    return status
+    return gmail_sync.get_sync_status(connection["id"])
+
+
+def get_job_status(job_id: int) -> dict:
+    """
+    Get status of a specific Gmail sync job.
+
+    Args:
+        job_id: Job ID to query
+
+    Returns:
+        Job dict with status, progress, and results
+
+    Raises:
+        ValueError: If job not found
+    """
+    job = gmail.get_gmail_sync_job(job_id)
+    if not job:
+        raise ValueError(f"Gmail sync job {job_id} not found")
+
+    return job
 
 
 def get_connection(user_id: int) -> dict:
