@@ -33,7 +33,7 @@ from mcp.gmail_client import (
     extract_sender_domain,
     get_attachment_content,
 )
-from mcp.gmail_parser import (
+from mcp.gmail_parsing.filtering import (
     is_amazon_receipt_email,
     is_ebay_receipt_email,
     is_etsy_receipt_email,
@@ -49,8 +49,8 @@ from mcp.gmail_parser import (
     is_ocado_receipt_email,
     is_citizens_of_soil_receipt_email,
     is_figma_receipt_email,
-    parse_receipt_content,
 )
+from mcp.gmail_parsing.orchestrator import parse_receipt_content
 from mcp.gmail_pdf_parser import parse_receipt_pdf
 from mcp.logging_config import get_logger
 

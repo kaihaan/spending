@@ -18,7 +18,7 @@ from mcp.gmail_client import (
     parse_sender_email,
     extract_sender_domain,
 )
-from mcp.gmail_parser import parse_receipt_content
+from mcp.gmail_parsing.orchestrator import parse_receipt_content
 
 
 # Estimated output tokens for a parsed receipt JSON response
