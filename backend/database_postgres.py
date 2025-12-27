@@ -38,7 +38,7 @@ def init_pool():
     """Initialize PostgreSQL connection pool"""
     global connection_pool
     try:
-        connection_pool = pool.SimpleConnectionPool(
+        connection_pool = pool.ThreadedConnectionPool(
             1,  # Minimum connections
             10,  # Maximum connections
             **DB_CONFIG,
