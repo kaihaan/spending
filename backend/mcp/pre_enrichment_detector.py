@@ -15,24 +15,26 @@ Status values:
 # Apple patterns (from apple_matcher.py)
 # These identify genuine Apple merchant transactions
 APPLE_PATTERNS = [
-    'APPLE.COM',
-    'APPLE COM',
-    'APP STORE',
-    'APPSTORE',
-    'ITUNES',
-    'APPLE SERVICES',
-    'APPLE BILL',
+    "APPLE.COM",
+    "APPLE COM",
+    "APP STORE",
+    "APPSTORE",
+    "ITUNES",
+    "APPLE SERVICES",
+    "APPLE BILL",
 ]
 
 # Amazon patterns (from amazon_matcher.py)
-AMAZON_PATTERNS = ['AMAZON', 'AMZN', 'AMZ']
+AMAZON_PATTERNS = ["AMAZON", "AMZN", "AMZ"]
 
 # Patterns that indicate Apple Pay as a payment method (not Apple purchase)
 # Only used to exclude non-Apple transactions using Apple Pay
-APPLE_PAY_EXCLUSIONS = ['APPLE PAY', 'APPLEPAY', 'VIA APPLE PAY']
+APPLE_PAY_EXCLUSIONS = ["APPLE PAY", "APPLEPAY", "VIA APPLE PAY"]
 
 
-def detect_pre_enrichment_status(description: str, merchant_name: str, transaction_type: str) -> str:
+def detect_pre_enrichment_status(
+    description: str, merchant_name: str, transaction_type: str
+) -> str:
     """
     Detect the pre_enrichment_status for a transaction based on description patterns.
 
@@ -52,13 +54,13 @@ def detect_pre_enrichment_status(description: str, merchant_name: str, transacti
         - 'AMZN RTN': Amazon return (not yet matched)
     """
     # Combine description and merchant for pattern matching
-    text = ((description or '') + ' ' + (merchant_name or '')).upper()
+    text = ((description or "") + " " + (merchant_name or "")).upper()
 
     # Check for Apple purchase (genuine Apple merchant, not just Apple Pay payment method)
     is_apple_merchant = any(pattern in text for pattern in APPLE_PATTERNS)
 
     if is_apple_merchant:
-        return 'Apple'
+        return "Apple"
 
     # If it's only Apple Pay as payment method (no Apple merchant), it's not matchable
     is_apple_pay_only = any(pattern in text for pattern in APPLE_PAY_EXCLUSIONS)
@@ -71,12 +73,11 @@ def detect_pre_enrichment_status(description: str, merchant_name: str, transacti
 
     if is_amazon:
         # Amazon return (CREDIT with Amazon keywords)
-        if transaction_type == 'CREDIT':
-            return 'AMZN RTN'
-        else:
-            return 'AMZN'
+        if transaction_type == "CREDIT":
+            return "AMZN RTN"
+        return "AMZN"
 
-    return 'None'
+    return "None"
 
 
 def is_matchable_transaction(status: str) -> bool:
@@ -89,7 +90,7 @@ def is_matchable_transaction(status: str) -> bool:
     Returns:
         True if the transaction is from a matchable source (Apple, Amazon)
     """
-    return status in ('Apple', 'AMZN', 'AMZN RTN')
+    return status in ("Apple", "AMZN", "AMZN RTN")
 
 
 def get_status_display_name(status: str) -> str:
@@ -103,10 +104,10 @@ def get_status_display_name(status: str) -> str:
         Human-readable status name
     """
     names = {
-        'None': 'Not Matchable',
-        'Matched': 'Matched',
-        'Apple': 'Apple App Store',
-        'AMZN': 'Amazon Purchase',
-        'AMZN RTN': 'Amazon Return',
+        "None": "Not Matchable",
+        "Matched": "Matched",
+        "Apple": "Apple App Store",
+        "AMZN": "Amazon Purchase",
+        "AMZN RTN": "Amazon Return",
     }
     return names.get(status, status)

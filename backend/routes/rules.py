@@ -10,18 +10,21 @@ Handles all rule management endpoints:
 Routes are thin controllers that delegate to rules_service for business logic.
 """
 
-from flask import Blueprint, request, jsonify
-from services import rules_service
 import traceback
 
-rules_bp = Blueprint('rules', __name__, url_prefix='/api/rules')
+from flask import Blueprint, jsonify, request
+
+from services import rules_service
+
+rules_bp = Blueprint("rules", __name__, url_prefix="/api/rules")
 
 
 # ============================================================================
 # Category Rules
 # ============================================================================
 
-@rules_bp.route('/category', methods=['GET'])
+
+@rules_bp.route("/category", methods=["GET"])
 def get_category_rules():
     """
     Get all category rules with optional filtering.
@@ -35,14 +38,12 @@ def get_category_rules():
         List of category rules
     """
     try:
-        active_only = request.args.get('active_only', 'true').lower() == 'true'
-        category = request.args.get('category')
-        source = request.args.get('source')
+        active_only = request.args.get("active_only", "true").lower() == "true"
+        category = request.args.get("category")
+        source = request.args.get("source")
 
         rules = rules_service.get_category_rules(
-            active_only=active_only,
-            category=category,
-            source=source
+            active_only=active_only, category=category, source=source
         )
 
         return jsonify(rules)
@@ -50,10 +51,10 @@ def get_category_rules():
     except Exception as e:
         print(f"❌ Get category rules error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/category', methods=['POST'])
+@rules_bp.route("/category", methods=["POST"])
 def create_category_rule():
     """
     Create a new category rule.
@@ -75,28 +76,28 @@ def create_category_rule():
         data = request.json
 
         result = rules_service.create_category_rule(
-            rule_name=data.get('rule_name'),
-            description_pattern=data.get('description_pattern', ''),
-            category=data.get('category'),
-            pattern_type=data.get('pattern_type'),
-            transaction_type=data.get('transaction_type'),
-            subcategory=data.get('subcategory'),
-            priority=data.get('priority', 0),
-            source=data.get('source', 'manual')
+            rule_name=data.get("rule_name"),
+            description_pattern=data.get("description_pattern", ""),
+            category=data.get("category"),
+            pattern_type=data.get("pattern_type"),
+            transaction_type=data.get("transaction_type"),
+            subcategory=data.get("subcategory"),
+            priority=data.get("priority", 0),
+            source=data.get("source", "manual"),
         )
 
         return jsonify(result), 201
 
     except ValueError as e:
         # Pattern validation error
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Create category rule error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/category/<int:rule_id>', methods=['PUT'])
+@rules_bp.route("/category/<int:rule_id>", methods=["PUT"])
 def update_category_rule(rule_id):
     """
     Update an existing category rule.
@@ -115,20 +116,19 @@ def update_category_rule(rule_id):
         success = rules_service.update_category_rule(rule_id, **data)
 
         if success:
-            return jsonify({'success': True, 'message': f"Updated rule {rule_id}"})
-        else:
-            return jsonify({'error': 'Rule not found'}), 404
+            return jsonify({"success": True, "message": f"Updated rule {rule_id}"})
+        return jsonify({"error": "Rule not found"}), 404
 
     except ValueError as e:
         # Pattern validation error
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Update category rule error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/category/<int:rule_id>', methods=['DELETE'])
+@rules_bp.route("/category/<int:rule_id>", methods=["DELETE"])
 def delete_category_rule(rule_id):
     """
     Delete a category rule.
@@ -143,17 +143,16 @@ def delete_category_rule(rule_id):
         success = rules_service.delete_category_rule(rule_id)
 
         if success:
-            return jsonify({'success': True, 'message': f"Deleted rule {rule_id}"})
-        else:
-            return jsonify({'error': 'Rule not found'}), 404
+            return jsonify({"success": True, "message": f"Deleted rule {rule_id}"})
+        return jsonify({"error": "Rule not found"}), 404
 
     except Exception as e:
         print(f"❌ Delete category rule error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/category/<int:rule_id>/test', methods=['POST'])
+@rules_bp.route("/category/<int:rule_id>/test", methods=["POST"])
 def test_category_rule(rule_id):
     """
     Test an existing category rule against all transactions.
@@ -168,21 +167,21 @@ def test_category_rule(rule_id):
         Test results with matching transactions
     """
     try:
-        limit = request.args.get('limit', 10, type=int)
+        limit = request.args.get("limit", 10, type=int)
         result = rules_service.test_category_rule(rule_id, limit=limit)
 
         return jsonify(result)
 
     except ValueError as e:
         # Rule not found
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Test category rule error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/category/test-pattern', methods=['POST'])
+@rules_bp.route("/category/test-pattern", methods=["POST"])
 def test_pattern():
     """
     Test a pattern against transactions before creating a rule.
@@ -197,32 +196,31 @@ def test_pattern():
     """
     try:
         data = request.json
-        pattern = data.get('pattern', '')
-        pattern_type = data.get('pattern_type')
-        limit = data.get('limit', 10)
+        pattern = data.get("pattern", "")
+        pattern_type = data.get("pattern_type")
+        limit = data.get("limit", 10)
 
         result = rules_service.test_pattern(
-            pattern=pattern,
-            pattern_type=pattern_type,
-            limit=limit
+            pattern=pattern, pattern_type=pattern_type, limit=limit
         )
 
         return jsonify(result)
 
     except ValueError as e:
         # Pattern validation error
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Test category pattern error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Merchant Normalization Rules
 # ============================================================================
 
-@rules_bp.route('/merchant', methods=['GET'])
+
+@rules_bp.route("/merchant", methods=["GET"])
 def get_merchant_rules():
     """
     Get all merchant normalizations with optional filtering.
@@ -235,12 +233,11 @@ def get_merchant_rules():
         List of merchant normalization rules
     """
     try:
-        source = request.args.get('source')
-        category = request.args.get('category')
+        source = request.args.get("source")
+        category = request.args.get("category")
 
         normalizations = rules_service.get_merchant_rules(
-            source=source,
-            category=category
+            source=source, category=category
         )
 
         return jsonify(normalizations)
@@ -248,10 +245,10 @@ def get_merchant_rules():
     except Exception as e:
         print(f"❌ Get merchant normalizations error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/merchant', methods=['POST'])
+@rules_bp.route("/merchant", methods=["POST"])
 def create_merchant_rule():
     """
     Create a new merchant normalization.
@@ -272,27 +269,27 @@ def create_merchant_rule():
         data = request.json
 
         result = rules_service.create_merchant_rule(
-            pattern=data.get('pattern', ''),
-            normalized_name=data.get('normalized_name'),
-            pattern_type=data.get('pattern_type'),
-            merchant_type=data.get('merchant_type'),
-            default_category=data.get('default_category'),
-            priority=data.get('priority', 0),
-            source=data.get('source', 'manual')
+            pattern=data.get("pattern", ""),
+            normalized_name=data.get("normalized_name"),
+            pattern_type=data.get("pattern_type"),
+            merchant_type=data.get("merchant_type"),
+            default_category=data.get("default_category"),
+            priority=data.get("priority", 0),
+            source=data.get("source", "manual"),
         )
 
         return jsonify(result), 201
 
     except ValueError as e:
         # Pattern validation error
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Create merchant normalization error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/merchant/<int:norm_id>', methods=['PUT'])
+@rules_bp.route("/merchant/<int:norm_id>", methods=["PUT"])
 def update_merchant_rule(norm_id):
     """
     Update an existing merchant normalization.
@@ -311,20 +308,21 @@ def update_merchant_rule(norm_id):
         success = rules_service.update_merchant_rule(norm_id, **data)
 
         if success:
-            return jsonify({'success': True, 'message': f"Updated normalization {norm_id}"})
-        else:
-            return jsonify({'error': 'Normalization not found'}), 404
+            return jsonify(
+                {"success": True, "message": f"Updated normalization {norm_id}"}
+            )
+        return jsonify({"error": "Normalization not found"}), 404
 
     except ValueError as e:
         # Pattern validation error
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Update merchant normalization error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/merchant/<int:norm_id>', methods=['DELETE'])
+@rules_bp.route("/merchant/<int:norm_id>", methods=["DELETE"])
 def delete_merchant_rule(norm_id):
     """
     Delete a merchant normalization.
@@ -339,17 +337,18 @@ def delete_merchant_rule(norm_id):
         success = rules_service.delete_merchant_rule(norm_id)
 
         if success:
-            return jsonify({'success': True, 'message': f"Deleted normalization {norm_id}"})
-        else:
-            return jsonify({'error': 'Normalization not found'}), 404
+            return jsonify(
+                {"success": True, "message": f"Deleted normalization {norm_id}"}
+            )
+        return jsonify({"error": "Normalization not found"}), 404
 
     except Exception as e:
         print(f"❌ Delete merchant normalization error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/merchant/<int:norm_id>/test', methods=['POST'])
+@rules_bp.route("/merchant/<int:norm_id>/test", methods=["POST"])
 def test_merchant_rule(norm_id):
     """
     Test an existing merchant normalization against all transactions.
@@ -364,25 +363,26 @@ def test_merchant_rule(norm_id):
         Test results with matching transactions
     """
     try:
-        limit = request.args.get('limit', 10, type=int)
+        limit = request.args.get("limit", 10, type=int)
         result = rules_service.test_merchant_rule(norm_id, limit=limit)
 
         return jsonify(result)
 
     except ValueError as e:
         # Normalization not found
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Test merchant normalization error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Bulk Operations
 # ============================================================================
 
-@rules_bp.route('/statistics', methods=['GET'])
+
+@rules_bp.route("/statistics", methods=["GET"])
 def get_statistics():
     """
     Get comprehensive rule usage statistics and coverage metrics.
@@ -397,10 +397,10 @@ def get_statistics():
     except Exception as e:
         print(f"❌ Get rules statistics error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/test-all', methods=['POST'])
+@rules_bp.route("/test-all", methods=["POST"])
 def test_all():
     """
     Evaluate all rules against all transactions.
@@ -418,10 +418,10 @@ def test_all():
     except Exception as e:
         print(f"❌ Test all rules error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@rules_bp.route('/apply-all', methods=['POST'])
+@rules_bp.route("/apply-all", methods=["POST"])
 def apply_all():
     """
     Re-apply all rules to all transactions.
@@ -439,4 +439,4 @@ def apply_all():
     except Exception as e:
         print(f"❌ Apply all rules error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500

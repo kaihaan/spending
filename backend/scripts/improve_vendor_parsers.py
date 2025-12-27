@@ -12,8 +12,8 @@ Since Amazon emails don't contain brand info in the receipt, we'll:
 Note: Amazon brand data requires external API enrichment, not email parsing.
 """
 
-import sys
 import os
+import sys
 
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

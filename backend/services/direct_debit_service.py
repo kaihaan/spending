@@ -15,13 +15,14 @@ readable merchant names and consistent categorization.
 Separates business logic from HTTP routing concerns.
 """
 
-from database import direct_debit as db_direct_debit
 import cache_manager
 
+from database import direct_debit as db_direct_debit
 
 # ============================================================================
 # Direct Debit Operations
 # ============================================================================
+
 
 def get_payees() -> list:
     """
@@ -50,8 +51,13 @@ def get_mappings() -> list:
     return mappings
 
 
-def save_mapping(payee_pattern: str, normalized_name: str, category: str,
-                  subcategory: str = None, merchant_type: str = None) -> dict:
+def save_mapping(
+    payee_pattern: str,
+    normalized_name: str,
+    category: str,
+    subcategory: str = None,
+    merchant_type: str = None,
+) -> dict:
     """
     Create or update a direct debit mapping.
 
@@ -69,20 +75,22 @@ def save_mapping(payee_pattern: str, normalized_name: str, category: str,
         ValueError: If required fields missing
     """
     if not payee_pattern or not normalized_name or not category:
-        raise ValueError('Missing required fields: payee_pattern, normalized_name, category')
+        raise ValueError(
+            "Missing required fields: payee_pattern, normalized_name, category"
+        )
 
     mapping_id = db_direct_debit.save_direct_debit_mapping(
         payee_pattern=payee_pattern,
         normalized_name=normalized_name,
         category=category,
         subcategory=subcategory,
-        merchant_type=merchant_type
+        merchant_type=merchant_type,
     )
 
     return {
-        'success': True,
-        'mapping_id': mapping_id,
-        'message': f'Mapping saved for {payee_pattern}'
+        "success": True,
+        "mapping_id": mapping_id,
+        "message": f"Mapping saved for {payee_pattern}",
     }
 
 
@@ -102,12 +110,9 @@ def delete_mapping(mapping_id: int) -> dict:
     deleted = db_direct_debit.delete_direct_debit_mapping(mapping_id)
 
     if not deleted:
-        raise ValueError('Mapping not found')
+        raise ValueError("Mapping not found")
 
-    return {
-        'success': True,
-        'message': 'Mapping deleted'
-    }
+    return {"success": True, "message": "Mapping deleted"}
 
 
 def apply_mappings() -> dict:
@@ -126,10 +131,10 @@ def apply_mappings() -> dict:
     cache_manager.cache_invalidate_transactions()
 
     return {
-        'success': True,
-        'updated_count': result['updated_count'],
-        'transactions': result['transactions'],
-        'message': f"Updated {result['updated_count']} transactions"
+        "success": True,
+        "updated_count": result["updated_count"],
+        "transactions": result["transactions"],
+        "message": f"Updated {result['updated_count']} transactions",
     }
 
 

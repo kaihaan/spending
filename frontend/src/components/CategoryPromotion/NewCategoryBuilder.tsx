@@ -1,4 +1,4 @@
-import { SelectedSubcategory } from './types';
+import type { SelectedSubcategory } from './types';
 
 interface NewCategoryBuilderProps {
   name: string;

@@ -65,6 +65,9 @@ export default function Dashboard() {
     const monthlyTotals: Record<string, Record<string, number>> = {};
 
     filteredTransactions.forEach(txn => {
+      // Skip transactions with null/undefined date
+      if (!txn.date) return;
+
       const monthKey = txn.date.substring(0, 7); // "2024-12"
       if (!monthlyTotals[monthKey]) monthlyTotals[monthKey] = {};
       if (!monthlyTotals[monthKey][txn.category]) monthlyTotals[monthKey][txn.category] = 0;
@@ -95,6 +98,7 @@ export default function Dashboard() {
 
     filteredTransactions.forEach(txn => {
       if (txn.category !== filters.selectedCategory) return;
+      if (!txn.date) return;
       const monthKey = txn.date.substring(0, 7);
       const subcategory = txn.subcategory || 'Uncategorized';
       if (!monthlyTotals[monthKey]) monthlyTotals[monthKey] = {};

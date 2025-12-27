@@ -11,14 +11,13 @@ Usage:
 """
 
 import logging
-from logging.handlers import RotatingFileHandler
 import os
-
+from logging.handlers import RotatingFileHandler
 
 # Log directory from environment or default
 # In Docker: /app/.claude/logs (mounted volume)
 # In local dev: /home/kaihaan/prj/spending/.claude/logs
-LOG_DIR = os.getenv('LOG_DIR', '/app/.claude/logs')
+LOG_DIR = os.getenv("LOG_DIR", "/app/.claude/logs")
 
 
 class StructuredFormatter(logging.Formatter):
@@ -34,10 +33,10 @@ class StructuredFormatter(logging.Formatter):
     def format(self, record):
         """Format log record with context fields."""
         # Add context fields with None defaults if not present
-        record.sync_job_id = getattr(record, 'sync_job_id', None)
-        record.connection_id = getattr(record, 'connection_id', None)
-        record.merchant = getattr(record, 'merchant', None)
-        record.parse_method = getattr(record, 'parse_method', None)
+        record.sync_job_id = getattr(record, "sync_job_id", None)
+        record.connection_id = getattr(record, "connection_id", None)
+        record.merchant = getattr(record, "merchant", None)
+        record.parse_method = getattr(record, "parse_method", None)
 
         return super().format(record)
 
@@ -77,41 +76,45 @@ def get_logger(name: str) -> logging.Logger:
     # ========================================
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
-    console.setFormatter(StructuredFormatter(
-        '[%(levelname)s] [job:%(sync_job_id)s] %(message)s'
-    ))
+    console.setFormatter(
+        StructuredFormatter("[%(levelname)s] [job:%(sync_job_id)s] %(message)s")
+    )
     logger.addHandler(console)
 
     # ========================================
     # File Handler (rotating, all levels)
     # ========================================
     file_handler = RotatingFileHandler(
-        os.path.join(LOG_DIR, 'gmail_sync.log'),
+        os.path.join(LOG_DIR, "gmail_sync.log"),
         maxBytes=10 * 1024 * 1024,  # 10MB per file
         backupCount=30,  # Keep 30 backup files
-        encoding='utf-8'
+        encoding="utf-8",
     )
     file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(StructuredFormatter(
-        '[%(asctime)s] [%(levelname)s] [%(name)s] '
-        '[job:%(sync_job_id)s merchant:%(merchant)s] %(message)s'
-    ))
+    file_handler.setFormatter(
+        StructuredFormatter(
+            "[%(asctime)s] [%(levelname)s] [%(name)s] "
+            "[job:%(sync_job_id)s merchant:%(merchant)s] %(message)s"
+        )
+    )
     logger.addHandler(file_handler)
 
     # ========================================
     # Error File Handler (errors only)
     # ========================================
     error_handler = RotatingFileHandler(
-        os.path.join(LOG_DIR, 'gmail_errors.log'),
+        os.path.join(LOG_DIR, "gmail_errors.log"),
         maxBytes=10 * 1024 * 1024,  # 10MB per file
         backupCount=30,
-        encoding='utf-8'
+        encoding="utf-8",
     )
     error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(StructuredFormatter(
-        '[%(asctime)s] [%(levelname)s] [%(name)s] '
-        '[job:%(sync_job_id)s merchant:%(merchant)s] %(message)s'
-    ))
+    error_handler.setFormatter(
+        StructuredFormatter(
+            "[%(asctime)s] [%(levelname)s] [%(name)s] "
+            "[job:%(sync_job_id)s merchant:%(merchant)s] %(message)s"
+        )
+    )
     logger.addHandler(error_handler)
 
     return logger

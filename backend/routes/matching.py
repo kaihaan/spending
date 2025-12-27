@@ -14,18 +14,21 @@ to enrich transaction data with detailed line items and accurate categorization.
 Routes are thin controllers that delegate to matching_service for business logic.
 """
 
-from flask import Blueprint, request, jsonify
-from services import matching_service
 import traceback
 
-matching_bp = Blueprint('matching', __name__, url_prefix='/api/matching')
+from flask import Blueprint, jsonify, request
+
+from services import matching_service
+
+matching_bp = Blueprint("matching", __name__, url_prefix="/api/matching")
 
 
 # ============================================================================
 # Matching Job Operations
 # ============================================================================
 
-@matching_bp.route('/jobs/<int:job_id>', methods=['GET'])
+
+@matching_bp.route("/jobs/<int:job_id>", methods=["GET"])
 def get_job_status(job_id):
     """
     Get status of a specific matching job.
@@ -41,14 +44,14 @@ def get_job_status(job_id):
         return jsonify(job)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Matching job status error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@matching_bp.route('/jobs/cleanup-stale', methods=['POST'])
+@matching_bp.route("/jobs/cleanup-stale", methods=["POST"])
 def cleanup_stale():
     """
     Cleanup stale matching jobs older than threshold.
@@ -63,7 +66,7 @@ def cleanup_stale():
         Dict with cleaned_up count and job_ids list
     """
     try:
-        threshold = int(request.args.get('threshold_minutes', 30))
+        threshold = int(request.args.get("threshold_minutes", 30))
         result = matching_service.cleanup_stale_jobs(threshold_minutes=threshold)
 
         return jsonify(result)
@@ -71,14 +74,15 @@ def cleanup_stale():
     except Exception as e:
         print(f"❌ Cleanup stale jobs error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Source Coverage & Staleness Detection
 # ============================================================================
 
-@matching_bp.route('/coverage', methods=['GET'])
+
+@matching_bp.route("/coverage", methods=["GET"])
 def get_coverage():
     """
     Get source coverage dates to detect stale data.
@@ -109,7 +113,7 @@ def get_coverage():
         }
     """
     try:
-        user_id = request.args.get('user_id', 1, type=int)
+        user_id = request.args.get("user_id", 1, type=int)
         coverage = matching_service.get_coverage(user_id=user_id)
 
         return jsonify(coverage)
@@ -117,10 +121,10 @@ def get_coverage():
     except Exception as e:
         print(f"❌ Matching coverage error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@matching_bp.route('/stats', methods=['GET'])
+@matching_bp.route("/stats", methods=["GET"])
 def get_stats():
     """
     Get matching statistics (alias for /coverage).
@@ -132,7 +136,7 @@ def get_stats():
         Coverage and matching statistics
     """
     try:
-        user_id = request.args.get('user_id', 1, type=int)
+        user_id = request.args.get("user_id", 1, type=int)
         coverage = matching_service.get_coverage(user_id=user_id)
 
         return jsonify(coverage)
@@ -140,14 +144,15 @@ def get_stats():
     except Exception as e:
         print(f"❌ Matching stats error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Unified Matching
 # ============================================================================
 
-@matching_bp.route('/run', methods=['POST'])
+
+@matching_bp.route("/run", methods=["POST"])
 def run_unified():
     """
     Unified matching endpoint - runs matching across all sources in parallel.
@@ -186,14 +191,12 @@ def run_unified():
     """
     try:
         data = request.json or {}
-        user_id = data.get('user_id', 1)
-        sources = data.get('sources', ['amazon', 'apple', 'gmail'])
-        sync_first = data.get('sync_sources_first', False)
+        user_id = data.get("user_id", 1)
+        sources = data.get("sources", ["amazon", "apple", "gmail"])
+        sync_first = data.get("sync_sources_first", False)
 
         result = matching_service.run_unified_matching(
-            user_id=user_id,
-            sources=sources,
-            sync_first=sync_first
+            user_id=user_id, sources=sources, sync_first=sync_first
         )
 
         return jsonify(result)
@@ -201,11 +204,13 @@ def run_unified():
     except ImportError as e:
         # Fallback if Celery task not yet implemented
         print(f"⚠️ Unified matching task not implemented yet: {e}")
-        return jsonify({
-            'error': 'Unified matching task not yet implemented',
-            'message': 'Run individual matchers via /api/amazon/match, /api/apple/match, /api/gmail/match'
-        }), 501
+        return jsonify(
+            {
+                "error": "Unified matching task not yet implemented",
+                "message": "Run individual matchers via /api/amazon/match, /api/apple/match, /api/gmail/match",
+            }
+        ), 501
     except Exception as e:
         print(f"❌ Unified matching error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500

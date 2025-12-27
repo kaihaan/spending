@@ -474,4 +474,3 @@ curl -X POST "http://localhost:5000/api/truelayer/fetch-cards" \
 - Deduplication works across multiple sync attempts
 - On-demand fetching means transactions are only synced when explicitly requested
 - No automatic background syncing (use webhooks for event-driven syncing)
-

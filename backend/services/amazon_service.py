@@ -10,21 +10,25 @@ Orchestrates Amazon integration including:
 Separates business logic from HTTP routing concerns.
 """
 
-from database import amazon
-from mcp import amazon_parser, amazon_returns_parser, amazon_sp_auth
-from mcp.amazon_matcher import match_all_amazon_transactions, rematch_transaction
-from mcp.amazon_returns_matcher import match_all_returns
-from mcp.amazon_business_matcher import match_all_amazon_business_transactions
-from mcp.amazon_sp_client import AmazonBusinessClient
-import cache_manager
 import os
 
+import cache_manager
+
+from database import amazon, create_matching_job, update_matching_job_status
+from mcp import amazon_parser, amazon_returns_parser, amazon_sp_auth
+from mcp.amazon_business_matcher import match_all_amazon_business_transactions
+from mcp.amazon_matcher import match_all_amazon_transactions, rematch_transaction
+from mcp.amazon_returns_matcher import match_all_returns
+from mcp.amazon_sp_client import AmazonBusinessClient
 
 # ============================================================================
 # Regular Amazon Orders (CSV Import)
 # ============================================================================
 
-def import_orders(csv_content: str = None, filename: str = None, website: str = 'Amazon.co.uk') -> dict:
+
+def import_orders(
+    csv_content: str = None, filename: str = None, website: str = "Amazon.co.uk"
+) -> dict:
     """
     Import Amazon order history from CSV file or content.
 
@@ -43,15 +47,15 @@ def import_orders(csv_content: str = None, filename: str = None, website: str = 
     # Parse CSV
     if csv_content:
         orders = amazon_parser.parse_amazon_csv_content(csv_content)
-        source_name = filename or 'uploaded_file.csv'
+        source_name = filename or "uploaded_file.csv"
     elif filename:
-        file_path = os.path.join('..', 'sample', filename)
+        file_path = os.path.join("..", "sample", filename)
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f'File not found: {filename}')
+            raise FileNotFoundError(f"File not found: {filename}")
         orders = amazon_parser.parse_amazon_csv(file_path)
         source_name = filename
     else:
-        raise ValueError('Missing csv_content or filename')
+        raise ValueError("Missing csv_content or filename")
 
     # Import to database
     imported, duplicates = amazon.import_amazon_orders(orders, source_name)
@@ -60,11 +64,11 @@ def import_orders(csv_content: str = None, filename: str = None, website: str = 
     match_results = match_all_amazon_transactions()
 
     return {
-        'success': True,
-        'orders_imported': imported,
-        'orders_duplicated': duplicates,
-        'matching_results': match_results,
-        'filename': source_name
+        "success": True,
+        "orders_imported": imported,
+        "orders_duplicated": duplicates,
+        "matching_results": match_results,
+        "filename": source_name,
     }
 
 
@@ -82,10 +86,7 @@ def get_orders(date_from: str = None, date_to: str = None, website: str = None) 
     """
     orders = amazon.get_amazon_orders(date_from, date_to, website)
 
-    return {
-        'orders': orders,
-        'count': len(orders)
-    }
+    return {"orders": orders, "count": len(orders)}
 
 
 def get_statistics() -> dict:
@@ -125,33 +126,28 @@ def run_matching(async_mode: bool = True, user_id: int = 1) -> dict:
         from tasks.matching_tasks import match_amazon_orders_task
 
         # Create job entry
-        job_id = amazon.create_matching_job(user_id, 'amazon')
+        job_id = create_matching_job(user_id, "amazon")
 
         # Dispatch Celery task
         task = match_amazon_orders_task.delay(job_id, user_id)
 
         # Update job status
-        amazon.update_matching_job_status(job_id, 'queued')
+        update_matching_job_status(job_id, "queued")
 
         return {
-            'success': True,
-            'async': True,
-            'job_id': job_id,
-            'celery_task_id': task.id,
-            'status': 'queued'
+            "success": True,
+            "async": True,
+            "job_id": job_id,
+            "celery_task_id": task.id,
+            "status": "queued",
         }
-    else:
-        # Sync mode for backward compatibility
-        results = match_all_amazon_transactions()
+    # Sync mode for backward compatibility
+    results = match_all_amazon_transactions()
 
-        # Invalidate Amazon caches
-        cache_manager.cache_invalidate_amazon()
+    # Invalidate Amazon caches
+    cache_manager.cache_invalidate_amazon()
 
-        return {
-            'success': True,
-            'async': False,
-            'results': results
-        }
+    return {"success": True, "async": False, "results": results}
 
 
 def rematch_single(transaction_id: int) -> dict:
@@ -169,8 +165,8 @@ def rematch_single(transaction_id: int) -> dict:
     """
     result = rematch_transaction(transaction_id)
 
-    if not result or not result.get('success'):
-        raise ValueError('No suitable match found')
+    if not result or not result.get("success"):
+        raise ValueError("No suitable match found")
 
     return result
 
@@ -198,10 +194,7 @@ def get_unmatched_transactions() -> dict:
     """
     unmatched = amazon.get_unmatched_amazon_transactions()
 
-    return {
-        'transactions': unmatched,
-        'count': len(unmatched)
-    }
+    return {"transactions": unmatched, "count": len(unmatched)}
 
 
 def clear_orders() -> dict:
@@ -214,10 +207,10 @@ def clear_orders() -> dict:
     orders_deleted, matches_deleted = amazon.clear_amazon_orders()
 
     return {
-        'success': True,
-        'orders_deleted': orders_deleted,
-        'matches_deleted': matches_deleted,
-        'message': f'Cleared {orders_deleted} orders and {matches_deleted} matches'
+        "success": True,
+        "orders_deleted": orders_deleted,
+        "matches_deleted": matches_deleted,
+        "message": f"Cleared {orders_deleted} orders and {matches_deleted} matches",
     }
 
 
@@ -228,15 +221,12 @@ def list_csv_files() -> dict:
     Returns:
         File list with count
     """
-    files = amazon_parser.get_amazon_csv_files('../sample')
+    files = amazon_parser.get_amazon_csv_files("../sample")
 
     # Get just the filenames
-    file_list = [{'filename': os.path.basename(f), 'path': f} for f in files]
+    file_list = [{"filename": os.path.basename(f), "path": f} for f in files]
 
-    return {
-        'files': file_list,
-        'count': len(file_list)
-    }
+    return {"files": file_list, "count": len(file_list)}
 
 
 def upload_csv_file(file) -> dict:
@@ -252,14 +242,14 @@ def upload_csv_file(file) -> dict:
     Raises:
         ValueError: If file invalid or not CSV
     """
-    if not file or file.filename == '':
-        raise ValueError('No file selected')
+    if not file or file.filename == "":
+        raise ValueError("No file selected")
 
-    if not file.filename.lower().endswith('.csv'):
-        raise ValueError('Only CSV files are allowed')
+    if not file.filename.lower().endswith(".csv"):
+        raise ValueError("Only CSV files are allowed")
 
     # Save to sample folder
-    sample_folder = os.path.join(os.path.dirname(__file__), '..', '..', 'sample')
+    sample_folder = os.path.join(os.path.dirname(__file__), "..", "..", "sample")
     os.makedirs(sample_folder, exist_ok=True)
 
     # Sanitize filename
@@ -270,15 +260,16 @@ def upload_csv_file(file) -> dict:
     file.save(filepath)
 
     return {
-        'success': True,
-        'message': f'File uploaded successfully: {filename}',
-        'filename': filename
+        "success": True,
+        "message": f"File uploaded successfully: {filename}",
+        "filename": filename,
     }
 
 
 # ============================================================================
 # Amazon Returns (CSV Import)
 # ============================================================================
+
 
 def import_returns(csv_content: str = None, filename: str = None) -> dict:
     """
@@ -298,15 +289,15 @@ def import_returns(csv_content: str = None, filename: str = None) -> dict:
     # Parse CSV
     if csv_content:
         returns = amazon_returns_parser.parse_amazon_returns_csv_content(csv_content)
-        source_name = filename or 'uploaded_file.csv'
+        source_name = filename or "uploaded_file.csv"
     elif filename:
-        file_path = os.path.join('..', 'sample', filename)
+        file_path = os.path.join("..", "sample", filename)
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f'File not found: {filename}')
+            raise FileNotFoundError(f"File not found: {filename}")
         returns = amazon_returns_parser.parse_amazon_returns_csv(file_path)
         source_name = filename
     else:
-        raise ValueError('Missing csv_content or filename')
+        raise ValueError("Missing csv_content or filename")
 
     # Import to database
     imported, duplicates = amazon.import_amazon_returns(returns, source_name)
@@ -315,11 +306,11 @@ def import_returns(csv_content: str = None, filename: str = None) -> dict:
     match_results = match_all_returns()
 
     return {
-        'success': True,
-        'returns_imported': imported,
-        'returns_duplicated': duplicates,
-        'matching_results': match_results,
-        'filename': source_name
+        "success": True,
+        "returns_imported": imported,
+        "returns_duplicated": duplicates,
+        "matching_results": match_results,
+        "filename": source_name,
     }
 
 
@@ -332,10 +323,7 @@ def get_returns() -> dict:
     """
     returns = amazon.get_amazon_returns()
 
-    return {
-        'returns': returns,
-        'count': len(returns)
-    }
+    return {"returns": returns, "count": len(returns)}
 
 
 def get_returns_statistics() -> dict:
@@ -375,33 +363,28 @@ def run_returns_matching(async_mode: bool = True, user_id: int = 1) -> dict:
         from tasks.matching_tasks import match_amazon_returns_task
 
         # Create job entry
-        job_id = amazon.create_matching_job(user_id, 'returns')
+        job_id = create_matching_job(user_id, "returns")
 
         # Dispatch Celery task
         task = match_amazon_returns_task.delay(job_id, user_id)
 
         # Update job status
-        amazon.update_matching_job_status(job_id, 'queued')
+        update_matching_job_status(job_id, "queued")
 
         return {
-            'success': True,
-            'async': True,
-            'job_id': job_id,
-            'celery_task_id': task.id,
-            'status': 'queued'
+            "success": True,
+            "async": True,
+            "job_id": job_id,
+            "celery_task_id": task.id,
+            "status": "queued",
         }
-    else:
-        # Sync mode for backward compatibility
-        results = match_all_returns()
+    # Sync mode for backward compatibility
+    results = match_all_returns()
 
-        # Invalidate Amazon caches
-        cache_manager.cache_invalidate_amazon()
+    # Invalidate Amazon caches
+    cache_manager.cache_invalidate_amazon()
 
-        return {
-            'success': True,
-            'async': False,
-            'results': results
-        }
+    return {"success": True, "async": False, "results": results}
 
 
 def clear_returns() -> dict:
@@ -414,9 +397,9 @@ def clear_returns() -> dict:
     returns_deleted = amazon.clear_amazon_returns()
 
     return {
-        'success': True,
-        'returns_deleted': returns_deleted,
-        'message': f'Cleared {returns_deleted} returns and removed [RETURNED] labels'
+        "success": True,
+        "returns_deleted": returns_deleted,
+        "message": f"Cleared {returns_deleted} returns and removed [RETURNED] labels",
     }
 
 
@@ -427,20 +410,18 @@ def list_returns_files() -> dict:
     Returns:
         File list with count
     """
-    files = amazon_returns_parser.get_amazon_returns_csv_files('../sample')
+    files = amazon_returns_parser.get_amazon_returns_csv_files("../sample")
 
     # Get just the filenames
-    file_list = [{'filename': os.path.basename(f), 'path': f} for f in files]
+    file_list = [{"filename": os.path.basename(f), "path": f} for f in files]
 
-    return {
-        'files': file_list,
-        'count': len(file_list)
-    }
+    return {"files": file_list, "count": len(file_list)}
 
 
 # ============================================================================
 # Amazon Business (SP-API)
 # ============================================================================
+
 
 def get_authorization_url() -> dict:
     """
@@ -455,13 +436,13 @@ def get_authorization_url() -> dict:
     result = amazon_sp_auth.get_authorization_url()
 
     return {
-        'success': True,
-        'authorization_url': result['authorization_url'],
-        'state': result['state']
+        "success": True,
+        "authorization_url": result["authorization_url"],
+        "state": result["state"],
     }
 
 
-def handle_oauth_callback(code: str, region: str = 'UK') -> dict:
+def handle_oauth_callback(code: str, region: str = "UK") -> dict:
     """
     Handle Amazon Business API OAuth callback.
 
@@ -480,24 +461,24 @@ def handle_oauth_callback(code: str, region: str = 'UK') -> dict:
 
     # Get environment configuration
     marketplace_id = None  # Not used by Amazon Business API
-    is_sandbox = os.getenv('AMAZON_BUSINESS_ENVIRONMENT', 'sandbox') == 'sandbox'
+    is_sandbox = os.getenv("AMAZON_BUSINESS_ENVIRONMENT", "sandbox") == "sandbox"
 
     # Save connection to database
     connection_id = amazon.save_amazon_business_connection(
-        access_token=tokens['access_token'],
-        refresh_token=tokens['refresh_token'],
-        expires_in=tokens['expires_in'],
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        expires_in=tokens["expires_in"],
         region=region,
         marketplace_id=marketplace_id,
-        is_sandbox=is_sandbox
+        is_sandbox=is_sandbox,
     )
 
     return {
-        'success': True,
-        'connection_id': connection_id,
-        'environment': 'sandbox' if is_sandbox else 'production',
-        'region': region,
-        'message': 'Amazon Business API connected successfully'
+        "success": True,
+        "connection_id": connection_id,
+        "environment": "sandbox" if is_sandbox else "production",
+        "region": region,
+        "message": "Amazon Business API connected successfully",
     }
 
 
@@ -512,17 +493,15 @@ def get_connection_status() -> dict:
 
     if conn:
         return {
-            'connected': True,
-            'connection_id': conn['id'],
-            'region': conn['region'],
-            'status': conn['status'],
-            'created_at': conn['created_at'].isoformat() if conn['created_at'] else None
+            "connected": True,
+            "connection_id": conn["id"],
+            "region": conn["region"],
+            "status": conn["status"],
+            "created_at": conn["created_at"].isoformat()
+            if conn["created_at"]
+            else None,
         }
-    else:
-        return {
-            'connected': False,
-            'status': None
-        }
+    return {"connected": False, "status": None}
 
 
 def disconnect() -> dict:
@@ -538,17 +517,21 @@ def disconnect() -> dict:
     conn = amazon.get_amazon_business_connection()
 
     if not conn:
-        raise ValueError('No connection found')
+        raise ValueError("No connection found")
 
-    success = amazon.delete_amazon_business_connection(conn['id'])
+    success = amazon.delete_amazon_business_connection(conn["id"])
 
     return {
-        'success': success,
-        'message': 'Amazon Business disconnected' if success else 'Failed to disconnect'
+        "success": success,
+        "message": "Amazon Business disconnected"
+        if success
+        else "Failed to disconnect",
     }
 
 
-def import_business_orders(start_date: str, end_date: str, run_matching: bool = True) -> dict:
+def import_business_orders(
+    start_date: str, end_date: str, run_matching: bool = True
+) -> dict:
     """
     Import buyer purchase orders from Amazon Business Reporting API.
 
@@ -566,10 +549,10 @@ def import_business_orders(start_date: str, end_date: str, run_matching: bool = 
     # Get connection
     connection = amazon.get_amazon_business_connection()
     if not connection:
-        raise ValueError('Not connected. Please connect Amazon Business API first')
+        raise ValueError("Not connected. Please connect Amazon Business API first")
 
     # Create API client
-    client = AmazonBusinessClient(connection_id=connection['id'])
+    client = AmazonBusinessClient(connection_id=connection["id"])
 
     # Fetch orders with line items
     orders = client.get_orders(start_date, end_date, include_line_items=True)
@@ -584,7 +567,7 @@ def import_business_orders(start_date: str, end_date: str, run_matching: bool = 
         normalized_order = client._normalize_order(order)
 
         # Check for duplicate
-        if amazon.get_amazon_business_order_by_id(normalized_order['order_id']):
+        if amazon.get_amazon_business_order_by_id(normalized_order["order_id"]):
             duplicates += 1
             continue
 
@@ -594,10 +577,10 @@ def import_business_orders(start_date: str, end_date: str, run_matching: bool = 
             imported += 1
 
             # Import line items
-            line_items = order.get('lineItems', [])
+            line_items = order.get("lineItems", [])
             for item in line_items:
                 normalized_item = client._normalize_order_item(
-                    item, normalized_order['order_id']
+                    item, normalized_order["order_id"]
                 )
                 item_id = amazon.insert_amazon_business_line_item(normalized_item)
                 if item_id:
@@ -607,11 +590,11 @@ def import_business_orders(start_date: str, end_date: str, run_matching: bool = 
     summary_count = amazon.update_amazon_business_product_summaries()
 
     import_results = {
-        'orders_fetched': len(orders),
-        'orders_imported': imported,
-        'orders_duplicates': duplicates,
-        'line_items_imported': items_imported,
-        'summaries_updated': summary_count
+        "orders_fetched": len(orders),
+        "orders_imported": imported,
+        "orders_duplicates": duplicates,
+        "line_items_imported": items_imported,
+        "summaries_updated": summary_count,
     }
 
     # Run matching if requested
@@ -619,11 +602,7 @@ def import_business_orders(start_date: str, end_date: str, run_matching: bool = 
     if run_matching and imported > 0:
         matching_results = match_all_amazon_business_transactions()
 
-    return {
-        'success': True,
-        'import': import_results,
-        'matching': matching_results
-    }
+    return {"success": True, "import": import_results, "matching": matching_results}
 
 
 def get_business_statistics() -> dict:
@@ -647,20 +626,17 @@ def get_business_orders(date_from: str = None, date_to: str = None) -> list:
     Returns:
         Orders list (Decimal values converted to float)
     """
-    orders = amazon.get_amazon_business_orders(
-        date_from=date_from,
-        date_to=date_to
-    )
+    orders = amazon.get_amazon_business_orders(date_from=date_from, date_to=date_to)
 
     # Convert Decimal values for JSON serialization
     for order in orders:
-        for key in ['subtotal', 'tax', 'shipping', 'net_total']:
+        for key in ["subtotal", "tax", "shipping", "net_total"]:
             if order.get(key) is not None:
                 order[key] = float(order[key])
-        if order.get('order_date'):
-            order['order_date'] = order['order_date'].isoformat()
-        if order.get('created_at'):
-            order['created_at'] = order['created_at'].isoformat()
+        if order.get("order_date"):
+            order["order_date"] = order["order_date"].isoformat()
+        if order.get("created_at"):
+            order["created_at"] = order["created_at"].isoformat()
 
     return orders
 
@@ -674,10 +650,7 @@ def run_business_matching() -> dict:
     """
     results = match_all_amazon_business_transactions()
 
-    return {
-        'success': True,
-        'results': results
-    }
+    return {"success": True, "results": results}
 
 
 def clear_business_data() -> dict:
@@ -689,7 +662,4 @@ def clear_business_data() -> dict:
     """
     results = amazon.clear_amazon_business_data()
 
-    return {
-        'success': True,
-        'deleted': results
-    }
+    return {"success": True, "deleted": results}

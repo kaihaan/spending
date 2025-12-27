@@ -11,7 +11,7 @@
   - payments: for each match to an amazon payment record in the bank transactions enrich with...
     - is_amz_pay_match boolean flag
     - product_name text
-  - refunds: 
+  - refunds:
     - item_refunded: for each match of a bank account outgoing payment to an amazon refund record enrich with...
       - is_returned (boolean)
       - order_id
@@ -33,7 +33,7 @@
       - Amazon product name
       - Apple App Name & Publisher
     - DO NOT SEND any transaction amount information
-    - Return: the LLM will return  
+    - Return: the LLM will return
       - primary_category: One of: Groceries, Transport, Clothing, Dining, Streaming, Shopping, Healthcare, Utilities, Income, Taxes, Insurance, Education, Holiday, Personal Care, Gifts, Pet Care, Home & Garden, Electronics, Sports & Outdoors, Books & Media, Office Supplies, Automotive, Banking Fees, Other
       - subcategory: More specific classification (e.g., "Coffee Shop", "Supermarket", "Taxi Service")
       - merchant_clean_name: Standardized merchant name (e.g., "Amazon", "Starbucks", "TfL", not "AMZN*MKTP" or "TESCO STORES")
@@ -48,7 +48,7 @@
 ## Enrichment Workflows
 1. The user should be able view analytics on enrichment & see which transactions have been enriched
 2. When a user importats new bank transactions they should be automatically enriched
-3. For LLM enrichment: 
+3. For LLM enrichment:
   - Enrichment progress should be visible to the user
   - Cost of enrichment should be shown afterwards along with statsitics
   - The user should have control over batch size to send for LLM enrichment.
@@ -58,7 +58,7 @@
   - the original transaction data must be retained
   - Lookup based enrichment
     - matches from lookup tables (e.g. Amazon and Apple App Store payment tables) are used to enrich the bank account data
-    - some data fields are duplicated into the main transactions table for speed of lookup 
+    - some data fields are duplicated into the main transactions table for speed of lookup
     - a relational link is made to the enrichment source table
   - LLM based inference enrichment
     - descriptive information about the transaction already enriched from LOOKUP sources (BUT NOT THE AMOUNT) is sent to an LLM for further enrichment by LLM Inference

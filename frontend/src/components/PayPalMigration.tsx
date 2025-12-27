@@ -11,7 +11,7 @@ interface PayPalChange {
 }
 
 export default function PayPalMigration() {
-  const [loading, setLoading] = useState(false);
+  const [_loading, _setLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [applying, setApplying] = useState(false);
   const [changes, setChanges] = useState<PayPalChange[]>([]);

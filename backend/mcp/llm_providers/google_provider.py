@@ -4,14 +4,19 @@ Uses Google Gemini models via Google API
 """
 
 import time
-from typing import List, Dict, Optional
 
 try:
     import google.generativeai as genai
 except ImportError:
     genai = None
 
-from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats, AccountInfo, LLMResponse
+from .base_provider import (
+    AccountInfo,
+    BaseLLMProvider,
+    LLMResponse,
+    ProviderStats,
+    TransactionEnrichment,
+)
 
 
 class GoogleProvider(BaseLLMProvider):
@@ -23,7 +28,7 @@ class GoogleProvider(BaseLLMProvider):
         model: str = "gemini-1.5-flash",
         timeout: int = 30,
         debug: bool = False,
-        api_base_url: Optional[str] = None
+        api_base_url: str | None = None,
     ):
         """
         Initialize Google Gemini provider.
@@ -38,7 +43,9 @@ class GoogleProvider(BaseLLMProvider):
         super().__init__(api_key, model, timeout, debug)
 
         if genai is None:
-            raise ImportError("google-generativeai package required for Google provider")
+            raise ImportError(
+                "google-generativeai package required for Google provider"
+            )
 
         genai.configure(api_key=api_key)
         self.model_obj = genai.GenerativeModel(model)
@@ -59,10 +66,8 @@ class GoogleProvider(BaseLLMProvider):
             return False
 
     def enrich_transactions(
-        self,
-        transactions: List[Dict[str, str]],
-        direction: str = "out"
-    ) -> tuple[List[TransactionEnrichment], ProviderStats]:
+        self, transactions: list[dict[str, str]], direction: str = "out"
+    ) -> tuple[list[TransactionEnrichment], ProviderStats]:
         """
         Enrich transactions using Gemini.
 
@@ -80,7 +85,7 @@ class GoogleProvider(BaseLLMProvider):
                 response_time_ms=0,
                 batch_size=0,
                 success_count=0,
-                failure_count=0
+                failure_count=0,
             )
 
         system_prompt = self._build_system_prompt()
@@ -112,7 +117,9 @@ class GoogleProvider(BaseLLMProvider):
             total_tokens = input_tokens + output_tokens
 
             # Parse enrichments
-            enrichments = self._parse_enrichment_response(response_text, len(transactions))
+            enrichments = self._parse_enrichment_response(
+                response_text, len(transactions)
+            )
 
             # Calculate cost
             cost = self.calculate_cost(input_tokens, output_tokens)
@@ -123,7 +130,7 @@ class GoogleProvider(BaseLLMProvider):
                 response_time_ms=response_time_ms,
                 batch_size=len(transactions),
                 success_count=len(enrichments),
-                failure_count=len(transactions) - len(enrichments)
+                failure_count=len(transactions) - len(enrichments),
             )
 
             return enrichments, stats
@@ -168,7 +175,9 @@ class GoogleProvider(BaseLLMProvider):
                 break
 
         # Calculate total cost
-        total_cost = (tokens_in / 1000) * input_cost_per_1k + (tokens_out / 1000) * output_cost_per_1k
+        total_cost = (tokens_in / 1000) * input_cost_per_1k + (
+            tokens_out / 1000
+        ) * output_cost_per_1k
 
         return round(total_cost, 6)
 
@@ -186,7 +195,7 @@ class GoogleProvider(BaseLLMProvider):
             provider="google",
             available=False,
             error="Google does not provide a public API for Gemini account balance/usage information. "
-                  "Check your account at console.cloud.google.com for billing details."
+            "Check your account at console.cloud.google.com for billing details.",
         )
 
     def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
@@ -230,7 +239,7 @@ class GoogleProvider(BaseLLMProvider):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                cost=cost
+                cost=cost,
             )
 
         except Exception as e:

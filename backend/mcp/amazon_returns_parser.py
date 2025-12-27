@@ -3,9 +3,10 @@ Amazon Returns Parser MCP Component
 Parses Amazon returns/refunds CSV files.
 """
 
-import pandas as pd
 import io
 from datetime import datetime
+
+import pandas as pd
 
 
 def parse_amazon_returns_csv(file_path):
@@ -23,7 +24,12 @@ def parse_amazon_returns_csv(file_path):
         df = pd.read_csv(file_path)
 
         # Verify required columns exist
-        required_columns = ['OrderID', 'ReversalID', 'RefundCompletionDate', 'AmountRefunded']
+        required_columns = [
+            "OrderID",
+            "ReversalID",
+            "RefundCompletionDate",
+            "AmountRefunded",
+        ]
         missing_columns = [col for col in required_columns if col not in df.columns]
 
         if missing_columns:
@@ -33,18 +39,24 @@ def parse_amazon_returns_csv(file_path):
 
         for idx, row in df.iterrows():
             # Skip rows with no order ID or reversal ID
-            if pd.isna(row['OrderID']) or pd.isna(row['ReversalID']):
+            if pd.isna(row["OrderID"]) or pd.isna(row["ReversalID"]):
                 continue
 
-            returns.append({
-                'order_id': str(row['OrderID']).strip(),
-                'reversal_id': str(row['ReversalID']).strip(),
-                'refund_completion_date': clean_date(row['RefundCompletionDate']),
-                'currency': str(row.get('Currency', 'GBP')).strip(),
-                'amount_refunded': clean_currency(row['AmountRefunded']),
-                'status': str(row.get('Status', '')).strip() if 'Status' in row else None,
-                'disbursement_type': str(row.get('DisbursementType', '')).strip() if 'DisbursementType' in row else None,
-            })
+            returns.append(
+                {
+                    "order_id": str(row["OrderID"]).strip(),
+                    "reversal_id": str(row["ReversalID"]).strip(),
+                    "refund_completion_date": clean_date(row["RefundCompletionDate"]),
+                    "currency": str(row.get("Currency", "GBP")).strip(),
+                    "amount_refunded": clean_currency(row["AmountRefunded"]),
+                    "status": str(row.get("Status", "")).strip()
+                    if "Status" in row
+                    else None,
+                    "disbursement_type": str(row.get("DisbursementType", "")).strip()
+                    if "DisbursementType" in row
+                    else None,
+                }
+            )
 
         return returns
 
@@ -67,7 +79,12 @@ def parse_amazon_returns_csv_content(csv_content: str) -> list:
         df = pd.read_csv(io.StringIO(csv_content))
 
         # Verify required columns exist
-        required_columns = ['OrderID', 'ReversalID', 'RefundCompletionDate', 'AmountRefunded']
+        required_columns = [
+            "OrderID",
+            "ReversalID",
+            "RefundCompletionDate",
+            "AmountRefunded",
+        ]
         missing_columns = [col for col in required_columns if col not in df.columns]
 
         if missing_columns:
@@ -77,18 +94,24 @@ def parse_amazon_returns_csv_content(csv_content: str) -> list:
 
         for idx, row in df.iterrows():
             # Skip rows with no order ID or reversal ID
-            if pd.isna(row['OrderID']) or pd.isna(row['ReversalID']):
+            if pd.isna(row["OrderID"]) or pd.isna(row["ReversalID"]):
                 continue
 
-            returns.append({
-                'order_id': str(row['OrderID']).strip(),
-                'reversal_id': str(row['ReversalID']).strip(),
-                'refund_completion_date': clean_date(row['RefundCompletionDate']),
-                'currency': str(row.get('Currency', 'GBP')).strip(),
-                'amount_refunded': clean_currency(row['AmountRefunded']),
-                'status': str(row.get('Status', '')).strip() if 'Status' in row else None,
-                'disbursement_type': str(row.get('DisbursementType', '')).strip() if 'DisbursementType' in row else None,
-            })
+            returns.append(
+                {
+                    "order_id": str(row["OrderID"]).strip(),
+                    "reversal_id": str(row["ReversalID"]).strip(),
+                    "refund_completion_date": clean_date(row["RefundCompletionDate"]),
+                    "currency": str(row.get("Currency", "GBP")).strip(),
+                    "amount_refunded": clean_currency(row["AmountRefunded"]),
+                    "status": str(row.get("Status", "")).strip()
+                    if "Status" in row
+                    else None,
+                    "disbursement_type": str(row.get("DisbursementType", "")).strip()
+                    if "DisbursementType" in row
+                    else None,
+                }
+            )
 
         return returns
 
@@ -115,12 +138,12 @@ def clean_date(date_str):
         date_str = str(date_str).strip()
 
         # Handle ISO format with timezone
-        if 'T' in date_str:
-            date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        if "T" in date_str:
+            date_obj = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         else:
-            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
 
-        return date_obj.strftime('%Y-%m-%d')
+        return date_obj.strftime("%Y-%m-%d")
 
     except Exception as e:
         print(f"Warning: Could not parse date '{date_str}': {e}")
@@ -148,7 +171,9 @@ def clean_currency(value):
     value_str = str(value).strip()
 
     # Remove currency symbols and commas
-    cleaned = value_str.replace('£', '').replace('$', '').replace(',', '').replace(' ', '')
+    cleaned = (
+        value_str.replace("£", "").replace("$", "").replace(",", "").replace(" ", "")
+    )
 
     # Handle quoted negative numbers: '-0.2' -> -0.2
     cleaned = cleaned.replace("'", "")
@@ -160,7 +185,7 @@ def clean_currency(value):
         return 0.0
 
 
-def get_amazon_returns_csv_files(data_folder='../sample'):
+def get_amazon_returns_csv_files(data_folder="../sample"):
     """
     List available Amazon returns CSV files in the data folder.
 
@@ -175,7 +200,7 @@ def get_amazon_returns_csv_files(data_folder='../sample'):
     try:
         files = []
         for filename in os.listdir(data_folder):
-            if filename.endswith('.csv') and 'return' in filename.lower():
+            if filename.endswith(".csv") and "return" in filename.lower():
                 files.append(os.path.join(data_folder, filename))
         return files
     except Exception as e:

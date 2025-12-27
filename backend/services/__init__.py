@@ -18,21 +18,36 @@ Available services:
 - rules_service: Category and merchant rule management
 """
 
-from . import gmail_service, truelayer_service, amazon_service, enrichment_service, rules_service, apple_service, transactions_service, categories_service, huququllah_service, direct_debit_service, matching_service, settings_service, migrations_service, utilities_service
+from . import (
+    amazon_service,
+    apple_service,
+    categories_service,
+    direct_debit_service,
+    enrichment_service,
+    gmail_service,
+    huququllah_service,
+    matching_service,
+    migrations_service,
+    rules_service,
+    settings_service,
+    transactions_service,
+    truelayer_service,
+    utilities_service,
+)
 
 __all__ = [
-    'gmail_service',
-    'truelayer_service',
-    'amazon_service',
-    'enrichment_service',
-    'rules_service',
-    'apple_service',
-    'transactions_service',
-    'categories_service',
-    'huququllah_service',
-    'direct_debit_service',
-    'matching_service',
-    'settings_service',
-    'migrations_service',
-    'utilities_service',
+    "gmail_service",
+    "truelayer_service",
+    "amazon_service",
+    "enrichment_service",
+    "rules_service",
+    "apple_service",
+    "transactions_service",
+    "categories_service",
+    "huququllah_service",
+    "direct_debit_service",
+    "matching_service",
+    "settings_service",
+    "migrations_service",
+    "utilities_service",
 ]

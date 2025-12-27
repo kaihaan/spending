@@ -5,10 +5,11 @@ Implements UserMixin interface for session management with secure password hashi
 Uses database_postgres for data persistence with the users table.
 """
 
-from flask_login import UserMixin
-from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Any, Optional
+
+from flask_login import UserMixin
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 class User(UserMixin):
@@ -30,13 +31,13 @@ class User(UserMixin):
         self,
         id: int,
         email: str,
-        username: Optional[str] = None,
-        password_hash: Optional[str] = None,
+        username: str | None = None,
+        password_hash: str | None = None,
         is_admin: bool = False,
         is_active: bool = True,
-        last_login_at: Optional[datetime] = None,
-        created_at: Optional[datetime] = None,
-        updated_at: Optional[datetime] = None
+        last_login_at: datetime | None = None,
+        created_at: datetime | None = None,
+        updated_at: datetime | None = None,
     ):
         """Initialize User instance.
 
@@ -80,7 +81,9 @@ class User(UserMixin):
         return check_password_hash(self.password_hash, password)
 
     @staticmethod
-    def create(username: str, email: str, password: str, is_admin: bool = False) -> 'User':
+    def create(
+        username: str, email: str, password: str, is_admin: bool = False
+    ) -> "User":
         """Create new user with hashed password.
 
         Uses pbkdf2:sha256:600000 for password hashing (NIST recommended).
@@ -100,17 +103,14 @@ class User(UserMixin):
         import database_postgres as database
 
         # Hash password using PBKDF2 with 600,000 iterations (NIST recommendation)
-        password_hash = generate_password_hash(
-            password,
-            method='pbkdf2:sha256:600000'
-        )
+        password_hash = generate_password_hash(password, method="pbkdf2:sha256:600000")
 
         # Insert user into database
         user_id = database.insert_user(
             username=username,
             email=email,
             password_hash=password_hash,
-            is_admin=is_admin
+            is_admin=is_admin,
         )
 
         return User(
@@ -119,11 +119,11 @@ class User(UserMixin):
             email=email,
             password_hash=password_hash,
             is_admin=is_admin,
-            is_active=True
+            is_active=True,
         )
 
     @staticmethod
-    def get_by_id(user_id: int) -> Optional['User']:
+    def get_by_id(user_id: int) -> Optional["User"]:
         """Load user by ID.
 
         Args:
@@ -140,7 +140,7 @@ class User(UserMixin):
         return None
 
     @staticmethod
-    def get_by_username(username: str) -> Optional['User']:
+    def get_by_username(username: str) -> Optional["User"]:
         """Load user by username.
 
         Args:
@@ -157,7 +157,7 @@ class User(UserMixin):
         return None
 
     @staticmethod
-    def get_by_email(email: str) -> Optional['User']:
+    def get_by_email(email: str) -> Optional["User"]:
         """Load user by email.
 
         Args:
@@ -180,7 +180,7 @@ class User(UserMixin):
         self.last_login_at = datetime.now()
         database.update_user_last_login(self.id, self.last_login_at)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert user to dictionary (for JSON serialization).
 
         Note: password_hash is excluded for security.
@@ -189,13 +189,15 @@ class User(UserMixin):
             Dictionary with user data (no password hash)
         """
         return {
-            'id': self.id,
-            'username': self.username,
-            'email': self.email,
-            'is_admin': self.is_admin,
-            'is_active': self.is_active,
-            'last_login_at': self.last_login_at.isoformat() if self.last_login_at else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            "id": self.id,
+            "username": self.username,
+            "email": self.email,
+            "is_admin": self.is_admin,
+            "is_active": self.is_active,
+            "last_login_at": self.last_login_at.isoformat()
+            if self.last_login_at
+            else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
     def __repr__(self) -> str:

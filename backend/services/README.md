@@ -29,7 +29,7 @@ from mcp import gmail_client, gmail_parser
 def start_sync(user_id: int) -> dict:
     """
     Orchestrate Gmail sync process.
-    
+
     - Validates connection
     - Fetches emails via API
     - Parses receipts
@@ -40,7 +40,7 @@ def start_sync(user_id: int) -> dict:
     connection = gmail.get_gmail_connection(user_id)
     if not connection:
         raise ValueError("No Gmail connection found")
-    
+
     job = gmail.create_gmail_sync_job(connection['id'])
     # ... orchestration logic
     return {'job_id': job['id'], 'status': 'started'}

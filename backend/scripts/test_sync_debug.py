@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Debug script to test sync directly and see actual errors."""
 
-import sys
 import os
+import sys
 
 # Add backend to path
-sys.path.insert(0, '/mnt/c/dev/spending/backend')
-os.chdir('/mnt/c/dev/spending/backend')
+sys.path.insert(0, "/mnt/c/dev/spending/backend")
+os.chdir("/mnt/c/dev/spending/backend")
 
 # Load env vars
 from dotenv import load_dotenv
+
 load_dotenv(override=True)
 
 import database_postgres as database
-from mcp.truelayer_sync import sync_account_transactions
+
 from mcp.truelayer_auth import decrypt_token
+from mcp.truelayer_sync import sync_account_transactions
 
 # Test with connection 3, account 3 (the one with errors)
 connection_id = 3
@@ -32,7 +34,7 @@ try:
     print(f"Token expires at: {connection['token_expires_at']}")
 
     # Try to decrypt token
-    encrypted_token = connection['access_token']
+    encrypted_token = connection["access_token"]
     print(f"Encrypted token length: {len(encrypted_token)}")
 
     try:
@@ -49,10 +51,10 @@ try:
         truelayer_account_id=truelayer_account_id,
         db_account_id=account_id,
         access_token=access_token,
-        days_back=90
+        days_back=90,
     )
 
-    print(f"\nSync Result:")
+    print("\nSync Result:")
     print(f"  Synced: {result.get('synced_count', 0)}")
     print(f"  Duplicates: {result.get('duplicate_count', 0)}")
     print(f"  Errors: {result.get('error_count', 0)}")
@@ -61,6 +63,7 @@ try:
 except Exception as e:
     print(f"❌ Error: {e}")
     import traceback
+
     traceback.print_exc()
     sys.exit(1)
 

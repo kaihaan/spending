@@ -7,22 +7,19 @@ CRITICAL: Prevents database self-DoS on authentication endpoints.
 Fix #5 from deployment plan - NO database writes on login path.
 """
 
-from redis import Redis
-from datetime import datetime
 import os
-from typing import Optional
+from datetime import datetime
 
+from redis import Redis
 
 # Initialize Redis client
 # Uses environment variable REDIS_URL or defaults to localhost
-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6380/0')
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
 redis_client = Redis.from_url(REDIS_URL, decode_responses=False)
 
 
 def rate_limit_login(
-    ip_address: str,
-    max_attempts: int = 5,
-    window_minutes: int = 15
+    ip_address: str, max_attempts: int = 5, window_minutes: int = 15
 ) -> bool:
     """Redis sliding window rate limiter for login attempts.
 
@@ -84,9 +81,7 @@ def rate_limit_login(
 
 
 def rate_limit_api(
-    identifier: str,
-    max_requests: int = 100,
-    window_seconds: int = 60
+    identifier: str, max_requests: int = 100, window_seconds: int = 60
 ) -> bool:
     """General API rate limiter (per-user or per-IP).
 
@@ -125,10 +120,7 @@ def rate_limit_api(
         return True  # Fail open
 
 
-def get_rate_limit_status(
-    ip_address: str,
-    window_minutes: int = 15
-) -> dict:
+def get_rate_limit_status(ip_address: str, window_minutes: int = 15) -> dict:
     """Get current rate limit status for an IP address.
 
     Args:
@@ -159,18 +151,14 @@ def get_rate_limit_status(
         reset_at = oldest[0][1] + (window_minutes * 60) if oldest else now
 
         return {
-            'attempts': attempts,
-            'remaining': max(0, 5 - attempts),
-            'reset_at': reset_at
+            "attempts": attempts,
+            "remaining": max(0, 5 - attempts),
+            "reset_at": reset_at,
         }
 
     except Exception as e:
         print(f"[Rate Limiter] Redis error: {e}")
-        return {
-            'attempts': 0,
-            'remaining': 5,
-            'reset_at': now + (window_minutes * 60)
-        }
+        return {"attempts": 0, "remaining": 5, "reset_at": now + (window_minutes * 60)}
 
 
 def clear_rate_limit(ip_address: str) -> bool:
@@ -203,11 +191,7 @@ def block_ip(ip_address: str, duration_hours: int = 24) -> bool:
     """
     key = f"blocked_ip:{ip_address}"
     try:
-        redis_client.setex(
-            key,
-            duration_hours * 3600,
-            datetime.now().isoformat()
-        )
+        redis_client.setex(key, duration_hours * 3600, datetime.now().isoformat())
         return True
     except Exception as e:
         print(f"[Rate Limiter] Redis error: {e}")

@@ -5,14 +5,14 @@ Fix #9: Minimal response with no verbose error messages or internal state expose
 Different responses for Cloud Run health probes vs authenticated admin users.
 """
 
-from flask import Blueprint, request, jsonify
-from flask_login import current_user
 from datetime import datetime
-import database_postgres as database
 
+import database_postgres as database
+from flask import Blueprint, jsonify, request
+from flask_login import current_user
 
 # Create health blueprint
-health_bp = Blueprint('health', __name__, url_prefix='/api')
+health_bp = Blueprint("health", __name__, url_prefix="/api")
 
 
 def check_db_connection() -> bool:
@@ -22,10 +22,9 @@ def check_db_connection() -> bool:
         True if database is accessible
     """
     try:
-        with database.get_db() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute('SELECT 1')
-                return cursor.fetchone()[0] == 1
+        with database.get_db() as conn, conn.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            return cursor.fetchone()[0] == 1
     except Exception:
         return False
 
@@ -38,12 +37,13 @@ def check_redis_connection() -> bool:
     """
     try:
         from backend.middleware.rate_limiter import redis_client
+
         return redis_client.ping()
     except Exception:
         return False
 
 
-@health_bp.route('/health', methods=['GET'])
+@health_bp.route("/health", methods=["GET"])
 def health_check():
     """Minimal health check endpoint.
 
@@ -59,8 +59,8 @@ def health_check():
         503: Service is unhealthy (admin view only)
     """
     # Check if request is from Cloud Run health probe
-    user_agent = request.headers.get('User-Agent', '')
-    if user_agent.startswith('GoogleHC'):
+    user_agent = request.headers.get("User-Agent", "")
+    if user_agent.startswith("GoogleHC"):
         # Minimal response for Cloud Run
         return jsonify({"status": "ok"}), 200
 
@@ -75,8 +75,8 @@ def health_check():
         "timestamp": datetime.now().isoformat(),
         "checks": {
             "database": check_db_connection(),
-            "redis": check_redis_connection()
-        }
+            "redis": check_redis_connection(),
+        },
     }
 
     # Overall status: healthy only if all checks pass
@@ -88,7 +88,7 @@ def health_check():
     return jsonify(health), status_code
 
 
-@health_bp.route('/ping', methods=['GET'])
+@health_bp.route("/ping", methods=["GET"])
 def ping():
     """Ultra-minimal ping endpoint for basic uptime checks.
 

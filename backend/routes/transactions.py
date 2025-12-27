@@ -9,18 +9,21 @@ Handles all transaction-related endpoints:
 Routes are thin controllers that delegate to transactions_service for business logic.
 """
 
-from flask import Blueprint, request, jsonify
-from services import transactions_service
 import traceback
 
-transactions_bp = Blueprint('transactions', __name__, url_prefix='/api/transactions')
+from flask import Blueprint, jsonify, request
+
+from services import transactions_service
+
+transactions_bp = Blueprint("transactions", __name__, url_prefix="/api/transactions")
 
 
 # ============================================================================
 # Transaction Retrieval
 # ============================================================================
 
-@transactions_bp.route('', methods=['GET'])
+
+@transactions_bp.route("", methods=["GET"])
 def get_transactions():
     """
     Get all TrueLayer transactions with enrichment data.
@@ -37,14 +40,15 @@ def get_transactions():
     except Exception as e:
         print(f"❌ Get transactions error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Transaction Updates
 # ============================================================================
 
-@transactions_bp.route('/<int:transaction_id>/toggle-required', methods=['POST'])
+
+@transactions_bp.route("/<int:transaction_id>/toggle-required", methods=["POST"])
 def toggle_required(transaction_id):
     """
     Toggle enrichment_required flag for a transaction.
@@ -60,14 +64,14 @@ def toggle_required(transaction_id):
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Toggle enrichment required error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@transactions_bp.route('/<int:transaction_id>/huququllah', methods=['PUT'])
+@transactions_bp.route("/<int:transaction_id>/huququllah", methods=["PUT"])
 def update_huququllah(transaction_id):
     """
     Update the Huququllah classification for a transaction.
@@ -83,28 +87,28 @@ def update_huququllah(transaction_id):
     """
     try:
         data = request.json
-        classification = data.get('classification')
+        classification = data.get("classification")
 
         result = transactions_service.update_huququllah_classification(
-            transaction_id,
-            classification
+            transaction_id, classification
         )
 
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Update Huququllah classification error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Enrichment Sources
 # ============================================================================
 
-@transactions_bp.route('/<int:txn_id>/enrichment-sources', methods=['GET'])
+
+@transactions_bp.route("/<int:txn_id>/enrichment-sources", methods=["GET"])
 def get_enrichment_sources(txn_id):
     """
     Get all enrichment sources for a transaction.
@@ -122,10 +126,10 @@ def get_enrichment_sources(txn_id):
     except Exception as e:
         print(f"❌ Get enrichment sources error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@transactions_bp.route('/<int:txn_id>/enrichment-sources/primary', methods=['POST'])
+@transactions_bp.route("/<int:txn_id>/enrichment-sources/primary", methods=["POST"])
 def set_primary_source(txn_id):
     """
     Set the primary enrichment source for a transaction.
@@ -142,20 +146,18 @@ def set_primary_source(txn_id):
     """
     try:
         data = request.json
-        source_type = data.get('source_type')
-        source_id = data.get('source_id')
+        source_type = data.get("source_type")
+        source_id = data.get("source_id")
 
         result = transactions_service.set_primary_enrichment_source(
-            txn_id,
-            source_type,
-            source_id
+            txn_id, source_type, source_id
         )
 
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Set primary enrichment source error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500

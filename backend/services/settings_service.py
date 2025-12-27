@@ -12,14 +12,15 @@ Users can map these to friendly names (e.g., "20-12-34 12345678" → "Savings Ac
 Separates business logic from HTTP routing concerns.
 """
 
-from database import transactions as db_transactions
-from mcp.merchant_normalizer import detect_account_pattern
 import re
 
+from database import transactions as db_transactions
+from mcp.merchant_normalizer import detect_account_pattern
 
 # ============================================================================
 # Account Mappings
 # ============================================================================
+
 
 def get_account_mappings() -> list:
     """
@@ -32,7 +33,9 @@ def get_account_mappings() -> list:
     return mappings
 
 
-def create_account_mapping(sort_code: str, account_number: str, friendly_name: str) -> dict:
+def create_account_mapping(
+    sort_code: str, account_number: str, friendly_name: str
+) -> dict:
     """
     Create a new account mapping.
 
@@ -48,32 +51,27 @@ def create_account_mapping(sort_code: str, account_number: str, friendly_name: s
         ValueError: If required fields missing or validation fails
     """
     if not sort_code or not account_number or not friendly_name:
-        raise ValueError('Missing required fields')
+        raise ValueError("Missing required fields")
 
     # Normalize format (remove hyphens and spaces)
-    sort_code = str(sort_code).replace('-', '').replace(' ', '')
-    account_number = str(account_number).replace(' ', '')
+    sort_code = str(sort_code).replace("-", "").replace(" ", "")
+    account_number = str(account_number).replace(" ", "")
 
     # Validate format
-    if not re.match(r'^\d{6}$', sort_code):
-        raise ValueError('Sort code must be 6 digits')
+    if not re.match(r"^\d{6}$", sort_code):
+        raise ValueError("Sort code must be 6 digits")
 
-    if not re.match(r'^\d{8}$', account_number):
-        raise ValueError('Account number must be 8 digits')
+    if not re.match(r"^\d{8}$", account_number):
+        raise ValueError("Account number must be 8 digits")
 
     mapping_id = db_transactions.add_account_mapping(
-        sort_code,
-        account_number,
-        friendly_name
+        sort_code, account_number, friendly_name
     )
 
     if mapping_id is None:
-        raise ValueError('Account mapping already exists')
+        raise ValueError("Account mapping already exists")
 
-    return {
-        'success': True,
-        'id': mapping_id
-    }
+    return {"success": True, "id": mapping_id}
 
 
 def update_account_mapping(mapping_id: int, friendly_name: str) -> dict:
@@ -91,14 +89,14 @@ def update_account_mapping(mapping_id: int, friendly_name: str) -> dict:
         ValueError: If friendly_name missing or mapping not found
     """
     if not friendly_name:
-        raise ValueError('Missing friendly_name')
+        raise ValueError("Missing friendly_name")
 
     success = db_transactions.update_account_mapping(mapping_id, friendly_name)
 
     if not success:
-        raise ValueError('Account mapping not found')
+        raise ValueError("Account mapping not found")
 
-    return {'success': True}
+    return {"success": True}
 
 
 def delete_account_mapping(mapping_id: int) -> dict:
@@ -117,14 +115,15 @@ def delete_account_mapping(mapping_id: int) -> dict:
     success = db_transactions.delete_account_mapping(mapping_id)
 
     if not success:
-        raise ValueError('Account mapping not found')
+        raise ValueError("Account mapping not found")
 
-    return {'success': True}
+    return {"success": True}
 
 
 # ============================================================================
 # Account Discovery
 # ============================================================================
+
 
 def discover_account_mappings() -> list:
     """
@@ -145,14 +144,14 @@ def discover_account_mappings() -> list:
 
     # Get existing mappings to filter them out
     existing_mappings = db_transactions.get_all_account_mappings()
-    mapped_accounts = {(m['sort_code'], m['account_number']) for m in existing_mappings}
+    mapped_accounts = {(m["sort_code"], m["account_number"]) for m in existing_mappings}
 
     # Scan for account patterns
     discovered = {}  # key: (sort_code, account_number), value: {count, sample_description}
 
     for txn in transactions:
-        description = txn.get('description', '') or ''
-        merchant = txn.get('merchant_name', '') or ''
+        description = txn.get("description", "") or ""
+        merchant = txn.get("merchant_name", "") or ""
 
         # Try to detect account pattern in description or merchant
         account_info = detect_account_pattern(description)
@@ -169,14 +168,16 @@ def discover_account_mappings() -> list:
             key = (sort_code, account_number)
             if key not in discovered:
                 discovered[key] = {
-                    'sort_code': sort_code,
-                    'account_number': account_number,
-                    'sample_description': description[:100] if description else merchant[:100],
-                    'count': 0
+                    "sort_code": sort_code,
+                    "account_number": account_number,
+                    "sample_description": description[:100]
+                    if description
+                    else merchant[:100],
+                    "count": 0,
                 }
-            discovered[key]['count'] += 1
+            discovered[key]["count"] += 1
 
     # Convert to list and sort by count descending
-    result = sorted(discovered.values(), key=lambda x: x['count'], reverse=True)
+    result = sorted(discovered.values(), key=lambda x: x["count"], reverse=True)
 
     return result

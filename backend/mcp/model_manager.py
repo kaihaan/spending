@@ -4,11 +4,10 @@ Handles discovery, management, and persistence of LLM models for different provi
 Supports runtime model switching and custom model addition.
 """
 
-import requests
 import logging
-from typing import Dict, List, Optional
+
 import database_postgres as database
-from config.llm_config import LLMProvider, LLMModel, get_provider_info
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -18,34 +17,34 @@ class ModelManager:
 
     # Built-in models for each provider (from llm_config)
     BUILT_IN_MODELS = {
-        'anthropic': [
-            'claude-3-5-opus-20241022',
-            'claude-3-5-sonnet-20241022',
-            'claude-3-5-haiku-20241022',
+        "anthropic": [
+            "claude-3-5-opus-20241022",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
         ],
-        'openai': [
-            'gpt-4-turbo',
-            'gpt-4o',
-            'gpt-3.5-turbo',
+        "openai": [
+            "gpt-4-turbo",
+            "gpt-4o",
+            "gpt-3.5-turbo",
         ],
-        'google': [
-            'gemini-1.5-pro',
-            'gemini-1.5-flash',
-            'gemini-pro',
+        "google": [
+            "gemini-1.5-pro",
+            "gemini-1.5-flash",
+            "gemini-pro",
         ],
-        'deepseek': [
-            'deepseek-chat',
-            'deepseek-v2',
+        "deepseek": [
+            "deepseek-chat",
+            "deepseek-v2",
         ],
-        'ollama': [
-            'mistral:7b',
-            'llama2:7b',
-            'llama2:13b',
-            'neural-chat:7b',
+        "ollama": [
+            "mistral:7b",
+            "llama2:7b",
+            "llama2:13b",
+            "neural-chat:7b",
         ],
     }
 
-    OLLAMA_API_BASE = 'http://localhost:11434'
+    OLLAMA_API_BASE = "http://localhost:11434"
 
     def __init__(self):
         """Initialize model manager."""
@@ -76,7 +75,9 @@ class ModelManager:
 
         return added > 0
 
-    def get_available_models(self, provider: str, include_ollama_discovery: bool = True) -> Dict:
+    def get_available_models(
+        self, provider: str, include_ollama_discovery: bool = True
+    ) -> dict:
         """
         Get all available models for a provider.
 
@@ -94,22 +95,22 @@ class ModelManager:
         db_models = database.get_provider_models(provider)
 
         result = {
-            'provider': provider,
-            'selected': db_models.get('selected'),
-            'built_in': db_models.get('built_in', []),
-            'custom': db_models.get('custom', []),
-            'available': [],  # Only for Ollama
+            "provider": provider,
+            "selected": db_models.get("selected"),
+            "built_in": db_models.get("built_in", []),
+            "custom": db_models.get("custom", []),
+            "available": [],  # Only for Ollama
         }
 
         # For Ollama, also discover installed models
-        if provider == 'ollama' and include_ollama_discovery:
+        if provider == "ollama" and include_ollama_discovery:
             available = self.discover_ollama_models()
-            result['available'] = available
-            result['installed'] = any(m['installed'] for m in available)
+            result["available"] = available
+            result["installed"] = any(m["installed"] for m in available)
 
         return result
 
-    def discover_ollama_models(self) -> List[Dict]:
+    def discover_ollama_models(self) -> list[dict]:
         """
         Discover models currently installed in Ollama.
 
@@ -119,35 +120,31 @@ class ModelManager:
             List of dicts with 'name' and 'installed' keys
         """
         try:
-            response = requests.get(
-                f'{self.OLLAMA_API_BASE}/api/tags',
-                timeout=5
-            )
+            response = requests.get(f"{self.OLLAMA_API_BASE}/api/tags", timeout=5)
 
             if response.status_code == 200:
                 data = response.json()
-                models = data.get('models', [])
+                models = data.get("models", [])
 
                 return [
                     {
-                        'name': m.get('name', ''),
-                        'installed': True,
-                        'size': m.get('size', 0),
-                        'modified': m.get('modified_at', '')
+                        "name": m.get("name", ""),
+                        "installed": True,
+                        "size": m.get("size", 0),
+                        "modified": m.get("modified_at", ""),
                     }
                     for m in models
                 ]
-            else:
-                if self.debug:
-                    logger.warning(f"Ollama API returned {response.status_code}")
-                return []
+            if self.debug:
+                logger.warning(f"Ollama API returned {response.status_code}")
+            return []
 
         except requests.exceptions.RequestException as e:
             if self.debug:
                 logger.warning(f"Failed to discover Ollama models: {e}")
             return []
 
-    def add_custom_ollama_model(self, model_name: str, auto_pull: bool = True) -> Dict:
+    def add_custom_ollama_model(self, model_name: str, auto_pull: bool = True) -> dict:
         """
         Add a custom Ollama model and optionally pull it.
 
@@ -159,40 +156,42 @@ class ModelManager:
             Dict with 'success', 'message', and 'model' keys
         """
         # Validate model format
-        if ':' not in model_name:
+        if ":" not in model_name:
             return {
-                'success': False,
-                'message': f'Invalid model format: {model_name}. Expected format: "model:tag" (e.g., "mistral:7b")',
-                'model': None
+                "success": False,
+                "message": f'Invalid model format: {model_name}. Expected format: "model:tag" (e.g., "mistral:7b")',
+                "model": None,
             }
 
         # Check if model already exists
-        existing = database.get_provider_models('ollama')
-        all_models = [m['name'] for m in existing['built_in']] + [m['name'] for m in existing['custom']]
+        existing = database.get_provider_models("ollama")
+        all_models = [m["name"] for m in existing["built_in"]] + [
+            m["name"] for m in existing["custom"]
+        ]
 
         if model_name in all_models:
             return {
-                'success': False,
-                'message': f'Model {model_name} already configured',
-                'model': {'name': model_name, 'is_custom': True}
+                "success": False,
+                "message": f"Model {model_name} already configured",
+                "model": {"name": model_name, "is_custom": True},
             }
 
         # If auto_pull is enabled, try to pull the model
         if auto_pull:
             pull_result = self._pull_ollama_model(model_name)
-            if not pull_result['success']:
+            if not pull_result["success"]:
                 return pull_result
 
         # Add to database
-        database.add_llm_model('ollama', model_name, is_custom=True)
+        database.add_llm_model("ollama", model_name, is_custom=True)
 
         return {
-            'success': True,
-            'message': f'Model {model_name} added successfully',
-            'model': {'name': model_name, 'is_custom': True}
+            "success": True,
+            "message": f"Model {model_name} added successfully",
+            "model": {"name": model_name, "is_custom": True},
         }
 
-    def _pull_ollama_model(self, model_name: str) -> Dict:
+    def _pull_ollama_model(self, model_name: str) -> dict:
         """
         Pull a model from Ollama registry.
 
@@ -204,45 +203,41 @@ class ModelManager:
         """
         try:
             response = requests.post(
-                f'{self.OLLAMA_API_BASE}/api/pull',
-                json={'name': model_name},
-                timeout=300  # 5 minute timeout for pulling large models
+                f"{self.OLLAMA_API_BASE}/api/pull",
+                json={"name": model_name},
+                timeout=300,  # 5 minute timeout for pulling large models
             )
 
             if response.status_code == 200:
                 return {
-                    'success': True,
-                    'message': f'Model {model_name} pulled successfully'
+                    "success": True,
+                    "message": f"Model {model_name} pulled successfully",
                 }
-            elif response.status_code == 404:
+            if response.status_code == 404:
                 return {
-                    'success': False,
-                    'message': f'Model {model_name} not found in Ollama registry'
+                    "success": False,
+                    "message": f"Model {model_name} not found in Ollama registry",
                 }
-            else:
-                error_text = response.text[:200]  # First 200 chars of error
-                return {
-                    'success': False,
-                    'message': f'Failed to pull model: {response.status_code} - {error_text}'
-                }
+            error_text = response.text[:200]  # First 200 chars of error
+            return {
+                "success": False,
+                "message": f"Failed to pull model: {response.status_code} - {error_text}",
+            }
 
         except requests.exceptions.Timeout:
             return {
-                'success': False,
-                'message': f'Pull request timed out (5 min). Model may still be downloading.'
+                "success": False,
+                "message": "Pull request timed out (5 min). Model may still be downloading.",
             }
         except requests.exceptions.ConnectionError:
             return {
-                'success': False,
-                'message': 'Cannot connect to Ollama at http://localhost:11434. Make sure Ollama is running.'
+                "success": False,
+                "message": "Cannot connect to Ollama at http://localhost:11434. Make sure Ollama is running.",
             }
         except requests.exceptions.RequestException as e:
-            return {
-                'success': False,
-                'message': f'Error pulling model: {str(e)}'
-            }
+            return {"success": False, "message": f"Error pulling model: {str(e)}"}
 
-    def set_model(self, provider: str, model_name: str) -> Dict:
+    def set_model(self, provider: str, model_name: str) -> dict:
         """
         Set the active model for a provider.
 
@@ -257,18 +252,17 @@ class ModelManager:
 
         if success:
             return {
-                'success': True,
-                'message': f'Model set to {model_name}',
-                'model': model_name
+                "success": True,
+                "message": f"Model set to {model_name}",
+                "model": model_name,
             }
-        else:
-            return {
-                'success': False,
-                'message': f'Model {model_name} not found for provider {provider}',
-                'model': None
-            }
+        return {
+            "success": False,
+            "message": f"Model {model_name} not found for provider {provider}",
+            "model": None,
+        }
 
-    def delete_custom_model(self, provider: str, model_name: str) -> Dict:
+    def delete_custom_model(self, provider: str, model_name: str) -> dict:
         """
         Delete a custom model.
 
@@ -282,17 +276,13 @@ class ModelManager:
         success = database.delete_custom_model(provider, model_name)
 
         if success:
-            return {
-                'success': True,
-                'message': f'Model {model_name} deleted'
-            }
-        else:
-            return {
-                'success': False,
-                'message': f'Cannot delete {model_name}: not a custom model or not found'
-            }
+            return {"success": True, "message": f"Model {model_name} deleted"}
+        return {
+            "success": False,
+            "message": f"Cannot delete {model_name}: not a custom model or not found",
+        }
 
-    def check_ollama_health(self) -> Dict:
+    def check_ollama_health(self) -> dict:
         """
         Check if Ollama service is running and healthy.
 
@@ -300,42 +290,38 @@ class ModelManager:
             Dict with 'healthy', 'message', and 'models_count'
         """
         try:
-            response = requests.get(
-                f'{self.OLLAMA_API_BASE}/api/tags',
-                timeout=2
-            )
+            response = requests.get(f"{self.OLLAMA_API_BASE}/api/tags", timeout=2)
 
             if response.status_code == 200:
                 data = response.json()
-                models_count = len(data.get('models', []))
+                models_count = len(data.get("models", []))
                 return {
-                    'healthy': True,
-                    'message': f'Ollama is running with {models_count} models',
-                    'models_count': models_count
+                    "healthy": True,
+                    "message": f"Ollama is running with {models_count} models",
+                    "models_count": models_count,
                 }
-            else:
-                return {
-                    'healthy': False,
-                    'message': f'Ollama returned status {response.status_code}',
-                    'models_count': 0
-                }
+            return {
+                "healthy": False,
+                "message": f"Ollama returned status {response.status_code}",
+                "models_count": 0,
+            }
 
         except requests.exceptions.ConnectionError:
             return {
-                'healthy': False,
-                'message': 'Cannot connect to Ollama at http://localhost:11434',
-                'models_count': 0
+                "healthy": False,
+                "message": "Cannot connect to Ollama at http://localhost:11434",
+                "models_count": 0,
             }
         except requests.exceptions.RequestException as e:
             return {
-                'healthy': False,
-                'message': f'Error checking Ollama: {str(e)}',
-                'models_count': 0
+                "healthy": False,
+                "message": f"Error checking Ollama: {str(e)}",
+                "models_count": 0,
             }
 
 
 # Global model manager instance
-_manager: Optional[ModelManager] = None
+_manager: ModelManager | None = None
 
 
 def get_model_manager() -> ModelManager:

@@ -16,10 +16,10 @@ Separates business logic from HTTP routing concerns.
 
 from database import categories as db_categories
 
-
 # ============================================================================
 # Legacy v1 Category API
 # ============================================================================
+
 
 def get_all_categories() -> list:
     """
@@ -43,18 +43,19 @@ def get_category_spending_summary(date_from: str = None, date_to: str = None) ->
         Dict with categories and hidden_categories lists
     """
     categories = db_categories.get_category_spending_summary(date_from, date_to)
-    hidden_categories = db_categories.get_custom_categories(category_type='hidden')
+    hidden_categories = db_categories.get_custom_categories(category_type="hidden")
 
     return {
-        'categories': categories,
-        'hidden_categories': [
-            {'name': c['name'], 'id': c['id']}
-            for c in hidden_categories
-        ]
+        "categories": categories,
+        "hidden_categories": [
+            {"name": c["name"], "id": c["id"]} for c in hidden_categories
+        ],
     }
 
 
-def get_subcategory_spending(category_name: str, date_from: str = None, date_to: str = None) -> dict:
+def get_subcategory_spending(
+    category_name: str, date_from: str = None, date_to: str = None
+) -> dict:
     """
     Get subcategories for a specific category with spending totals.
 
@@ -66,12 +67,11 @@ def get_subcategory_spending(category_name: str, date_from: str = None, date_to:
     Returns:
         Dict with category name and subcategories list
     """
-    subcategories = db_categories.get_subcategory_spending(category_name, date_from, date_to)
+    subcategories = db_categories.get_subcategory_spending(
+        category_name, date_from, date_to
+    )
 
-    return {
-        'category': category_name,
-        'subcategories': subcategories
-    }
+    return {"category": category_name, "subcategories": subcategories}
 
 
 def promote_category(new_category_name: str, subcategories: list) -> dict:
@@ -89,18 +89,18 @@ def promote_category(new_category_name: str, subcategories: list) -> dict:
         ValueError: If validation fails
     """
     if not new_category_name:
-        raise ValueError('new_category_name is required')
+        raise ValueError("new_category_name is required")
 
     if not subcategories:
-        raise ValueError('At least one subcategory is required')
+        raise ValueError("At least one subcategory is required")
 
     result = db_categories.create_promoted_category(new_category_name, subcategories)
 
     return {
-        'success': True,
-        'category_id': result['category_id'],
-        'transactions_updated': result['transactions_updated'],
-        'message': f"Created category '{new_category_name}' and updated {result['transactions_updated']} transactions"
+        "success": True,
+        "category_id": result["category_id"],
+        "transactions_updated": result["transactions_updated"],
+        "message": f"Created category '{new_category_name}' and updated {result['transactions_updated']} transactions",
     }
 
 
@@ -118,15 +118,15 @@ def hide_category(category_name: str) -> dict:
         ValueError: If category_name missing
     """
     if not category_name:
-        raise ValueError('category_name is required')
+        raise ValueError("category_name is required")
 
     result = db_categories.hide_category(category_name)
 
     return {
-        'success': True,
-        'category_id': result['category_id'],
-        'transactions_reset': result['transactions_reset'],
-        'message': f"Hidden category '{category_name}' and reset {result['transactions_reset']} transactions for re-enrichment"
+        "success": True,
+        "category_id": result["category_id"],
+        "transactions_reset": result["transactions_reset"],
+        "message": f"Hidden category '{category_name}' and reset {result['transactions_reset']} transactions for re-enrichment",
     }
 
 
@@ -144,17 +144,14 @@ def unhide_category(category_name: str) -> dict:
         ValueError: If category_name missing or not found
     """
     if not category_name:
-        raise ValueError('category_name is required')
+        raise ValueError("category_name is required")
 
     success = db_categories.unhide_category(category_name)
 
     if not success:
         raise ValueError(f"Category '{category_name}' was not found in hidden list")
 
-    return {
-        'success': True,
-        'message': f"Category '{category_name}' has been restored"
-    }
+    return {"success": True, "message": f"Category '{category_name}' has been restored"}
 
 
 def get_custom_categories(category_type: str = None) -> dict:
@@ -169,16 +166,17 @@ def get_custom_categories(category_type: str = None) -> dict:
     """
     categories = db_categories.get_custom_categories(category_type=category_type)
 
-    return {
-        'categories': [dict(c) for c in categories]
-    }
+    return {"categories": [dict(c) for c in categories]}
 
 
 # ============================================================================
 # Normalized v2 Categories API
 # ============================================================================
 
-def get_normalized_categories(active_only: bool = False, include_counts: bool = True) -> dict:
+
+def get_normalized_categories(
+    active_only: bool = False, include_counts: bool = True
+) -> dict:
     """
     Get all normalized categories with optional counts.
 
@@ -190,13 +188,10 @@ def get_normalized_categories(active_only: bool = False, include_counts: bool = 
         Dict with categories list
     """
     categories = db_categories.get_normalized_categories(
-        active_only=active_only,
-        include_counts=include_counts
+        active_only=active_only, include_counts=include_counts
     )
 
-    return {
-        'categories': [dict(c) for c in categories]
-    }
+    return {"categories": [dict(c) for c in categories]}
 
 
 def get_normalized_category(category_id: int) -> dict:
@@ -215,15 +210,14 @@ def get_normalized_category(category_id: int) -> dict:
     category = db_categories.get_normalized_category_by_id(category_id)
 
     if not category:
-        raise ValueError('Category not found')
+        raise ValueError("Category not found")
 
-    return {
-        'category': dict(category)
-    }
+    return {"category": dict(category)}
 
 
-def create_normalized_category(name: str, description: str = None,
-                                 is_essential: bool = False, color: str = None) -> dict:
+def create_normalized_category(
+    name: str, description: str = None, is_essential: bool = False, color: str = None
+) -> dict:
     """
     Create a new normalized category.
 
@@ -240,27 +234,26 @@ def create_normalized_category(name: str, description: str = None,
         ValueError: If name missing or category already exists
     """
     if not name:
-        raise ValueError('Name is required')
+        raise ValueError("Name is required")
 
     category = db_categories.create_normalized_category(
-        name=name,
-        description=description,
-        is_essential=is_essential,
-        color=color
+        name=name, description=description, is_essential=is_essential, color=color
     )
 
     if not category:
-        raise ValueError('Category with this name already exists')
+        raise ValueError("Category with this name already exists")
 
-    return {
-        'category': dict(category),
-        'message': 'Category created successfully'
-    }
+    return {"category": dict(category), "message": "Category created successfully"}
 
 
-def update_normalized_category(category_id: int, name: str = None, description: str = None,
-                                 is_active: bool = None, is_essential: bool = None,
-                                 color: str = None) -> dict:
+def update_normalized_category(
+    category_id: int,
+    name: str = None,
+    description: str = None,
+    is_active: bool = None,
+    is_essential: bool = None,
+    color: str = None,
+) -> dict:
     """
     Update a normalized category. Cascades name changes to all transactions.
 
@@ -284,23 +277,25 @@ def update_normalized_category(category_id: int, name: str = None, description: 
         description=description,
         is_active=is_active,
         is_essential=is_essential,
-        color=color
+        color=color,
     )
 
     if not result:
-        raise ValueError('Category not found')
+        raise ValueError("Category not found")
 
     return {
-        'category': dict(result['category']),
-        'transactions_updated': result['transactions_updated'],
-        'rules_updated': result['rules_updated'],
-        'old_name': result.get('old_name'),
-        'new_name': result.get('new_name'),
-        'message': 'Category updated successfully'
+        "category": dict(result["category"]),
+        "transactions_updated": result["transactions_updated"],
+        "rules_updated": result["rules_updated"],
+        "old_name": result.get("old_name"),
+        "new_name": result.get("new_name"),
+        "message": "Category updated successfully",
     }
 
 
-def delete_normalized_category(category_id: int, reassign_to_category_id: int = None) -> dict:
+def delete_normalized_category(
+    category_id: int, reassign_to_category_id: int = None
+) -> dict:
     """
     Delete a normalized category. System categories cannot be deleted.
 
@@ -315,20 +310,19 @@ def delete_normalized_category(category_id: int, reassign_to_category_id: int = 
         ValueError: If category not found or is system category
     """
     result = db_categories.delete_normalized_category(
-        category_id=category_id,
-        reassign_to_category_id=reassign_to_category_id
+        category_id=category_id, reassign_to_category_id=reassign_to_category_id
     )
 
     if not result:
-        raise ValueError('Category not found')
+        raise ValueError("Category not found")
 
-    if result.get('error'):
-        raise ValueError(result['error'])
+    if result.get("error"):
+        raise ValueError(result["error"])
 
     return {
-        'deleted_category': result['deleted_category'],
-        'transactions_reassigned': result['transactions_reassigned'],
-        'message': 'Category deleted successfully'
+        "deleted_category": result["deleted_category"],
+        "transactions_reassigned": result["transactions_reassigned"],
+        "message": "Category deleted successfully",
     }
 
 
@@ -336,7 +330,10 @@ def delete_normalized_category(category_id: int, reassign_to_category_id: int = 
 # Normalized v2 Subcategories API
 # ============================================================================
 
-def get_normalized_subcategories(category_id: int = None, include_counts: bool = True) -> dict:
+
+def get_normalized_subcategories(
+    category_id: int = None, include_counts: bool = True
+) -> dict:
     """
     Get all normalized subcategories, optionally filtered by category.
 
@@ -348,13 +345,10 @@ def get_normalized_subcategories(category_id: int = None, include_counts: bool =
         Dict with subcategories list
     """
     subcategories = db_categories.get_normalized_subcategories(
-        category_id=category_id,
-        include_counts=include_counts
+        category_id=category_id, include_counts=include_counts
     )
 
-    return {
-        'subcategories': [dict(s) for s in subcategories]
-    }
+    return {"subcategories": [dict(s) for s in subcategories]}
 
 
 def get_normalized_subcategory(subcategory_id: int) -> dict:
@@ -373,14 +367,14 @@ def get_normalized_subcategory(subcategory_id: int) -> dict:
     subcategory = db_categories.get_normalized_subcategory_by_id(subcategory_id)
 
     if not subcategory:
-        raise ValueError('Subcategory not found')
+        raise ValueError("Subcategory not found")
 
-    return {
-        'subcategory': dict(subcategory)
-    }
+    return {"subcategory": dict(subcategory)}
 
 
-def create_normalized_subcategory(category_id: int, name: str, description: str = None) -> dict:
+def create_normalized_subcategory(
+    category_id: int, name: str, description: str = None
+) -> dict:
     """
     Create a new normalized subcategory under a category.
 
@@ -396,30 +390,33 @@ def create_normalized_subcategory(category_id: int, name: str, description: str 
         ValueError: If name missing, category not found, or subcategory already exists
     """
     if not name:
-        raise ValueError('Name is required')
+        raise ValueError("Name is required")
 
     # Verify category exists
     category = db_categories.get_normalized_category_by_id(category_id)
     if not category:
-        raise ValueError('Category not found')
+        raise ValueError("Category not found")
 
     subcategory = db_categories.create_normalized_subcategory(
-        category_id=category_id,
-        name=name,
-        description=description
+        category_id=category_id, name=name, description=description
     )
 
     if not subcategory:
-        raise ValueError('Subcategory with this name already exists in this category')
+        raise ValueError("Subcategory with this name already exists in this category")
 
     return {
-        'subcategory': dict(subcategory),
-        'message': 'Subcategory created successfully'
+        "subcategory": dict(subcategory),
+        "message": "Subcategory created successfully",
     }
 
 
-def update_normalized_subcategory(subcategory_id: int, name: str = None, description: str = None,
-                                    is_active: bool = None, category_id: int = None) -> dict:
+def update_normalized_subcategory(
+    subcategory_id: int,
+    name: str = None,
+    description: str = None,
+    is_active: bool = None,
+    category_id: int = None,
+) -> dict:
     """
     Update a normalized subcategory. Cascades name changes to transactions.
 
@@ -441,18 +438,18 @@ def update_normalized_subcategory(subcategory_id: int, name: str = None, descrip
         name=name,
         description=description,
         is_active=is_active,
-        category_id=category_id
+        category_id=category_id,
     )
 
     if not result:
-        raise ValueError('Subcategory not found')
+        raise ValueError("Subcategory not found")
 
     return {
-        'subcategory': dict(result['subcategory']),
-        'transactions_updated': result['transactions_updated'],
-        'old_name': result.get('old_name'),
-        'new_name': result.get('new_name'),
-        'message': 'Subcategory updated successfully'
+        "subcategory": dict(result["subcategory"]),
+        "transactions_updated": result["transactions_updated"],
+        "old_name": result.get("old_name"),
+        "new_name": result.get("new_name"),
+        "message": "Subcategory updated successfully",
     }
 
 
@@ -472,11 +469,11 @@ def delete_normalized_subcategory(subcategory_id: int) -> dict:
     result = db_categories.delete_normalized_subcategory(subcategory_id)
 
     if not result:
-        raise ValueError('Subcategory not found')
+        raise ValueError("Subcategory not found")
 
     return {
-        'deleted_subcategory': result['deleted_subcategory'],
-        'category_name': result['category_name'],
-        'transactions_cleared': result['transactions_cleared'],
-        'message': 'Subcategory deleted successfully'
+        "deleted_subcategory": result["deleted_subcategory"],
+        "category_name": result["category_name"],
+        "transactions_cleared": result["transactions_cleared"],
+        "message": "Subcategory deleted successfully",
     }

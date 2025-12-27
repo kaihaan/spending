@@ -12,23 +12,23 @@ All domain-specific database operations are in separate modules (gmail.py,
 truelayer.py, etc.) that use these base utilities.
 """
 
-import psycopg2
-from psycopg2 import pool
-from psycopg2.extras import RealDictCursor
-from contextlib import contextmanager
 import os
+from contextlib import contextmanager
+
+import psycopg2
 from dotenv import load_dotenv
+from psycopg2.extras import RealDictCursor
 
 # Load environment variables (don't override existing for Docker compatibility)
 load_dotenv(override=False)
 
 # Database connection configuration
 DB_CONFIG = {
-    'host': os.getenv('POSTGRES_HOST', 'localhost'),
-    'port': int(os.getenv('POSTGRES_PORT', 5432)),
-    'database': os.getenv('POSTGRES_DB', 'spending_db'),
-    'user': os.getenv('POSTGRES_USER', 'spending_user'),
-    'password': os.getenv('POSTGRES_PASSWORD', 'spending_password')
+    "host": os.getenv("POSTGRES_HOST", "localhost"),
+    "port": int(os.getenv("POSTGRES_PORT", 5432)),
+    "database": os.getenv("POSTGRES_DB", "spending_db"),
+    "user": os.getenv("POSTGRES_USER", "spending_user"),
+    "password": os.getenv("POSTGRES_PASSWORD", "spending_password"),
 }
 
 # Global connection pool
@@ -39,7 +39,8 @@ def init_pool():
     """
     Initialize PostgreSQL connection pool.
 
-    Creates a SimpleConnectionPool with 1-10 connections.
+    Creates a ThreadedConnectionPool with 1-10 connections.
+    Thread-safe pool required for Flask multi-threaded environment.
     Called automatically by get_db() if pool doesn't exist.
 
     Raises:
@@ -47,10 +48,10 @@ def init_pool():
     """
     global connection_pool
     try:
-        connection_pool = psycopg2.pool.SimpleConnectionPool(
+        connection_pool = psycopg2.pool.ThreadedConnectionPool(
             1,  # Minimum connections
             10,  # Maximum connections
-            **DB_CONFIG
+            **DB_CONFIG,
         )
         if connection_pool:
             print("✓ PostgreSQL connection pool created successfully")
@@ -70,7 +71,6 @@ def _init_core_schema():
     """
     # Import domain modules to trigger their schema initialization
     # This will be populated as modules are created
-    pass
 
 
 @contextmanager
@@ -91,7 +91,11 @@ def get_db():
     if connection_pool is None:
         init_pool()
 
-    conn = connection_pool.getconn()
+    # Get connection with explicit thread key for ThreadedConnectionPool
+    import threading
+
+    key = threading.get_ident()
+    conn = connection_pool.getconn(key)
     try:
         yield conn
     except Exception:
@@ -99,8 +103,8 @@ def get_db():
         conn.rollback()
         raise
     finally:
-        # Always return connection to pool
-        connection_pool.putconn(conn)
+        # Always return connection to pool with the same key
+        connection_pool.putconn(conn, key)
 
 
 def close_pool():
@@ -117,8 +121,13 @@ def close_pool():
 
 
 # Utility function for common cursor operations
-def execute_query(query: str, params: tuple = None, fetch_one: bool = False,
-                  fetch_all: bool = False, commit: bool = False):
+def execute_query(
+    query: str,
+    params: tuple = None,
+    fetch_one: bool = False,
+    fetch_all: bool = False,
+    commit: bool = False,
+):
     """
     Execute a database query with common patterns.
 
@@ -153,17 +162,16 @@ def execute_query(query: str, params: tuple = None, fetch_one: bool = False,
             commit=True
         )
     """
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute(query, params or ())
+    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute(query, params or ())
 
-            if fetch_one:
-                result = cursor.fetchone()
-                return dict(result) if result else None
-            elif fetch_all:
-                return [dict(row) for row in cursor.fetchall()]
+        if fetch_one:
+            result = cursor.fetchone()
+            return dict(result) if result else None
+        if fetch_all:
+            return [dict(row) for row in cursor.fetchall()]
 
-            if commit:
-                conn.commit()
+        if commit:
+            conn.commit()
 
     return None

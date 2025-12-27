@@ -82,14 +82,14 @@ interface EnrichmentSourceDetails {
     parse_confidence?: number;
     parsing_status?: string;
     // PDF attachments
-    pdf_attachments?: Array<{
+    pdf_attachments?: {
       id: number;
       filename: string;
       size_bytes: number;
       mime_type: string;
       object_key: string;
       created_at: string;
-    }>;
+    }[];
   } | null;
 }
 
@@ -188,7 +188,7 @@ export default function EnrichmentSourceDetailModal({
   };
 
   // Format currency
-  const formatAmount = (amount: number | undefined, currency: string = 'GBP'): string => {
+  const formatAmount = (amount: number | undefined, currency = 'GBP'): string => {
     if (amount === undefined || amount === null) return '-';
     return new Intl.NumberFormat('en-GB', {
       style: 'currency',

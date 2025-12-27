@@ -4,7 +4,7 @@ import CategoryColumn from '../CategoryPromotion/CategoryColumn';
 import SubcategoryColumn from '../CategoryPromotion/SubcategoryColumn';
 import NewCategoryBuilder from '../CategoryPromotion/NewCategoryBuilder';
 import { CategoryEditor } from './CategoryEditor';
-import {
+import type {
   Category,
   HiddenCategory,
   Subcategory,

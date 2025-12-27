@@ -16,23 +16,28 @@ v2 API (Normalized):
 Routes are thin controllers that delegate to categories_service for business logic.
 """
 
-from flask import Blueprint, request, jsonify
-from services import categories_service
 import traceback
 
+from flask import Blueprint, jsonify, request
+
+from services import categories_service
+
 # v1 Legacy API
-categories_v1_bp = Blueprint('categories_v1', __name__, url_prefix='/api/categories')
+categories_v1_bp = Blueprint("categories_v1", __name__, url_prefix="/api/categories")
 
 # v2 Normalized API
-categories_v2_bp = Blueprint('categories_v2', __name__, url_prefix='/api/v2/categories')
-subcategories_v2_bp = Blueprint('subcategories_v2', __name__, url_prefix='/api/v2/subcategories')
+categories_v2_bp = Blueprint("categories_v2", __name__, url_prefix="/api/v2/categories")
+subcategories_v2_bp = Blueprint(
+    "subcategories_v2", __name__, url_prefix="/api/v2/subcategories"
+)
 
 
 # ============================================================================
 # v1 Legacy Category API
 # ============================================================================
 
-@categories_v1_bp.route('', methods=['GET'])
+
+@categories_v1_bp.route("", methods=["GET"])
 def get_categories():
     """
     Get all categories (legacy v1 API).
@@ -47,10 +52,10 @@ def get_categories():
     except Exception as e:
         print(f"❌ Get categories error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v1_bp.route('/summary', methods=['GET'])
+@categories_v1_bp.route("/summary", methods=["GET"])
 def get_spending_summary():
     """
     Get all categories with spending totals.
@@ -63,8 +68,8 @@ def get_spending_summary():
         Dict with categories and hidden_categories lists
     """
     try:
-        date_from = request.args.get('date_from')
-        date_to = request.args.get('date_to')
+        date_from = request.args.get("date_from")
+        date_to = request.args.get("date_to")
 
         result = categories_service.get_category_spending_summary(date_from, date_to)
         return jsonify(result)
@@ -72,10 +77,10 @@ def get_spending_summary():
     except Exception as e:
         print(f"❌ Get category spending summary error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v1_bp.route('/<path:category_name>/subcategories', methods=['GET'])
+@categories_v1_bp.route("/<path:category_name>/subcategories", methods=["GET"])
 def get_subcategories(category_name):
     """
     Get subcategories for a specific category with spending totals.
@@ -91,19 +96,21 @@ def get_subcategories(category_name):
         Dict with category name and subcategories list
     """
     try:
-        date_from = request.args.get('date_from')
-        date_to = request.args.get('date_to')
+        date_from = request.args.get("date_from")
+        date_to = request.args.get("date_to")
 
-        result = categories_service.get_subcategory_spending(category_name, date_from, date_to)
+        result = categories_service.get_subcategory_spending(
+            category_name, date_from, date_to
+        )
         return jsonify(result)
 
     except Exception as e:
         print(f"❌ Get category subcategories error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v1_bp.route('/promote', methods=['POST'])
+@categories_v1_bp.route("/promote", methods=["POST"])
 def promote():
     """
     Create a promoted category from selected subcategories.
@@ -119,23 +126,23 @@ def promote():
         data = request.get_json()
 
         if not data:
-            return jsonify({'error': 'Request body required'}), 400
+            return jsonify({"error": "Request body required"}), 400
 
-        new_category_name = data.get('new_category_name')
-        subcategories = data.get('subcategories', [])
+        new_category_name = data.get("new_category_name")
+        subcategories = data.get("subcategories", [])
 
         result = categories_service.promote_category(new_category_name, subcategories)
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Promote category error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v1_bp.route('/hide', methods=['POST'])
+@categories_v1_bp.route("/hide", methods=["POST"])
 def hide():
     """
     Hide a category and reset its transactions for re-enrichment.
@@ -150,22 +157,22 @@ def hide():
         data = request.get_json()
 
         if not data:
-            return jsonify({'error': 'Request body required'}), 400
+            return jsonify({"error": "Request body required"}), 400
 
-        category_name = data.get('category_name')
+        category_name = data.get("category_name")
         result = categories_service.hide_category(category_name)
 
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Hide category error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v1_bp.route('/unhide', methods=['POST'])
+@categories_v1_bp.route("/unhide", methods=["POST"])
 def unhide():
     """
     Restore a hidden category.
@@ -180,22 +187,22 @@ def unhide():
         data = request.get_json()
 
         if not data:
-            return jsonify({'error': 'Request body required'}), 400
+            return jsonify({"error": "Request body required"}), 400
 
-        category_name = data.get('category_name')
+        category_name = data.get("category_name")
         result = categories_service.unhide_category(category_name)
 
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'success': False, 'message': str(e)}), 404
+        return jsonify({"success": False, "message": str(e)}), 404
     except Exception as e:
         print(f"❌ Unhide category error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v1_bp.route('/custom', methods=['GET'])
+@categories_v1_bp.route("/custom", methods=["GET"])
 def get_custom():
     """
     Get all custom categories (promoted and hidden).
@@ -207,7 +214,7 @@ def get_custom():
         Dict with categories list
     """
     try:
-        category_type = request.args.get('type')
+        category_type = request.args.get("type")
         result = categories_service.get_custom_categories(category_type=category_type)
 
         return jsonify(result)
@@ -215,14 +222,15 @@ def get_custom():
     except Exception as e:
         print(f"❌ Get custom categories error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # v2 Normalized Categories API
 # ============================================================================
 
-@categories_v2_bp.route('', methods=['GET'])
+
+@categories_v2_bp.route("", methods=["GET"])
 def get_normalized():
     """
     Get all normalized categories with optional counts.
@@ -235,12 +243,11 @@ def get_normalized():
         Dict with categories list
     """
     try:
-        active_only = request.args.get('active_only', 'false').lower() == 'true'
-        include_counts = request.args.get('include_counts', 'true').lower() == 'true'
+        active_only = request.args.get("active_only", "false").lower() == "true"
+        include_counts = request.args.get("include_counts", "true").lower() == "true"
 
         result = categories_service.get_normalized_categories(
-            active_only=active_only,
-            include_counts=include_counts
+            active_only=active_only, include_counts=include_counts
         )
 
         return jsonify(result)
@@ -248,10 +255,10 @@ def get_normalized():
     except Exception as e:
         print(f"❌ Get normalized categories error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v2_bp.route('/<int:category_id>', methods=['GET'])
+@categories_v2_bp.route("/<int:category_id>", methods=["GET"])
 def get_normalized_single(category_id):
     """
     Get a single normalized category with subcategories.
@@ -267,14 +274,14 @@ def get_normalized_single(category_id):
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Get normalized category error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v2_bp.route('', methods=['POST'])
+@categories_v2_bp.route("", methods=["POST"])
 def create_normalized():
     """
     Create a new normalized category.
@@ -292,28 +299,28 @@ def create_normalized():
         data = request.get_json()
 
         if not data:
-            return jsonify({'error': 'Request body required'}), 400
+            return jsonify({"error": "Request body required"}), 400
 
         result = categories_service.create_normalized_category(
-            name=data.get('name'),
-            description=data.get('description'),
-            is_essential=data.get('is_essential', False),
-            color=data.get('color')
+            name=data.get("name"),
+            description=data.get("description"),
+            is_essential=data.get("is_essential", False),
+            color=data.get("color"),
         )
 
         return jsonify(result), 201
 
     except ValueError as e:
         # Name missing or duplicate
-        status = 400 if 'required' in str(e) else 409
-        return jsonify({'error': str(e)}), status
+        status = 400 if "required" in str(e) else 409
+        return jsonify({"error": str(e)}), status
     except Exception as e:
         print(f"❌ Create normalized category error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v2_bp.route('/<int:category_id>', methods=['PUT'])
+@categories_v2_bp.route("/<int:category_id>", methods=["PUT"])
 def update_normalized(category_id):
     """
     Update a normalized category. Cascades name changes to all transactions.
@@ -335,28 +342,28 @@ def update_normalized(category_id):
         data = request.get_json()
 
         if not data:
-            return jsonify({'error': 'No data provided'}), 400
+            return jsonify({"error": "No data provided"}), 400
 
         result = categories_service.update_normalized_category(
             category_id=category_id,
-            name=data.get('name'),
-            description=data.get('description'),
-            is_active=data.get('is_active'),
-            is_essential=data.get('is_essential'),
-            color=data.get('color')
+            name=data.get("name"),
+            description=data.get("description"),
+            is_active=data.get("is_active"),
+            is_essential=data.get("is_essential"),
+            color=data.get("color"),
         )
 
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Update normalized category error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v2_bp.route('/<int:category_id>', methods=['DELETE'])
+@categories_v2_bp.route("/<int:category_id>", methods=["DELETE"])
 def delete_normalized(category_id):
     """
     Delete a normalized category. System categories cannot be deleted.
@@ -371,26 +378,25 @@ def delete_normalized(category_id):
         Dict with deletion results
     """
     try:
-        reassign_to = request.args.get('reassign_to', type=int)
+        reassign_to = request.args.get("reassign_to", type=int)
 
         result = categories_service.delete_normalized_category(
-            category_id=category_id,
-            reassign_to_category_id=reassign_to
+            category_id=category_id, reassign_to_category_id=reassign_to
         )
 
         return jsonify(result)
 
     except ValueError as e:
         # Not found or system category error
-        status = 404 if 'not found' in str(e).lower() else 400
-        return jsonify({'error': str(e)}), status
+        status = 404 if "not found" in str(e).lower() else 400
+        return jsonify({"error": str(e)}), status
     except Exception as e:
         print(f"❌ Delete normalized category error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@categories_v2_bp.route('/<int:category_id>/subcategories', methods=['POST'])
+@categories_v2_bp.route("/<int:category_id>/subcategories", methods=["POST"])
 def create_subcategory(category_id):
     """
     Create a new normalized subcategory under a category.
@@ -409,37 +415,38 @@ def create_subcategory(category_id):
         data = request.get_json()
 
         if not data:
-            return jsonify({'error': 'Request body required'}), 400
+            return jsonify({"error": "Request body required"}), 400
 
         result = categories_service.create_normalized_subcategory(
             category_id=category_id,
-            name=data.get('name'),
-            description=data.get('description')
+            name=data.get("name"),
+            description=data.get("description"),
         )
 
         return jsonify(result), 201
 
     except ValueError as e:
         # Name missing, category not found, or duplicate
-        if 'not found' in str(e).lower():
+        if "not found" in str(e).lower():
             status = 404
-        elif 'required' in str(e).lower():
+        elif "required" in str(e).lower():
             status = 400
         else:
             status = 409
-        return jsonify({'error': str(e)}), status
+        return jsonify({"error": str(e)}), status
     except Exception as e:
         print(f"❌ Create normalized subcategory error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # v2 Normalized Subcategories API
 # ============================================================================
 
-@subcategories_v2_bp.route('', methods=['GET'])
-def get_normalized():
+
+@subcategories_v2_bp.route("", methods=["GET"])
+def get_normalized_subcategories():
     """
     Get all normalized subcategories, optionally filtered by category.
 
@@ -451,12 +458,11 @@ def get_normalized():
         Dict with subcategories list
     """
     try:
-        category_id = request.args.get('category_id', type=int)
-        include_counts = request.args.get('include_counts', 'true').lower() == 'true'
+        category_id = request.args.get("category_id", type=int)
+        include_counts = request.args.get("include_counts", "true").lower() == "true"
 
         result = categories_service.get_normalized_subcategories(
-            category_id=category_id,
-            include_counts=include_counts
+            category_id=category_id, include_counts=include_counts
         )
 
         return jsonify(result)
@@ -464,11 +470,11 @@ def get_normalized():
     except Exception as e:
         print(f"❌ Get normalized subcategories error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@subcategories_v2_bp.route('/<int:subcategory_id>', methods=['GET'])
-def get_normalized_single(subcategory_id):
+@subcategories_v2_bp.route("/<int:subcategory_id>", methods=["GET"])
+def get_normalized_single_subcategory(subcategory_id):
     """
     Get a single normalized subcategory.
 
@@ -483,15 +489,15 @@ def get_normalized_single(subcategory_id):
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Get normalized subcategory error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@subcategories_v2_bp.route('/<int:subcategory_id>', methods=['PUT'])
-def update_normalized(subcategory_id):
+@subcategories_v2_bp.route("/<int:subcategory_id>", methods=["PUT"])
+def update_normalized_subcategory(subcategory_id):
     """
     Update a normalized subcategory. Cascades name changes to transactions.
 
@@ -511,28 +517,28 @@ def update_normalized(subcategory_id):
         data = request.get_json()
 
         if not data:
-            return jsonify({'error': 'No data provided'}), 400
+            return jsonify({"error": "No data provided"}), 400
 
         result = categories_service.update_normalized_subcategory(
             subcategory_id=subcategory_id,
-            name=data.get('name'),
-            description=data.get('description'),
-            is_active=data.get('is_active'),
-            category_id=data.get('category_id')
+            name=data.get("name"),
+            description=data.get("description"),
+            is_active=data.get("is_active"),
+            category_id=data.get("category_id"),
         )
 
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Update normalized subcategory error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@subcategories_v2_bp.route('/<int:subcategory_id>', methods=['DELETE'])
-def delete_normalized(subcategory_id):
+@subcategories_v2_bp.route("/<int:subcategory_id>", methods=["DELETE"])
+def delete_normalized_subcategory(subcategory_id):
     """
     Delete a normalized subcategory.
 
@@ -547,8 +553,8 @@ def delete_normalized(subcategory_id):
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Delete normalized subcategory error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500

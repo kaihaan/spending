@@ -6,21 +6,20 @@ Designed for graceful degradation - if MinIO is unavailable, operations fail
 silently and the rest of the sync continues.
 """
 
-import os
 import hashlib
 import logging
+import os
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
 from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
 # MinIO configuration from environment
-MINIO_ENDPOINT = os.getenv('MINIO_ENDPOINT', 'localhost:9000')
-MINIO_ACCESS_KEY = os.getenv('MINIO_ROOT_USER', 'minioadmin')
-MINIO_SECRET_KEY = os.getenv('MINIO_ROOT_PASSWORD', 'minioadmin123')
-MINIO_SECURE = os.getenv('MINIO_SECURE', 'false').lower() == 'true'
-MINIO_BUCKET = os.getenv('MINIO_BUCKET', 'receipts')
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin123")
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "receipts")
 
 # Lazy-loaded client
 _client = None
@@ -32,11 +31,12 @@ def _get_client():
     if _client is None:
         try:
             from minio import Minio
+
             _client = Minio(
                 MINIO_ENDPOINT,
                 access_key=MINIO_ACCESS_KEY,
                 secret_key=MINIO_SECRET_KEY,
-                secure=MINIO_SECURE
+                secure=MINIO_SECURE,
             )
         except ImportError:
             logger.warning("minio package not installed")
@@ -70,7 +70,9 @@ def compute_pdf_hash(pdf_bytes: bytes) -> str:
     return hashlib.sha256(pdf_bytes).hexdigest()
 
 
-def generate_object_key(message_id: str, filename: str, received_date: Optional[datetime] = None) -> str:
+def generate_object_key(
+    message_id: str, filename: str, received_date: datetime | None = None
+) -> str:
     """
     Generate S3 object key with date-based organization.
 
@@ -80,10 +82,10 @@ def generate_object_key(message_id: str, filename: str, received_date: Optional[
         received_date = datetime.now()
 
     # Sanitize filename (remove path separators)
-    safe_filename = filename.replace('/', '_').replace('\\', '_')
+    safe_filename = filename.replace("/", "_").replace("\\", "_")
 
     # Sanitize message_id (some may have special chars)
-    safe_message_id = message_id.replace('/', '_').replace('\\', '_')
+    safe_message_id = message_id.replace("/", "_").replace("\\", "_")
 
     return f"{received_date.year}/{received_date.month:02d}/{received_date.day:02d}/{safe_message_id}/{safe_filename}"
 
@@ -92,9 +94,9 @@ def store_pdf(
     pdf_bytes: bytes,
     message_id: str,
     filename: str,
-    received_date: Optional[datetime] = None,
-    metadata: Optional[dict] = None
-) -> Optional[dict]:
+    received_date: datetime | None = None,
+    metadata: dict | None = None,
+) -> dict | None:
     """
     Store a PDF in MinIO.
 
@@ -126,15 +128,15 @@ def store_pdf(
 
         # Prepare metadata
         minio_metadata = {
-            'message-id': message_id,
-            'content-hash': content_hash,
-            'original-filename': filename
+            "message-id": message_id,
+            "content-hash": content_hash,
+            "original-filename": filename,
         }
         if metadata:
             for key, value in metadata.items():
                 if value:
                     # MinIO metadata keys must be lowercase
-                    minio_metadata[key.lower().replace('_', '-')] = str(value)
+                    minio_metadata[key.lower().replace("_", "-")] = str(value)
 
         # Upload to MinIO
         data = BytesIO(pdf_bytes)
@@ -143,19 +145,19 @@ def store_pdf(
             object_name=object_key,
             data=data,
             length=len(pdf_bytes),
-            content_type='application/pdf',
-            metadata=minio_metadata
+            content_type="application/pdf",
+            metadata=minio_metadata,
         )
 
         logger.info(f"Stored PDF in MinIO: {object_key} ({len(pdf_bytes)} bytes)")
 
         return {
-            'bucket_name': MINIO_BUCKET,
-            'object_key': object_key,
-            'content_hash': content_hash,
-            'size_bytes': len(pdf_bytes),
-            'etag': result.etag,
-            'filename': filename
+            "bucket_name": MINIO_BUCKET,
+            "object_key": object_key,
+            "content_hash": content_hash,
+            "size_bytes": len(pdf_bytes),
+            "etag": result.etag,
+            "filename": filename,
         }
 
     except Exception as e:
@@ -163,7 +165,7 @@ def store_pdf(
         return None
 
 
-def get_pdf(object_key: str) -> Optional[bytes]:
+def get_pdf(object_key: str) -> bytes | None:
     """
     Retrieve a PDF from MinIO.
 
@@ -190,7 +192,7 @@ def get_pdf(object_key: str) -> Optional[bytes]:
         return None
 
 
-def get_presigned_url(object_key: str, expires_hours: int = 1) -> Optional[str]:
+def get_presigned_url(object_key: str, expires_hours: int = 1) -> str | None:
     """
     Generate a presigned URL for temporary access to a PDF.
 
@@ -209,7 +211,7 @@ def get_presigned_url(object_key: str, expires_hours: int = 1) -> Optional[str]:
         url = client.presigned_get_object(
             bucket_name=MINIO_BUCKET,
             object_name=object_key,
-            expires=timedelta(hours=expires_hours)
+            expires=timedelta(hours=expires_hours),
         )
 
         return url
@@ -219,7 +221,7 @@ def get_presigned_url(object_key: str, expires_hours: int = 1) -> Optional[str]:
         return None
 
 
-def check_exists_by_hash(content_hash: str) -> Optional[str]:
+def check_exists_by_hash(content_hash: str) -> str | None:
     """
     Check if a PDF with the given content hash already exists.
 
@@ -257,7 +259,7 @@ def delete_pdf(object_key: str) -> bool:
         return False
 
 
-def get_storage_stats() -> Optional[dict]:
+def get_storage_stats() -> dict | None:
     """
     Get storage statistics for the receipts bucket.
 
@@ -279,9 +281,9 @@ def get_storage_stats() -> Optional[dict]:
             total_size += obj.size
 
         return {
-            'object_count': count,
-            'total_size_bytes': total_size,
-            'bucket_name': MINIO_BUCKET
+            "object_count": count,
+            "total_size_bytes": total_size,
+            "bucket_name": MINIO_BUCKET,
         }
 
     except Exception as e:

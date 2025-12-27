@@ -5,7 +5,8 @@ import type { Transaction, Category } from '../types';
 import CategoryUpdateModal from './CategoryUpdateModal';
 import EnrichmentSourceDetailModal from './EnrichmentSourceDetailModal';
 import { useFilters } from '../contexts/FilterContext';
-import TransactionRow, { ColumnVisibility, ColumnOrder, ColumnKey, COLUMN_CONFIG } from './TransactionRow';
+import type { ColumnVisibility, ColumnOrder, ColumnKey} from './TransactionRow';
+import TransactionRow, { COLUMN_CONFIG } from './TransactionRow';
 
 // Virtual row types for flattened data structure
 type VirtualRow =
@@ -238,7 +239,7 @@ export default function TransactionList() {
 
   // Group transactions by date
   const groupedTransactions = useMemo(() => {
-    const groups: { [key: string]: Transaction[] } = {};
+    const groups: Record<string, Transaction[]> = {};
 
     filteredTransactions.forEach(txn => {
       const dateKey = getDateKey(txn.date);

@@ -4,10 +4,16 @@ Uses Deepseek models via Deepseek API (OpenAI-compatible)
 """
 
 import time
-from typing import List, Dict, Optional
-from openai import OpenAI, APIError
 
-from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats, AccountInfo, LLMResponse
+from openai import APIError, OpenAI
+
+from .base_provider import (
+    AccountInfo,
+    BaseLLMProvider,
+    LLMResponse,
+    ProviderStats,
+    TransactionEnrichment,
+)
 
 
 class DeepseekProvider(BaseLLMProvider):
@@ -21,7 +27,7 @@ class DeepseekProvider(BaseLLMProvider):
         model: str = "deepseek-chat",
         timeout: int = 30,
         debug: bool = False,
-        api_base_url: Optional[str] = None
+        api_base_url: str | None = None,
     ):
         """
         Initialize Deepseek provider.
@@ -38,10 +44,7 @@ class DeepseekProvider(BaseLLMProvider):
         # Use provided API base URL or default
         base_url = api_base_url or self.DEEPSEEK_API_BASE
 
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
 
     def validate_api_key(self) -> bool:
         """
@@ -54,10 +57,8 @@ class DeepseekProvider(BaseLLMProvider):
             response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=10,
-                messages=[
-                    {"role": "user", "content": "Say 'OK'"}
-                ],
-                timeout=self.timeout
+                messages=[{"role": "user", "content": "Say 'OK'"}],
+                timeout=self.timeout,
             )
             return bool(response)
         except APIError as e:
@@ -66,10 +67,8 @@ class DeepseekProvider(BaseLLMProvider):
             return False
 
     def enrich_transactions(
-        self,
-        transactions: List[Dict[str, str]],
-        direction: str = "out"
-    ) -> tuple[List[TransactionEnrichment], ProviderStats]:
+        self, transactions: list[dict[str, str]], direction: str = "out"
+    ) -> tuple[list[TransactionEnrichment], ProviderStats]:
         """
         Enrich transactions using Deepseek.
 
@@ -87,7 +86,7 @@ class DeepseekProvider(BaseLLMProvider):
                 response_time_ms=0,
                 batch_size=0,
                 success_count=0,
-                failure_count=0
+                failure_count=0,
             )
 
         system_prompt = self._build_system_prompt()
@@ -102,9 +101,9 @@ class DeepseekProvider(BaseLLMProvider):
                 temperature=0.3,  # Lower temperature for more consistent results
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ],
-                timeout=self.timeout
+                timeout=self.timeout,
             )
 
             response_time_ms = (time.time() - start_time) * 1000
@@ -118,7 +117,9 @@ class DeepseekProvider(BaseLLMProvider):
             response_text = response.choices[0].message.content
 
             # Parse enrichments
-            enrichments = self._parse_enrichment_response(response_text, len(transactions))
+            enrichments = self._parse_enrichment_response(
+                response_text, len(transactions)
+            )
 
             # Calculate cost
             cost = self.calculate_cost(input_tokens, output_tokens)
@@ -129,7 +130,7 @@ class DeepseekProvider(BaseLLMProvider):
                 response_time_ms=response_time_ms,
                 batch_size=len(transactions),
                 success_count=len(enrichments),
-                failure_count=len(transactions) - len(enrichments)
+                failure_count=len(transactions) - len(enrichments),
             )
 
             return enrichments, stats
@@ -161,7 +162,9 @@ class DeepseekProvider(BaseLLMProvider):
         output_cost_per_1k = 0.00028  # $0.28 per 1M output tokens
 
         # Calculate total cost
-        total_cost = (tokens_in / 1000) * input_cost_per_1k + (tokens_out / 1000) * output_cost_per_1k
+        total_cost = (tokens_in / 1000) * input_cost_per_1k + (
+            tokens_out / 1000
+        ) * output_cost_per_1k
 
         return round(total_cost, 6)
 
@@ -179,7 +182,7 @@ class DeepseekProvider(BaseLLMProvider):
             provider="deepseek",
             available=False,
             error="Deepseek does not provide a public API for account balance/usage information. "
-                  "Check your account at platform.deepseek.com for billing details."
+            "Check your account at platform.deepseek.com for billing details.",
         )
 
     def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
@@ -204,7 +207,7 @@ class DeepseekProvider(BaseLLMProvider):
                 max_tokens=4096,
                 temperature=0.3,
                 messages=messages,
-                timeout=self.timeout
+                timeout=self.timeout,
             )
 
             # Extract usage information
@@ -223,7 +226,7 @@ class DeepseekProvider(BaseLLMProvider):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                cost=cost
+                cost=cost,
             )
 
         except Exception as e:

@@ -12,18 +12,21 @@ Users can map these to friendly names (e.g., "20-12-34 12345678" → "Savings Ac
 Routes are thin controllers that delegate to settings_service for business logic.
 """
 
-from flask import Blueprint, request, jsonify
-from services import settings_service
 import traceback
 
-settings_bp = Blueprint('settings', __name__, url_prefix='/api/settings')
+from flask import Blueprint, jsonify, request
+
+from services import settings_service
+
+settings_bp = Blueprint("settings", __name__, url_prefix="/api/settings")
 
 
 # ============================================================================
 # Account Mappings
 # ============================================================================
 
-@settings_bp.route('/account-mappings', methods=['GET'])
+
+@settings_bp.route("/account-mappings", methods=["GET"])
 def get_mappings():
     """
     Get all account mappings.
@@ -38,10 +41,10 @@ def get_mappings():
     except Exception as e:
         print(f"❌ Get account mappings error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@settings_bp.route('/account-mappings', methods=['POST'])
+@settings_bp.route("/account-mappings", methods=["POST"])
 def create_mapping():
     """
     Create a new account mapping.
@@ -65,24 +68,24 @@ def create_mapping():
         data = request.json
 
         result = settings_service.create_account_mapping(
-            sort_code=data.get('sort_code'),
-            account_number=data.get('account_number'),
-            friendly_name=data.get('friendly_name')
+            sort_code=data.get("sort_code"),
+            account_number=data.get("account_number"),
+            friendly_name=data.get("friendly_name"),
         )
 
         return jsonify(result), 201
 
     except ValueError as e:
         # Validation error or duplicate
-        status = 409 if 'already exists' in str(e) else 400
-        return jsonify({'error': str(e)}), status
+        status = 409 if "already exists" in str(e) else 400
+        return jsonify({"error": str(e)}), status
     except Exception as e:
         print(f"❌ Create account mapping error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@settings_bp.route('/account-mappings/<int:mapping_id>', methods=['PUT'])
+@settings_bp.route("/account-mappings/<int:mapping_id>", methods=["PUT"])
 def update_mapping(mapping_id):
     """
     Update an existing account mapping.
@@ -100,22 +103,21 @@ def update_mapping(mapping_id):
         data = request.json
 
         result = settings_service.update_account_mapping(
-            mapping_id=mapping_id,
-            friendly_name=data.get('friendly_name')
+            mapping_id=mapping_id, friendly_name=data.get("friendly_name")
         )
 
         return jsonify(result)
 
     except ValueError as e:
-        status = 404 if 'not found' in str(e).lower() else 400
-        return jsonify({'error': str(e)}), status
+        status = 404 if "not found" in str(e).lower() else 400
+        return jsonify({"error": str(e)}), status
     except Exception as e:
         print(f"❌ Update account mapping error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@settings_bp.route('/account-mappings/<int:mapping_id>', methods=['DELETE'])
+@settings_bp.route("/account-mappings/<int:mapping_id>", methods=["DELETE"])
 def delete_mapping(mapping_id):
     """
     Delete an account mapping.
@@ -131,18 +133,19 @@ def delete_mapping(mapping_id):
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Delete account mapping error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Account Discovery
 # ============================================================================
 
-@settings_bp.route('/account-mappings/discover', methods=['GET'])
+
+@settings_bp.route("/account-mappings/discover", methods=["GET"])
 def discover():
     """
     Scan TrueLayer transactions for unmapped account patterns.
@@ -164,4 +167,4 @@ def discover():
     except Exception as e:
         print(f"❌ Discover account mappings error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500

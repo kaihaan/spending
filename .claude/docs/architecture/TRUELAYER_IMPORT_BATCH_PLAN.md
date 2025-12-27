@@ -1153,4 +1153,3 @@ Before starting implementation, confirm:
 6. **Rate Limits:** Are you hitting TrueLayer rate limits? What's your usage pattern?
 7. **Enrichment:** Should enrichment auto-run or require user confirmation?
 8. **Monitoring:** Do you have DataDog/NewRelic already? What's preferred?
-

@@ -4,14 +4,15 @@ Handles environment variables, validation, and provider configuration
 """
 
 import os
-from enum import Enum
-from typing import Optional, Dict, Any
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from typing import Any
 
 # Try to load from .env file if available
 try:
     from dotenv import load_dotenv
+
     # Load from .env in the backend directory
     env_path = Path(__file__).parent.parent / ".env"
     if env_path.exists():
@@ -23,6 +24,7 @@ except ImportError:
 
 class LLMProvider(str, Enum):
     """Supported LLM providers"""
+
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     GOOGLE = "google"
@@ -32,6 +34,7 @@ class LLMProvider(str, Enum):
 
 class LLMModel(str, Enum):
     """Supported LLM models by provider"""
+
     # Anthropic
     CLAUDE_OPUS = "claude-3-5-opus-20241022"
     CLAUDE_SONNET = "claude-3-5-sonnet-20241022"
@@ -61,18 +64,21 @@ class LLMModel(str, Enum):
 @dataclass
 class LLMConfig:
     """LLM Configuration object"""
+
     provider: LLMProvider
     model: str
     api_key: str
-    api_base_url: Optional[str] = None
+    api_base_url: str | None = None
     timeout: int = 30
     max_retries: int = 3
     batch_size_initial: int = 10
-    batch_size_override: Optional[int] = None  # Override provider-specific batch size
+    batch_size_override: int | None = None  # Override provider-specific batch size
     cache_enabled: bool = True
     debug: bool = False
-    ollama_cost_per_token: Optional[float] = None  # Cost per token for local Ollama models
-    anthropic_admin_api_key: Optional[str] = None  # Anthropic Admin API key for billing/usage data
+    ollama_cost_per_token: float | None = None  # Cost per token for local Ollama models
+    anthropic_admin_api_key: str | None = (
+        None  # Anthropic Admin API key for billing/usage data
+    )
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -107,21 +113,28 @@ class LLMConfig:
                 raise ValueError(f"Invalid Google model: {self.model}")
 
         elif self.provider == LLMProvider.DEEPSEEK:
-            if not ("deepseek" in self.model.lower()):
+            if "deepseek" not in self.model.lower():
                 raise ValueError(f"Invalid Deepseek model: {self.model}")
 
         elif self.provider == LLMProvider.OLLAMA:
             # Ollama models are flexible, just ensure model name is provided
             # Common formats: "mistral:7b", "llama2:7b", etc.
             if not self.model or ":" not in self.model:
-                raise ValueError(f"Invalid Ollama model format: {self.model} (expected format: 'model:tag' like 'mistral:7b')")
+                raise ValueError(
+                    f"Invalid Ollama model format: {self.model} (expected format: 'model:tag' like 'mistral:7b')"
+                )
 
             # Validate cost per token if provided
-            if self.ollama_cost_per_token is not None and self.ollama_cost_per_token < 0:
-                raise ValueError(f"Ollama cost per token must be non-negative: {self.ollama_cost_per_token}")
+            if (
+                self.ollama_cost_per_token is not None
+                and self.ollama_cost_per_token < 0
+            ):
+                raise ValueError(
+                    f"Ollama cost per token must be non-negative: {self.ollama_cost_per_token}"
+                )
 
 
-def load_llm_config() -> Optional[LLMConfig]:
+def load_llm_config() -> LLMConfig | None:
     """
     Load LLM configuration from environment variables.
 
@@ -144,6 +157,7 @@ def load_llm_config() -> Optional[LLMConfig]:
     # Reload .env file to pick up any changes
     try:
         from dotenv import load_dotenv
+
         env_path = Path(__file__).parent.parent / ".env"
         if env_path.exists():
             load_dotenv(env_path, override=True)
@@ -242,7 +256,7 @@ def load_llm_config() -> Optional[LLMConfig]:
     return config
 
 
-def get_provider_info(provider: LLMProvider) -> Dict[str, Any]:
+def get_provider_info(provider: LLMProvider) -> dict[str, Any]:
     """Get provider-specific information like rate limits, costs, etc."""
 
     provider_info = {
@@ -294,8 +308,13 @@ def get_provider_info(provider: LLMProvider) -> Dict[str, Any]:
             "cost_per_1k_output_tokens": 0.000009,
             "recommended_batch_size": 5,
             "max_batch_size": 50,
-            "supported_models": ["mistral:7b", "llama2:7b", "llama2:13b", "neural-chat:7b"],
-            "info": "Local models via Ollama - no API key required, free inference"
+            "supported_models": [
+                "mistral:7b",
+                "llama2:7b",
+                "llama2:13b",
+                "neural-chat:7b",
+            ],
+            "info": "Local models via Ollama - no API key required, free inference",
         },
     }
 

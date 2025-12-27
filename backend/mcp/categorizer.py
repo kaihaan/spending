@@ -3,9 +3,8 @@ Categorizer MCP Component
 Auto-categorizes transactions using rule-based keyword matching.
 """
 
-import re
-import sys
 import os
+import sys
 
 # Add parent directory to path to import database module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,49 +12,141 @@ import database_postgres as database
 
 # Default category rules: category -> list of keywords
 DEFAULT_CATEGORY_RULES = {
-    'Groceries': [
-        'tesco', 'sainsbury', 'asda', 'morrisons', 'aldi', 'lidl',
-        'waitrose', 'marks & spencer', 'm&s', 'co-op', 'iceland',
-        'ocado', 'whole foods'
+    "Groceries": [
+        "tesco",
+        "sainsbury",
+        "asda",
+        "morrisons",
+        "aldi",
+        "lidl",
+        "waitrose",
+        "marks & spencer",
+        "m&s",
+        "co-op",
+        "iceland",
+        "ocado",
+        "whole foods",
     ],
-    'Transport': [
-        'tfl', 'transport for london', 'uber', 'trainline', 'national rail',
-        'shell', 'bp', 'esso', 'petrol', 'fuel', 'parking', 'lime',
-        'bolt', 'gett', 'addison lee'
+    "Transport": [
+        "tfl",
+        "transport for london",
+        "uber",
+        "trainline",
+        "national rail",
+        "shell",
+        "bp",
+        "esso",
+        "petrol",
+        "fuel",
+        "parking",
+        "lime",
+        "bolt",
+        "gett",
+        "addison lee",
     ],
-    'Dining': [
-        'restaurant', 'cafe', 'coffee', 'pizza', 'mcdonalds', 'kfc',
-        'nando', 'nandos', 'wagamama', 'pret', 'starbucks', 'costa',
-        'nero', 'greggs', 'subway', 'burger', 'dominos', 'pizza hut',
-        'pizza express', 'gourmet burger', 'five guys', 'gails',
-        'food & mood', 'hill food', 'dishoom', 'honest burger'
+    "Dining": [
+        "restaurant",
+        "cafe",
+        "coffee",
+        "pizza",
+        "mcdonalds",
+        "kfc",
+        "nando",
+        "nandos",
+        "wagamama",
+        "pret",
+        "starbucks",
+        "costa",
+        "nero",
+        "greggs",
+        "subway",
+        "burger",
+        "dominos",
+        "pizza hut",
+        "pizza express",
+        "gourmet burger",
+        "five guys",
+        "gails",
+        "food & mood",
+        "hill food",
+        "dishoom",
+        "honest burger",
     ],
-    'Entertainment': [
-        'cinema', 'spotify', 'netflix', 'amazon prime', 'apple music',
-        'disney', 'youtube', 'xbox', 'playstation', 'steam',
-        'odeon', 'vue', 'cineworld', 'theatre', 'concert', 'subscription'
+    "Entertainment": [
+        "cinema",
+        "spotify",
+        "netflix",
+        "amazon prime",
+        "apple music",
+        "disney",
+        "youtube",
+        "xbox",
+        "playstation",
+        "steam",
+        "odeon",
+        "vue",
+        "cineworld",
+        "theatre",
+        "concert",
+        "subscription",
     ],
-    'Utilities': [
-        'thames water', 'british gas', 'edf', 'eon', 'octopus energy',
-        'vodafone', 'ee', 'o2', 'three', 'bt', 'sky', 'virgin media',
-        'council tax', 'water', 'electricity', 'gas'
+    "Utilities": [
+        "thames water",
+        "british gas",
+        "edf",
+        "eon",
+        "octopus energy",
+        "vodafone",
+        "ee",
+        "o2",
+        "three",
+        "bt",
+        "sky",
+        "virgin media",
+        "council tax",
+        "water",
+        "electricity",
+        "gas",
     ],
-    'Shopping': [
-        'amazon', 'amzn', 'ebay', 'argos', 'john lewis', 'zara', 'h&m',
-        'next', 'primark', 'uniqlo', 'asos', 'boots', 'superdrug',
-        'wilko', 'tk maxx', 'debenhams', 'jeanstore'
+    "Shopping": [
+        "amazon",
+        "amzn",
+        "ebay",
+        "argos",
+        "john lewis",
+        "zara",
+        "h&m",
+        "next",
+        "primark",
+        "uniqlo",
+        "asos",
+        "boots",
+        "superdrug",
+        "wilko",
+        "tk maxx",
+        "debenhams",
+        "jeanstore",
     ],
-    'Health': [
-        'pharmacy', 'doctor', 'dentist', 'hospital', 'gym', 'fitness',
-        'boots pharmacy', 'lloyds pharmacy', 'pure gym', 'david lloyd'
+    "Health": [
+        "pharmacy",
+        "doctor",
+        "dentist",
+        "hospital",
+        "gym",
+        "fitness",
+        "boots pharmacy",
+        "lloyds pharmacy",
+        "pure gym",
+        "david lloyd",
     ],
-    'Income': [
-        'salary', 'transfer from', 'payment from', 'refund'
-    ],
+    "Income": ["salary", "transfer from", "payment from", "refund"],
 }
 
 # Reverse lookup for faster matching - will be populated dynamically
 KEYWORD_TO_CATEGORY = {}
+
+# Global category rules dictionary (merged from defaults and database)
+CATEGORY_RULES = {}
 
 
 def load_rules_from_db():
@@ -91,10 +182,11 @@ def rebuild_keyword_lookup():
     """
     Rebuild the KEYWORD_TO_CATEGORY lookup dictionary with current rules.
     """
-    global KEYWORD_TO_CATEGORY
+    global KEYWORD_TO_CATEGORY, CATEGORY_RULES
     KEYWORD_TO_CATEGORY = {}
 
     rules = load_rules_from_db()
+    CATEGORY_RULES = rules  # Update global CATEGORY_RULES
     for category, keywords in rules.items():
         for keyword in keywords:
             KEYWORD_TO_CATEGORY[keyword.lower()] = category
@@ -123,9 +215,9 @@ def categorize_transaction(description, merchant=None, amount=0.0):
     if amount > 0:
         # Check if it's a transfer/income keyword
         rules = load_rules_from_db()
-        for keyword in rules.get('Income', []):
+        for keyword in rules.get("Income", []):
             if keyword in search_text:
-                return 'Income'
+                return "Income"
 
     # Check each keyword
     for keyword, category in KEYWORD_TO_CATEGORY.items():
@@ -133,7 +225,7 @@ def categorize_transaction(description, merchant=None, amount=0.0):
             return category
 
     # Default category
-    return 'Other'
+    return "Other"
 
 
 def categorize_transactions(transactions):
@@ -148,11 +240,11 @@ def categorize_transactions(transactions):
     """
     for txn in transactions:
         # Only categorize if not already categorized or if category is 'Other'
-        if not txn.get('category') or txn.get('category') == 'Other':
-            txn['category'] = categorize_transaction(
-                description=txn.get('description', ''),
-                merchant=txn.get('merchant', ''),
-                amount=txn.get('amount', 0.0)
+        if not txn.get("category") or txn.get("category") == "Other":
+            txn["category"] = categorize_transaction(
+                description=txn.get("description", ""),
+                merchant=txn.get("merchant", ""),
+                amount=txn.get("amount", 0.0),
             )
 
     return transactions
@@ -205,24 +297,19 @@ def get_category_stats(transactions):
     stats = {}
 
     for txn in transactions:
-        category = txn.get('category', 'Other')
-        amount = txn.get('amount', 0.0)
+        category = txn.get("category", "Other")
+        amount = txn.get("amount", 0.0)
 
         if category not in stats:
-            stats[category] = {
-                'count': 0,
-                'total': 0.0,
-                'expenses': 0.0,
-                'income': 0.0
-            }
+            stats[category] = {"count": 0, "total": 0.0, "expenses": 0.0, "income": 0.0}
 
-        stats[category]['count'] += 1
-        stats[category]['total'] += amount
+        stats[category]["count"] += 1
+        stats[category]["total"] += amount
 
         if amount < 0:
-            stats[category]['expenses'] += abs(amount)
+            stats[category]["expenses"] += abs(amount)
         else:
-            stats[category]['income'] += amount
+            stats[category]["income"] += amount
 
     return stats
 
@@ -250,7 +337,7 @@ def preview_recategorization(transactions, filters=None):
         }
     """
     if filters is None:
-        filters = {'only_other': True}
+        filters = {"only_other": True}
 
     changes = []
 
@@ -258,33 +345,35 @@ def preview_recategorization(transactions, filters=None):
     rebuild_keyword_lookup()
 
     for txn in transactions:
-        current_category = txn.get('category', 'Other')
-        txn_id = txn.get('id')
+        current_category = txn.get("category", "Other")
+        txn_id = txn.get("id")
 
         # Apply filters
-        if filters.get('only_other') and current_category != 'Other':
+        if filters.get("only_other") and current_category != "Other":
             continue
 
-        if filters.get('categories') and current_category not in filters['categories']:
+        if filters.get("categories") and current_category not in filters["categories"]:
             continue
 
         # Get new category
         new_category = categorize_transaction(
-            description=txn.get('description', ''),
-            merchant=txn.get('merchant', ''),
-            amount=txn.get('amount', 0.0)
+            description=txn.get("description", ""),
+            merchant=txn.get("merchant", ""),
+            amount=txn.get("amount", 0.0),
         )
 
         # Only include if category would change
         if new_category != current_category:
-            changes.append({
-                'id': txn_id,
-                'description': txn.get('description', ''),
-                'merchant': txn.get('merchant', ''),
-                'current_category': current_category,
-                'new_category': new_category,
-                'amount': txn.get('amount', 0.0),
-                'date': txn.get('date', '')
-            })
+            changes.append(
+                {
+                    "id": txn_id,
+                    "description": txn.get("description", ""),
+                    "merchant": txn.get("merchant", ""),
+                    "current_category": current_category,
+                    "new_category": new_category,
+                    "amount": txn.get("amount", 0.0),
+                    "date": txn.get("date", ""),
+                }
+            )
 
     return changes

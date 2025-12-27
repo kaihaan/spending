@@ -14,18 +14,21 @@ in bulk and should be used with caution.
 Routes are thin controllers that delegate to migrations_service for business logic.
 """
 
-from flask import Blueprint, jsonify
-from services import migrations_service
 import traceback
 
-migrations_bp = Blueprint('migrations', __name__, url_prefix='/api/migrations')
+from flask import Blueprint, jsonify
+
+from services import migrations_service
+
+migrations_bp = Blueprint("migrations", __name__, url_prefix="/api/migrations")
 
 
 # ============================================================================
 # Merchant Name Cleanups
 # ============================================================================
 
-@migrations_bp.route('/fix-card-payment-merchants', methods=['POST'])
+
+@migrations_bp.route("/fix-card-payment-merchants", methods=["POST"])
 def fix_card_payment_merchants():
     """
     Extract real merchant names from card payment transactions.
@@ -61,14 +64,15 @@ def fix_card_payment_merchants():
     except Exception as e:
         print(f"❌ Fix card payment merchants error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Schema Migrations
 # ============================================================================
 
-@migrations_bp.route('/add-huququllah-column', methods=['POST'])
+
+@migrations_bp.route("/add-huququllah-column", methods=["POST"])
 def migrate_huququllah_column():
     """
     Migration endpoint to add huququllah_classification column.
@@ -101,23 +105,28 @@ def migrate_huququllah_column():
     try:
         was_added = migrations_service.migrate_add_huququllah_column()
 
-        return jsonify({
-            'success': True,
-            'column_added': was_added,
-            'message': 'Migration completed successfully' if was_added else 'Column already exists'
-        })
+        return jsonify(
+            {
+                "success": True,
+                "column_added": was_added,
+                "message": "Migration completed successfully"
+                if was_added
+                else "Column already exists",
+            }
+        )
 
     except Exception as e:
         print(f"❌ Huququllah column migration error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Account Mapping Reapplication
 # ============================================================================
 
-@migrations_bp.route('/reapply-account-mappings', methods=['POST'])
+
+@migrations_bp.route("/reapply-account-mappings", methods=["POST"])
 def reapply_account_mappings():
     """
     Apply all account mappings to existing TrueLayer transactions.
@@ -165,4 +174,4 @@ def reapply_account_mappings():
     except Exception as e:
         print(f"❌ Reapply account mappings error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500

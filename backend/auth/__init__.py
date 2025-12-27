@@ -4,16 +4,15 @@ Flask-Login authentication configuration
 Configures session management, user loading, and authentication boundaries.
 """
 
-from flask_login import LoginManager, login_required, current_user
+from flask_login import LoginManager, current_user, login_required
 from models.user import User
-
 
 # Initialize Flask-Login manager
 login_manager = LoginManager()
-login_manager.login_view = 'auth.login'  # Redirect to login page if not authenticated
-login_manager.session_protection = 'strong'  # Protect against session hijacking
-login_manager.login_message = 'Please log in to access this page.'
-login_manager.login_message_category = 'info'
+login_manager.login_view = "auth.login"  # Redirect to login page if not authenticated
+login_manager.session_protection = "strong"  # Protect against session hijacking
+login_manager.login_message = "Please log in to access this page."
+login_manager.login_message_category = "info"
 
 
 @login_manager.user_loader
@@ -46,10 +45,13 @@ def unauthorized():
         JSON error response with 401 status
     """
     from flask import jsonify
-    return jsonify({
-        'error': 'Authentication required',
-        'message': 'Please log in to access this resource'
-    }), 401
+
+    return jsonify(
+        {
+            "error": "Authentication required",
+            "message": "Please log in to access this resource",
+        }
+    ), 401
 
 
 def init_app(app):
@@ -62,9 +64,4 @@ def init_app(app):
 
 
 # Export commonly used decorators and objects
-__all__ = [
-    'login_manager',
-    'login_required',
-    'current_user',
-    'init_app'
-]
+__all__ = ["login_manager", "login_required", "current_user", "init_app"]

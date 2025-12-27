@@ -1,7 +1,7 @@
 Brief:
-This brief is for UX/UI redesign for the True Layer Linked Accounts component in the Bank tab in settings. 
+This brief is for UX/UI redesign for the True Layer Linked Accounts component in the Bank tab in settings.
 
-UI scope: 
+UI scope:
 - Page: Settings
 - Tab: Bank
 - Component: Bank Integration
@@ -11,7 +11,7 @@ UI design Principles:
 - maxmise free space on the page, making it easy for users to identify key information they should be aware of and action buttons they can use
 
 New layout:
-This should be a table with nested rows of linked accounts, where rows expand to show  further detail as needed. 
+This should be a table with nested rows of linked accounts, where rows expand to show  further detail as needed.
 
 Component:
 - Title: "Linked Accounts"

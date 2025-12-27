@@ -15,12 +15,18 @@ data with detailed line items, merchant info, and accurate categorization.
 Separates business logic from HTTP routing concerns.
 """
 
-from database import matching as db_matching
-
+from database import (
+    cleanup_stale_matching_jobs,
+    get_matching_job,
+)
+from database import (
+    matching as db_matching,
+)
 
 # ============================================================================
 # Matching Job Operations
 # ============================================================================
+
 
 def get_job_status(job_id: int) -> dict:
     """
@@ -35,10 +41,10 @@ def get_job_status(job_id: int) -> dict:
     Raises:
         ValueError: If job not found
     """
-    job = db_matching.get_matching_job(job_id)
+    job = get_matching_job(job_id)
 
     if not job:
-        raise ValueError('Job not found')
+        raise ValueError("Job not found")
 
     return job
 
@@ -56,18 +62,19 @@ def cleanup_stale_jobs(threshold_minutes: int = 30) -> dict:
     Returns:
         Dict with cleaned_up count and job_ids list
     """
-    result = db_matching.cleanup_stale_matching_jobs(stale_threshold_minutes=threshold_minutes)
+    result = cleanup_stale_matching_jobs(stale_threshold_minutes=threshold_minutes)
 
     return {
-        'success': True,
-        'cleaned_up': result['cleaned_up'],
-        'job_ids': result['job_ids']
+        "success": True,
+        "cleaned_up": result["cleaned_up"],
+        "job_ids": result["job_ids"],
     }
 
 
 # ============================================================================
 # Source Coverage & Staleness Detection
 # ============================================================================
+
 
 def get_coverage(user_id: int = 1) -> dict:
     """
@@ -96,7 +103,10 @@ def get_coverage(user_id: int = 1) -> dict:
 # Unified Matching
 # ============================================================================
 
-def run_unified_matching(user_id: int = 1, sources: list = None, sync_first: bool = False) -> dict:
+
+def run_unified_matching(
+    user_id: int = 1, sources: list = None, sync_first: bool = False
+) -> dict:
     """
     Run unified matching across all sources in parallel.
 
@@ -115,19 +125,18 @@ def run_unified_matching(user_id: int = 1, sources: list = None, sync_first: boo
         ImportError: If unified matching task not implemented
     """
     if sources is None:
-        sources = ['amazon', 'apple', 'gmail']
+        sources = ["amazon", "apple", "gmail"]
 
     # Check source coverage first
     coverage = db_matching.get_source_coverage_dates(user_id)
     stale_warning = None
-    if coverage.get('stale_sources'):
+    if coverage.get("stale_sources"):
         stale_warning = {
-            'stale_sources': coverage['stale_sources'],
-            'bank_max_date': coverage['bank_transactions']['max_date'],
-            'sources': {
-                source: coverage[source]
-                for source in coverage['stale_sources']
-            }
+            "stale_sources": coverage["stale_sources"],
+            "bank_max_date": coverage["bank_transactions"]["max_date"],
+            "sources": {
+                source: coverage[source] for source in coverage["stale_sources"]
+            },
         }
 
     # Import and launch Celery task
@@ -137,16 +146,16 @@ def run_unified_matching(user_id: int = 1, sources: list = None, sync_first: boo
         task = unified_matching_task.delay(user_id, sources, sync_first)
 
         return {
-            'job_id': task.id,
-            'status': 'running',
-            'sources': sources,
-            'sync_sources_first': sync_first,
-            'source_coverage_warning': stale_warning
+            "job_id": task.id,
+            "status": "running",
+            "sources": sources,
+            "sync_sources_first": sync_first,
+            "source_coverage_warning": stale_warning,
         }
 
-    except ImportError as e:
+    except ImportError:
         # Fallback if Celery task not yet implemented
         raise ImportError(
-            'Unified matching task not yet implemented. '
-            'Run individual matchers via /api/amazon/match, /api/apple/match, /api/gmail/match'
+            "Unified matching task not yet implemented. "
+            "Run individual matchers via /api/amazon/match, /api/apple/match, /api/gmail/match"
         )

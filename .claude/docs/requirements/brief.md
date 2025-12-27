@@ -4,16 +4,16 @@ The diagrams are optimized for readability in GitHub, GitLab, and MkDocs rendere
 ---
 
 ````markdown
-# Personal Finance Analysis Service  
+# Personal Finance Analysis Service
 _A privacy-first local finance insight tool powered by Claude and MCP_
 
 ---
 
 ## 1. Project Overview
 
-This project builds a **local personal finance analysis service** that helps users understand their spending habits from **Santander Excel statements**.  
+This project builds a **local personal finance analysis service** that helps users understand their spending habits from **Santander Excel statements**.
 
-Users place monthly `.xlsx` statement files in a designated local folder.  
+Users place monthly `.xlsx` statement files in a designated local folder.
 The system:
 - Parses the Santander-specific structure
 - Categorizes spending by type (e.g., groceries, transport)
@@ -24,10 +24,10 @@ The system:
 
 ## 2. Objectives
 
-- Provide **clear insights** into personal spending trends  
-- Enable **local, privacy-preserving** financial analysis  
-- Use **AI-assisted classification** to improve accuracy  
-- Offer a **modern, responsive web dashboard**  
+- Provide **clear insights** into personal spending trends
+- Enable **local, privacy-preserving** financial analysis
+- Use **AI-assisted classification** to improve accuracy
+- Offer a **modern, responsive web dashboard**
 
 ---
 

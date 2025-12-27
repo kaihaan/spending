@@ -4,10 +4,16 @@ Uses GPT models via OpenAI API
 """
 
 import time
-from typing import List, Dict, Optional
-from openai import OpenAI, APIError
 
-from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats, AccountInfo, LLMResponse
+from openai import APIError, OpenAI
+
+from .base_provider import (
+    AccountInfo,
+    BaseLLMProvider,
+    LLMResponse,
+    ProviderStats,
+    TransactionEnrichment,
+)
 
 
 class OpenAIProvider(BaseLLMProvider):
@@ -19,7 +25,7 @@ class OpenAIProvider(BaseLLMProvider):
         model: str = "gpt-4-turbo",
         timeout: int = 30,
         debug: bool = False,
-        api_base_url: Optional[str] = None
+        api_base_url: str | None = None,
     ):
         """
         Initialize OpenAI provider.
@@ -47,10 +53,8 @@ class OpenAIProvider(BaseLLMProvider):
             response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=10,
-                messages=[
-                    {"role": "user", "content": "Say 'OK'"}
-                ],
-                timeout=self.timeout
+                messages=[{"role": "user", "content": "Say 'OK'"}],
+                timeout=self.timeout,
             )
             return bool(response)
         except APIError as e:
@@ -59,10 +63,8 @@ class OpenAIProvider(BaseLLMProvider):
             return False
 
     def enrich_transactions(
-        self,
-        transactions: List[Dict[str, str]],
-        direction: str = "out"
-    ) -> tuple[List[TransactionEnrichment], ProviderStats]:
+        self, transactions: list[dict[str, str]], direction: str = "out"
+    ) -> tuple[list[TransactionEnrichment], ProviderStats]:
         """
         Enrich transactions using GPT.
 
@@ -80,7 +82,7 @@ class OpenAIProvider(BaseLLMProvider):
                 response_time_ms=0,
                 batch_size=0,
                 success_count=0,
-                failure_count=0
+                failure_count=0,
             )
 
         system_prompt = self._build_system_prompt()
@@ -95,9 +97,9 @@ class OpenAIProvider(BaseLLMProvider):
                 temperature=0.3,  # Lower temperature for more consistent results
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ],
-                timeout=self.timeout
+                timeout=self.timeout,
             )
 
             response_time_ms = (time.time() - start_time) * 1000
@@ -111,7 +113,9 @@ class OpenAIProvider(BaseLLMProvider):
             response_text = response.choices[0].message.content
 
             # Parse enrichments
-            enrichments = self._parse_enrichment_response(response_text, len(transactions))
+            enrichments = self._parse_enrichment_response(
+                response_text, len(transactions)
+            )
 
             # Calculate cost
             cost = self.calculate_cost(input_tokens, output_tokens)
@@ -122,7 +126,7 @@ class OpenAIProvider(BaseLLMProvider):
                 response_time_ms=response_time_ms,
                 batch_size=len(transactions),
                 success_count=len(enrichments),
-                failure_count=len(transactions) - len(enrichments)
+                failure_count=len(transactions) - len(enrichments),
             )
 
             return enrichments, stats
@@ -167,7 +171,9 @@ class OpenAIProvider(BaseLLMProvider):
                 break
 
         # Calculate total cost
-        total_cost = (tokens_in / 1000) * input_cost_per_1k + (tokens_out / 1000) * output_cost_per_1k
+        total_cost = (tokens_in / 1000) * input_cost_per_1k + (
+            tokens_out / 1000
+        ) * output_cost_per_1k
 
         return round(total_cost, 6)
 
@@ -185,7 +191,7 @@ class OpenAIProvider(BaseLLMProvider):
             provider="openai",
             available=False,
             error="OpenAI does not provide a public API for account balance/usage information. "
-                  "Check your account at platform.openai.com for billing details."
+            "Check your account at platform.openai.com for billing details.",
         )
 
     def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
@@ -210,7 +216,7 @@ class OpenAIProvider(BaseLLMProvider):
                 max_tokens=4096,
                 temperature=0.3,
                 messages=messages,
-                timeout=self.timeout
+                timeout=self.timeout,
             )
 
             # Extract usage information
@@ -229,7 +235,7 @@ class OpenAIProvider(BaseLLMProvider):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                cost=cost
+                cost=cost,
             )
 
         except Exception as e:

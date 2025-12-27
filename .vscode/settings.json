@@ -1,0 +1,42 @@
+{
+  // Python settings for VSCode
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/venv/bin/python",
+
+  // Ruff linting
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "explicit",
+      "source.organizeImports": "explicit"
+    }
+  },
+
+  // Ruff extension settings
+  "ruff.lint.enable": true,
+  "ruff.format.enable": true,
+  "ruff.organizeImports": true,
+  "ruff.fixAll": true,
+  "ruff.importStrategy": "fromEnvironment",
+
+  // Pyright type checking
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.diagnosticMode": "workspace",
+
+  // File associations
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/node_modules": true
+  },
+
+  // Auto-save
+  "files.autoSave": "onFocusChange",
+
+  // Terminal
+  "terminal.integrated.env.linux": {
+    "PYTHONPATH": "${workspaceFolder}/backend"
+  }
+}

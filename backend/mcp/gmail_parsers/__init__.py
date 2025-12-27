@@ -23,25 +23,26 @@ Usage:
 """
 
 # Import registry and utilities from base
-from .base import VENDOR_PARSERS, get_vendor_parser, parse_amount, parse_date_text
-
 # Import all domain modules to trigger @register_vendor decorators
 # This registers all parsers into the VENDOR_PARSERS dict
-from . import amazon
-from . import apple
-from . import financial
-from . import rides
-from . import food_delivery
-from . import ecommerce
-from . import retail
-from . import digital_services
-from . import travel
-from . import specialty
+from . import (
+    amazon,
+    apple,
+    digital_services,
+    ecommerce,
+    financial,
+    food_delivery,
+    retail,
+    rides,
+    specialty,
+    travel,
+)
+from .base import VENDOR_PARSERS, get_vendor_parser, parse_amount, parse_date_text
 
 # Export the registry and lookup function
 __all__ = [
-    'VENDOR_PARSERS',
-    'get_vendor_parser',
-    'parse_amount',
-    'parse_date_text',
+    "VENDOR_PARSERS",
+    "get_vendor_parser",
+    "parse_amount",
+    "parse_date_text",
 ]

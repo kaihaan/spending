@@ -602,4 +602,3 @@ Transactions stored in DB
 - [ ] Concurrent operations (2 users syncing simultaneously)
 - [ ] Large transaction sets (1000+ txns)
 - [ ] Timezone handling (UTC consistency)
-

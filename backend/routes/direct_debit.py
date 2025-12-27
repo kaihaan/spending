@@ -15,18 +15,21 @@ merchant names and consistent categorization.
 Routes are thin controllers that delegate to direct_debit_service for business logic.
 """
 
-from flask import Blueprint, request, jsonify
-from services import direct_debit_service
 import traceback
 
-direct_debit_bp = Blueprint('direct_debit', __name__, url_prefix='/api/direct-debit')
+from flask import Blueprint, jsonify, request
+
+from services import direct_debit_service
+
+direct_debit_bp = Blueprint("direct_debit", __name__, url_prefix="/api/direct-debit")
 
 
 # ============================================================================
 # Direct Debit Operations
 # ============================================================================
 
-@direct_debit_bp.route('/payees', methods=['GET'])
+
+@direct_debit_bp.route("/payees", methods=["GET"])
 def get_payees():
     """
     Get unique direct debit payees from transactions.
@@ -43,10 +46,10 @@ def get_payees():
     except Exception as e:
         print(f"❌ Direct debit payees error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@direct_debit_bp.route('/mappings', methods=['GET'])
+@direct_debit_bp.route("/mappings", methods=["GET"])
 def get_mappings():
     """
     Get all configured direct debit mappings.
@@ -61,10 +64,10 @@ def get_mappings():
     except Exception as e:
         print(f"❌ Direct debit mappings error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@direct_debit_bp.route('/mappings', methods=['POST'])
+@direct_debit_bp.route("/mappings", methods=["POST"])
 def save_mapping():
     """
     Create or update a direct debit mapping.
@@ -92,27 +95,27 @@ def save_mapping():
         data = request.json
 
         if not data:
-            return jsonify({'error': 'Missing request body'}), 400
+            return jsonify({"error": "Missing request body"}), 400
 
         result = direct_debit_service.save_mapping(
-            payee_pattern=data.get('payee_pattern'),
-            normalized_name=data.get('normalized_name'),
-            category=data.get('category'),
-            subcategory=data.get('subcategory'),
-            merchant_type=data.get('merchant_type')
+            payee_pattern=data.get("payee_pattern"),
+            normalized_name=data.get("normalized_name"),
+            category=data.get("category"),
+            subcategory=data.get("subcategory"),
+            merchant_type=data.get("merchant_type"),
         )
 
         return jsonify(result), 201
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Save direct debit mapping error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@direct_debit_bp.route('/mappings/<int:mapping_id>', methods=['DELETE'])
+@direct_debit_bp.route("/mappings/<int:mapping_id>", methods=["DELETE"])
 def delete_mapping(mapping_id):
     """
     Delete a direct debit mapping.
@@ -128,14 +131,14 @@ def delete_mapping(mapping_id):
         return jsonify(result)
 
     except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         print(f"❌ Delete direct debit mapping error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@direct_debit_bp.route('/apply-mappings', methods=['POST'])
+@direct_debit_bp.route("/apply-mappings", methods=["POST"])
 def apply_mappings():
     """
     Apply all direct debit mappings to transactions.
@@ -153,10 +156,10 @@ def apply_mappings():
     except Exception as e:
         print(f"❌ Apply direct debit mappings error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@direct_debit_bp.route('/new', methods=['GET'])
+@direct_debit_bp.route("/new", methods=["GET"])
 def get_new():
     """
     Get newly detected direct debit payees that haven't been mapped.
@@ -173,4 +176,4 @@ def get_new():
     except Exception as e:
         print(f"❌ Detect new direct debits error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500

@@ -74,6 +74,122 @@ Anthropic (Claude), OpenAI, Google (Gemini), DeepSeek, Ollama (local)
 | `llm_enricher` | Transaction metadata enrichment |
 | `merchant_normalizer` | Merchant name normalisation |
 
+---
+
+### Spending App MCP Server
+
+**CRITICAL: MCP server enables AI-assisted operations**
+- Exposes **32 tools** for autonomous spending app operations
+- Connected automatically in Claude Code CLI (via `.mcp.json`)
+- Standalone Python process communicating via stdio (MCP protocol)
+- Acts as bridge between Claude and Flask backend API
+
+**Architecture:**
+```
+Claude Code/Desktop
+       ↓ (MCP Protocol via stdio)
+MCP Server (Python)
+       ↓ (HTTP requests)
+Flask Backend (http://localhost:5000)
+```
+
+**MCP Tools vs Resources:**
+- This server exposes **tools** (executable operations), NOT resources
+- Empty resources list is expected and normal
+- Tools allow Claude to perform operations like sync, match, enrich
+- 90% of operations work with no parameters (smart defaults)
+
+**Available Tools (32 total across 8 categories):**
+
+| Category | Tools | Purpose |
+|----------|-------|---------|
+| **High-Level Workflows (5)** | `sync_all_sources`, `run_full_pipeline`, `run_pre_enrichment`, `check_sync_status`, `get_source_coverage` | Complete workflows for common operations |
+| **Sync Operations (6)** | `sync_bank_transactions`, `sync_gmail_receipts`, `poll_job_status`, etc. | Data source synchronization |
+| **Matching Operations (4)** | `match_amazon_orders`, `match_apple_purchases`, `match_gmail_receipts`, `run_unified_matching` | Link receipts to bank transactions |
+| **Enrichment (2)** | `enrich_transactions`, `get_enrichment_stats` | LLM categorization and stats |
+| **Analytics & Monitoring (5)** | `get_endpoint_health`, `get_system_analytics`, `get_error_logs`, etc. | Health checks and monitoring |
+| **Status (3)** | `get_connection_status`, `get_data_summary`, `get_recent_activity` | Status and activity tracking |
+| **Search & Query (4)** | `search_transactions`, `get_transaction_details`, `get_enrichment_details`, `search_enriched_transactions` | Query and analyze transaction data |
+| **Gmail Debugging (3)** | `debug_gmail_receipt`, `search_gmail_receipts`, `analyze_parsing_gaps` | Debug Gmail receipt parsing issues and identify data quality gaps |
+
+**Configuration:**
+- MCP config: `.mcp.json` (auto-loaded by Claude Code)
+- Server location: `backend/mcp_server/`
+- Entry point: `backend/mcp_server/server.py`
+- Launch script: `backend/mcp_server/run.sh`
+
+**Environment Variables:**
+```bash
+FLASK_API_URL=http://localhost:5000      # Flask backend URL (default)
+FLASK_API_TIMEOUT=30                      # Request timeout (seconds)
+DEFAULT_USER_ID=1                         # Default user ID
+DEFAULT_DATE_RANGE_DAYS=30                # Default sync range
+LOG_LEVEL=INFO                            # Logging level
+ENABLE_AUTO_RETRY=true                    # Enable automatic retries
+MAX_RETRY_ATTEMPTS=3                      # Max retry attempts
+```
+
+**Usage Examples:**
+```python
+# Ask Claude in natural language:
+"Sync all my data sources from the last month"
+"Check if any data sources are stale"
+"Run the full pipeline - sync, match, and enrich"
+"Get enrichment statistics"
+
+# Claude will use MCP tools internally:
+sync_all_sources()                        # No params needed
+run_full_pipeline()                       # Complete pipeline
+get_source_coverage()                     # Check staleness
+enrich_transactions(provider="anthropic") # Custom params
+```
+
+**Key Implementation Files:**
+- `backend/mcp_server/server.py` - Main MCP server with lifespan management
+- `backend/mcp_server/config.py` - Configuration and validation
+- `backend/mcp_server/client/flask_client.py` - HTTP client for Flask API
+- `backend/mcp_server/tools/` - Tool implementations by category:
+  - `workflows.py` - High-level workflows
+  - `sync.py` - Sync operations
+  - `matching.py` - Matching operations
+  - `enrichment.py` - Enrichment operations
+  - `analytics.py` - Analytics and monitoring
+  - `status.py` - Status checks
+  - `search.py` - Transaction search and query
+  - `gmail_debug.py` - Gmail receipt debugging and analysis
+
+**Health Check:**
+- MCP server checks Flask backend health on startup
+- If Flask not running: warning logged but server starts anyway
+- Verify health: `curl http://localhost:5000/api/health`
+
+**Development:**
+```bash
+# Run MCP server standalone (for testing)
+source backend/venv/bin/activate
+python3 -m backend.mcp_server.server
+
+# View MCP server logs (when running via Claude Code)
+# Logs go to stderr by default
+
+# Check MCP connection in Claude Code
+# User message: /mcp
+# Expected: "Reconnected to spending-app"
+```
+
+**Troubleshooting:**
+- **"Flask API health check failed"** → Ensure backend running: `docker-compose up -d backend`
+- **"Connection error"** → Check `FLASK_API_URL` points to `http://localhost:5000`
+- **"Job timeout"** → Check Celery workers: `docker logs -f spending-celery`
+- **Empty tools list** → Restart Claude Code to reload MCP configuration
+
+**Documentation:**
+- Full reference: `backend/mcp_server/README.md`
+- Tool catalog with examples and parameters
+- Workflow patterns and best practices
+
+---
+
 ### Gmail Integration Architecture
 
 **CRITICAL: Gmail sync runs in Celery background workers**
@@ -308,6 +424,33 @@ docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
    - External docs: https://docs.truelayer.com/reference/welcome-api-reference
    - Local specs: `.claude/docs/api/True Layer API/` ← **USE THESE FOR IMPLEMENTATION**
    - Architecture: `.claude/docs/architecture/TRUELAYER_INTEGRATION.md`
+
+   **Rate Limits:**
+   - **No hard numerical limits published** - TrueLayer uses flexible, case-by-case approach
+   - Monitors API call volume; will contact if usage becomes unreasonable
+   - Persistent high-volume accounts may face throttling/blocking
+   - **Provider-level rate limits:** EU banks limit unattended API requests (returns `429` error)
+
+   **Avoiding Rate Limits:**
+   - Include end-user's IP address in requests via `X-PSU-IP` header (for user-initiated requests)
+   - This signals attended access vs. unattended polling
+   - Our implementation: Currently **no** `X-PSU-IP` header (all requests treated as unattended)
+   - Our implementation: **No rate limit handling** in `truelayer_client.py` (unlike Amazon SP client)
+
+   **Error Responses:**
+   - HTTP 429: `provider_too_many_requests` - Provider rate limit exceeded
+   - HTTP 429: `unattended_calls_limit_exceeded` - TrueLayer limit for unattended calls
+   - No `Retry-After` header documented (unlike Amazon SP API)
+
+   **Best Practices for Implementation:**
+   - Add retry logic with exponential backoff for `429` errors (see `amazon_sp_client.py` lines 168-171)
+   - Consider adding `X-PSU-IP` header for user-triggered sync operations
+   - Implement parallel account sync carefully (see Gmail's `ThreadPoolExecutor` pattern)
+   - Monitor for `429` responses and adjust concurrency dynamically
+
+   **References:**
+   - [TrueLayer Rate Limits Support Article](https://support.truelayer.com/hc/en-us/articles/360003994498-What-rate-limits-apply-to-the-Data-API)
+   - Data API spec: `.claude/docs/api/True Layer API/Data API V1.json` (429 response definitions)
 
 4. **Context7 Documentation MCP Server**: Always use Context7 for code generation, setup/configuration steps, or library/API documentation. Use Context7 MCP tools to resolve library ID and get library docs automatically.
 

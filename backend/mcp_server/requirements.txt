@@ -1,0 +1,20 @@
+# MCP Server Dependencies
+# Model Context Protocol server for AI-assisted spending app operations
+
+# Core MCP SDK
+mcp>=0.9.0
+
+# HTTP client for Flask API communication
+requests>=2.31.0
+
+# Date/time utilities for smart defaults
+python-dateutil>=2.8.2
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.11.0
+
+# Type checking (development)
+mypy>=1.5.0
+types-requests>=2.31.0

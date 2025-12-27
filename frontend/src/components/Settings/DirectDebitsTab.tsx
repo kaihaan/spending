@@ -56,7 +56,7 @@ export default function DirectDebitsTab() {
   const fetchCategories = async () => {
     try {
       // Use categories/summary to get all categories including enrichment-created ones
-      const response = await axios.get<{ categories: Array<{ name: string; total_spend: number }> }>(
+      const response = await axios.get<{ categories: { name: string; total_spend: number }[] }>(
         `${API_URL}/categories/summary`
       );
       // Convert to Category format for the dropdown

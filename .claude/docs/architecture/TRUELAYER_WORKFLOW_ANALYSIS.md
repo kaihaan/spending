@@ -797,4 +797,3 @@ for idx, txn in enumerate(transactions):
 - `/mnt/c/dev/spending/backend/mcp/truelayer_sync.py` - Sync implementation
 - `/mnt/c/dev/spending/backend/mcp/llm_enricher.py` - Enrichment implementation
 - `/mnt/c/dev/spending/backend/app.py` - API endpoints (lines 1340-1854)
-

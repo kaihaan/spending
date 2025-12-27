@@ -1,8 +1,9 @@
 """Celery application configuration for asynchronous task processing."""
 
+import os
+
 from celery import Celery
 from celery.signals import worker_process_init
-import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -10,9 +11,9 @@ load_dotenv()
 
 # Initialize Celery
 celery_app = Celery(
-    'spending_tasks',
-    broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'),
-    backend=os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+    "spending_tasks",
+    broker=os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0"),
+    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0"),
 )
 
 
@@ -24,6 +25,7 @@ def init_worker_db_pool(**kwargs):
     Each worker process needs its own fresh connection pool.
     """
     import database_postgres
+
     # Close existing pool if any
     if database_postgres.connection_pool is not None:
         try:
@@ -35,12 +37,13 @@ def init_worker_db_pool(**kwargs):
     database_postgres.init_pool()
     print(f"✓ Worker {os.getpid()} initialized fresh DB connection pool")
 
+
 # Celery configuration
 celery_app.conf.update(
-    task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
-    timezone='UTC',
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
     enable_utc=True,
     task_track_started=True,
     task_time_limit=1200,  # 20 minutes hard limit (allows long enrichment jobs)
@@ -62,5 +65,10 @@ except ImportError:
 
 try:
     from tasks import matching_tasks  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    from tasks import truelayer_tasks  # noqa: F401
 except ImportError:
     pass

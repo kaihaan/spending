@@ -120,7 +120,7 @@ export default function RulesTab() {
 
   const fetchCategories = async () => {
     try {
-      const response = await axios.get<{ categories: Array<{ name: string }> }>(
+      const response = await axios.get<{ categories: { name: string }[] }>(
         `${API_URL}/categories/summary`
       );
       const cats = response.data.categories.map((c, idx) => ({
@@ -137,7 +137,7 @@ export default function RulesTab() {
 
   // Filter rules
   const getFilteredRules = useCallback(() => {
-    let rules: Array<{ type: 'category' | 'merchant'; rule: CategoryRule | MerchantNormalization }> = [];
+    let rules: { type: 'category' | 'merchant'; rule: CategoryRule | MerchantNormalization }[] = [];
 
     if (ruleTypeFilter === 'all' || ruleTypeFilter === 'category') {
       rules = rules.concat(categoryRules.map(r => ({ type: 'category' as const, rule: r })));

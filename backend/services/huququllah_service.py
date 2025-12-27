@@ -15,12 +15,14 @@ Separates business logic from HTTP routing concerns.
 """
 
 from database import transactions as db_transactions
-from mcp.huququllah_classifier import get_suggestion_for_transaction as get_smart_suggestion
-
+from mcp.huququllah_classifier import (
+    get_suggestion_for_transaction as get_smart_suggestion,
+)
 
 # ============================================================================
 # Huququllah Operations
 # ============================================================================
+
 
 def get_suggestion(transaction_id: int) -> dict:
     """

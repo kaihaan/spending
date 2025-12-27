@@ -13,26 +13,27 @@ Prerequisites:
     3. .env file must be configured with PostgreSQL credentials
 """
 
-import sqlite3
-import psycopg2
-from psycopg2.extras import execute_batch
 import os
-from dotenv import load_dotenv
-from decimal import Decimal
+import sqlite3
 from datetime import datetime
+from decimal import Decimal
+
+import psycopg2
+from dotenv import load_dotenv
+from psycopg2.extras import execute_batch
 
 # Load environment variables
 load_dotenv()
 
 # Database connection parameters
-SQLITE_DB_PATH = 'finance.db'
+SQLITE_DB_PATH = "finance.db"
 
 POSTGRES_CONFIG = {
-    'host': os.getenv('POSTGRES_HOST', 'localhost'),
-    'port': os.getenv('POSTGRES_PORT', '5432'),
-    'database': os.getenv('POSTGRES_DB', 'spending_db'),
-    'user': os.getenv('POSTGRES_USER', 'spending_user'),
-    'password': os.getenv('POSTGRES_PASSWORD', 'spending_password')
+    "host": os.getenv("POSTGRES_HOST", "localhost"),
+    "port": os.getenv("POSTGRES_PORT", "5432"),
+    "database": os.getenv("POSTGRES_DB", "spending_db"),
+    "user": os.getenv("POSTGRES_USER", "spending_user"),
+    "password": os.getenv("POSTGRES_PASSWORD", "spending_password"),
 }
 
 
@@ -56,27 +57,27 @@ def connect_postgres():
         raise
 
 
-def convert_value(value, target_type='default'):
+def convert_value(value, target_type="default"):
     """Convert SQLite value to PostgreSQL compatible format"""
     if value is None:
         return None
 
-    if target_type == 'numeric':
+    if target_type == "numeric":
         # Convert REAL to NUMERIC
         return Decimal(str(value))
-    elif target_type == 'boolean':
+    if target_type == "boolean":
         # Convert 0/1 to TRUE/FALSE
         return bool(value)
-    elif target_type == 'timestamp':
+    if target_type == "timestamp":
         # Convert TEXT timestamp to proper timestamp with multiple format support
         if isinstance(value, str):
             # Try multiple date formats
             formats = [
-                '%Y-%m-%d %H:%M:%S',  # ISO format with time
-                '%Y-%m-%d',            # ISO date only
-                '%Y-%m-%dT%H:%M:%S',   # ISO 8601
-                '%d/%m/%Y',            # UK date format
-                '%m/%d/%Y',            # US date format
+                "%Y-%m-%d %H:%M:%S",  # ISO format with time
+                "%Y-%m-%d",  # ISO date only
+                "%Y-%m-%dT%H:%M:%S",  # ISO 8601
+                "%d/%m/%Y",  # UK date format
+                "%m/%d/%Y",  # US date format
             ]
             for fmt in formats:
                 try:
@@ -124,11 +125,11 @@ def validate_pre_migration(sqlite_conn, postgres_conn):
         if pgcount > 0:
             print(f"  ⚠️  WARNING: PostgreSQL already has {pgcount} transactions!")
             response = input("  Continue anyway? (yes/no): ").lower().strip()
-            if response != 'yes':
+            if response != "yes":
                 print("  ❌ Migration aborted by user")
                 return False
         else:
-            print(f"  ✅ PostgreSQL database is empty and ready")
+            print("  ✅ PostgreSQL database is empty and ready")
     except Exception as e:
         print(f"  ❌ Cannot access PostgreSQL database: {e}")
         return False
@@ -142,7 +143,7 @@ def validate_pre_migration(sqlite_conn, postgres_conn):
         if null_dates > 0:
             print(f"  ⚠️  WARNING: {null_dates} transactions have NULL dates")
         else:
-            print(f"  ✅ All transactions have dates")
+            print("  ✅ All transactions have dates")
     except Exception as e:
         print(f"  ℹ️  Could not check dates: {e}")
 
@@ -153,10 +154,12 @@ def validate_pre_migration(sqlite_conn, postgres_conn):
 def ask_confirmation(message):
     """Ask user for confirmation"""
     response = input(f"\n{message} (yes/no): ").lower().strip()
-    return response == 'yes'
+    return response == "yes"
 
 
-def migrate_table(sqlite_conn, postgres_conn, table_name, columns, transformations=None):
+def migrate_table(
+    sqlite_conn, postgres_conn, table_name, columns, transformations=None
+):
     """
     Generic function to migrate a table from SQLite to PostgreSQL
 
@@ -191,8 +194,10 @@ def migrate_table(sqlite_conn, postgres_conn, table_name, columns, transformatio
 
     # Insert into PostgreSQL
     postgres_cursor = postgres_conn.cursor()
-    placeholders = ', '.join(['%s'] * len(columns))
-    insert_query = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+    placeholders = ", ".join(["%s"] * len(columns))
+    insert_query = (
+        f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+    )
 
     try:
         execute_batch(postgres_cursor, insert_query, data, page_size=100)
@@ -205,7 +210,7 @@ def migrate_table(sqlite_conn, postgres_conn, table_name, columns, transformatio
         raise
 
 
-def reset_sequence(postgres_conn, table_name, column='id'):
+def reset_sequence(postgres_conn, table_name, column="id"):
     """Reset PostgreSQL sequence after bulk insert"""
     cursor = postgres_conn.cursor()
     cursor.execute(f"""
@@ -229,9 +234,10 @@ def verify_migration(sqlite_conn, postgres_conn, table_name):
     if sqlite_count == postgres_count:
         print(f"  ✅ Verification passed: {table_name} ({postgres_count} rows)")
         return True
-    else:
-        print(f"  ⚠️  Verification failed: {table_name} - SQLite: {sqlite_count}, PostgreSQL: {postgres_count}")
-        return False
+    print(
+        f"  ⚠️  Verification failed: {table_name} - SQLite: {sqlite_count}, PostgreSQL: {postgres_count}"
+    )
+    return False
 
 
 def main():
@@ -274,69 +280,107 @@ def main():
     migrations = [
         # Table migrations in order (respecting foreign key dependencies)
         {
-            'name': 'categories',
-            'columns': ['name', 'rule_pattern', 'ai_suggested'],
-            'transformations': {'ai_suggested': 'boolean'}
+            "name": "categories",
+            "columns": ["name", "rule_pattern", "ai_suggested"],
+            "transformations": {"ai_suggested": "boolean"},
         },
         {
-            'name': 'category_keywords',
-            'columns': ['category_name', 'keyword', 'created_at'],
-            'transformations': {'created_at': 'timestamp'}
+            "name": "category_keywords",
+            "columns": ["category_name", "keyword", "created_at"],
+            "transformations": {"created_at": "timestamp"},
         },
         {
-            'name': 'account_mappings',
-            'columns': ['sort_code', 'account_number', 'friendly_name', 'created_at'],
-            'transformations': {'created_at': 'timestamp'}
+            "name": "account_mappings",
+            "columns": ["sort_code", "account_number", "friendly_name", "created_at"],
+            "transformations": {"created_at": "timestamp"},
         },
         {
-            'name': 'transactions',
-            'columns': ['date', 'description', 'amount', 'category', 'source_file',
-                       'merchant', 'huququllah_classification', 'created_at'],
-            'transformations': {
-                'amount': 'numeric',
-                'created_at': 'timestamp'
-            }
+            "name": "transactions",
+            "columns": [
+                "date",
+                "description",
+                "amount",
+                "category",
+                "source_file",
+                "merchant",
+                "huququllah_classification",
+                "created_at",
+            ],
+            "transformations": {"amount": "numeric", "created_at": "timestamp"},
         },
         {
-            'name': 'amazon_orders',
-            'columns': ['order_id', 'order_date', 'website', 'currency', 'total_owed',
-                       'product_names', 'order_status', 'shipment_status', 'source_file', 'created_at'],
-            'transformations': {
-                'total_owed': 'numeric',
-                'created_at': 'timestamp'
-            }
+            "name": "amazon_orders",
+            "columns": [
+                "order_id",
+                "order_date",
+                "website",
+                "currency",
+                "total_owed",
+                "product_names",
+                "order_status",
+                "shipment_status",
+                "source_file",
+                "created_at",
+            ],
+            "transformations": {"total_owed": "numeric", "created_at": "timestamp"},
         },
         {
-            'name': 'amazon_transaction_matches',
-            'columns': ['transaction_id', 'amazon_order_id', 'match_confidence', 'matched_at'],
-            'transformations': {
-                'match_confidence': 'numeric',
-                'matched_at': 'timestamp'
-            }
+            "name": "amazon_transaction_matches",
+            "columns": [
+                "transaction_id",
+                "amazon_order_id",
+                "match_confidence",
+                "matched_at",
+            ],
+            "transformations": {
+                "match_confidence": "numeric",
+                "matched_at": "timestamp",
+            },
         },
         {
-            'name': 'amazon_returns',
-            'columns': ['order_id', 'reversal_id', 'refund_completion_date', 'currency',
-                       'amount_refunded', 'status', 'disbursement_type', 'source_file',
-                       'original_transaction_id', 'refund_transaction_id', 'created_at'],
-            'transformations': {
-                'amount_refunded': 'numeric',
-                'created_at': 'timestamp'
-            }
+            "name": "amazon_returns",
+            "columns": [
+                "order_id",
+                "reversal_id",
+                "refund_completion_date",
+                "currency",
+                "amount_refunded",
+                "status",
+                "disbursement_type",
+                "source_file",
+                "original_transaction_id",
+                "refund_transaction_id",
+                "created_at",
+            ],
+            "transformations": {
+                "amount_refunded": "numeric",
+                "created_at": "timestamp",
+            },
         },
         {
-            'name': 'apple_transactions',
-            'columns': ['order_id', 'order_date', 'total_amount', 'currency', 'app_names',
-                       'publishers', 'item_count', 'source_file', 'created_at'],
-            'transformations': {
-                'total_amount': 'numeric',
-                'created_at': 'timestamp'
-            }
+            "name": "apple_transactions",
+            "columns": [
+                "order_id",
+                "order_date",
+                "total_amount",
+                "currency",
+                "app_names",
+                "publishers",
+                "item_count",
+                "source_file",
+                "created_at",
+            ],
+            "transformations": {"total_amount": "numeric", "created_at": "timestamp"},
         },
         {
-            'name': 'apple_transaction_matches',
-            'columns': ['apple_transaction_id', 'bank_transaction_id', 'confidence', 'matched_at'],
-            'transformations': {'matched_at': 'timestamp'}
+            "name": "apple_transaction_matches",
+            "columns": [
+                "apple_transaction_id",
+                "bank_transaction_id",
+                "confidence",
+                "matched_at",
+            ],
+            "transformations": {"matched_at": "timestamp"},
         },
     ]
 
@@ -349,14 +393,14 @@ def main():
             count = migrate_table(
                 sqlite_conn,
                 postgres_conn,
-                migration['name'],
-                migration['columns'],
-                migration.get('transformations')
+                migration["name"],
+                migration["columns"],
+                migration.get("transformations"),
             )
             total_rows += count
 
             # Reset sequence
-            reset_sequence(postgres_conn, migration['name'])
+            reset_sequence(postgres_conn, migration["name"])
 
         except Exception as e:
             print(f"  ❌ Migration failed for {migration['name']}: {e}")
@@ -370,7 +414,7 @@ def main():
     print("\n🔍 Verifying migration...")
     all_verified = True
     for migration in migrations:
-        if not verify_migration(sqlite_conn, postgres_conn, migration['name']):
+        if not verify_migration(sqlite_conn, postgres_conn, migration["name"]):
             all_verified = False
 
     if all_verified:
@@ -383,7 +427,9 @@ def main():
     postgres_conn.close()
 
     print("\n" + "=" * 70)
-    print("Migration complete. You can now update backend/database.py to use PostgreSQL.")
+    print(
+        "Migration complete. You can now update backend/database.py to use PostgreSQL."
+    )
     print("=" * 70)
 
 

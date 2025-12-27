@@ -223,6 +223,7 @@ export default function DataSourcesTab() {
       axios.get<AmazonBusinessStats>(`${API_URL}/amazon-business/statistics`),
       axios.get<AmazonBusinessConnection>(`${API_URL}/amazon-business/connection`),
       axios.get(`${API_URL}/gmail/connection`),
+      axios.get(`${API_URL}/gmail/statistics`),
       axios.get<SourceCoverageData>(`${API_URL}/matching/coverage`),
     ]);
 
@@ -235,22 +236,22 @@ export default function DataSourcesTab() {
     if (results[5].status === 'fulfilled') setAmazonBusinessConnection(results[5].value.data);
     if (results[6].status === 'fulfilled') {
       const gmailData = results[6].value.data;
-      if (gmailData.connected) {
-        setGmailConnection(gmailData.connection);
-        setGmailStats(gmailData.statistics);
+      // Backend returns connection object directly, or null if not connected
+      if (gmailData?.id) {
+        setGmailConnection(gmailData);
       } else {
         setGmailConnection(null);
-        setGmailStats(null);
       }
     }
-    if (results[7].status === 'fulfilled') setSourceCoverage(results[7].value.data);
+    if (results[7].status === 'fulfilled') setGmailStats(results[7].value.data);
+    if (results[8].status === 'fulfilled') setSourceCoverage(results[8].value.data);
 
     // Log any failures for debugging
     results.forEach((result, index) => {
       if (result.status === 'rejected') {
         const endpoints = ['pre-enrichment/summary', 'amazon/statistics', 'amazon/returns/statistics',
                           'apple/statistics', 'amazon-business/statistics', 'amazon-business/connection',
-                          'gmail/connection', 'matching/coverage'];
+                          'gmail/connection', 'gmail/statistics', 'matching/coverage'];
         console.warn(`Failed to fetch ${endpoints[index]}:`, result.reason?.message || result.reason);
       }
     });
@@ -261,6 +262,26 @@ export default function DataSourcesTab() {
 
   useEffect(() => {
     fetchAllStats();
+  }, [fetchAllStats]);
+
+  // Handle Gmail OAuth callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const gmailStatus = params.get('gmail_status');
+    const gmailError = params.get('gmail_error');
+    const email = params.get('email');
+
+    if (gmailStatus === 'connected') {
+      alert(`Gmail connected successfully! Email: ${email || 'Unknown'}`);
+      // Refresh Gmail connection status
+      fetchAllStats();
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+    } else if (gmailError) {
+      alert(`Gmail connection failed: ${gmailError.replace(/\+/g, ' ')}`);
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+    }
   }, [fetchAllStats]);
 
   // Check for saved Gmail sync job on mount and resume if still active
@@ -338,7 +359,7 @@ export default function DataSourcesTab() {
     try {
       setImporting(true);
       let endpoint = '';
-      let payload: any = { csv_content: fileContent, filename: selectedFileName };
+      const payload: any = { csv_content: fileContent, filename: selectedFileName };
 
       if (importModalOpen === 'amazon') {
         endpoint = '/amazon/import';
@@ -673,18 +694,10 @@ export default function DataSourcesTab() {
   };
 
   // Gmail handlers
-  const handleGmailConnect = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/gmail/authorize`);
-      const { auth_url, state, code_verifier } = response.data;
-
-      sessionStorage.setItem('gmail_state', state);
-      sessionStorage.setItem('gmail_code_verifier', code_verifier);
-
-      window.location.href = auth_url;
-    } catch (err: any) {
-      alert(`Gmail connection failed: ${err.response?.data?.error || err.message}`);
-    }
+  const handleGmailConnect = () => {
+    // Direct navigation to OAuth authorize endpoint
+    // Backend will redirect to Google's consent screen
+    window.location.href = `${API_URL}/gmail/authorize`;
   };
 
   const handleGmailSync = async () => {

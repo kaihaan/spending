@@ -24,7 +24,7 @@ export interface EnrichmentSource {
   match_method?: string;
   is_primary: boolean;
   user_verified?: boolean;
-  line_items?: Array<{ name: string; quantity?: number; price?: number }>;
+  line_items?: { name: string; quantity?: number; price?: number }[];
   created_at?: string;
 }
 
@@ -147,12 +147,12 @@ export interface MerchantNormalization {
 
 export interface RuleTestResult {
   match_count: number;
-  sample_transactions: Array<{
+  sample_transactions: {
     id: number;
     description: string;
     amount: number;
     date: string;
-  }>;
+  }[];
 }
 
 export interface RulesStatistics {
@@ -164,8 +164,8 @@ export interface RulesStatistics {
   coverage_percentage: number;
   rules_by_category: Record<string, number>;
   rules_by_source: Record<string, number>;
-  top_used_rules: Array<{ name: string; count: number; type: string }>;
-  unused_rules: Array<{ name: string; type: string }>;
+  top_used_rules: { name: string; count: number; type: string }[];
+  unused_rules: { name: string; type: string }[];
   unused_rules_count: number;
 }
 
@@ -174,10 +174,10 @@ export interface TestAllRulesResult {
   covered_transactions: number;
   coverage_percentage: number;
   category_coverage: Record<string, number>;
-  unused_category_rules: Array<{ id: number; name: string; pattern: string }>;
-  unused_merchant_rules: Array<{ id: number; pattern: string; name: string }>;
+  unused_category_rules: { id: number; name: string; pattern: string }[];
+  unused_merchant_rules: { id: number; pattern: string; name: string }[];
   potential_conflicts_count: number;
-  sample_conflicts: Array<{ transaction_id: number; matching_rules: string[] }>;
+  sample_conflicts: { transaction_id: number; matching_rules: string[] }[];
 }
 
 // Unified rule type for display
@@ -271,4 +271,53 @@ export interface GmailSenderPattern {
   usage_count: number;
   last_used_at: string | null;
   created_at: string;
+}
+
+// API Response Types for type safety
+export interface ApiResponse<T = unknown> {
+  data?: T;
+  message?: string;
+  error?: string;
+}
+
+export interface ApiErrorResponse {
+  response?: {
+    data?: {
+      error?: string;
+      message?: string;
+    };
+  };
+  message?: string;
+}
+
+export interface TrueLayerImportPlanResponse {
+  accounts: {
+    account_id: string;
+    display_name: string;
+    provider_name: string;
+    transaction_count: number;
+  }[];
+  total_accounts: number;
+  total_transactions: number;
+}
+
+export interface TrueLayerImportStatusResponse {
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+  accounts_synced?: number;
+  transactions_synced?: number;
+  duplicates?: number;
+  errors?: number;
+  error?: string;
+}
+
+export interface ConnectionStatusResponse {
+  status: 'active' | 'expired' | 'disconnected';
+  expires_at?: string;
+  can_refresh: boolean;
+}
+
+export interface SyncStatusResponse {
+  job_id?: string;
+  status: string;
+  message?: string;
 }

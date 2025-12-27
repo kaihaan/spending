@@ -41,20 +41,15 @@ def set_security_headers(response):
     csp_directives = [
         # Default: Only allow resources from same origin
         "default-src 'self'",
-
         # Scripts: self + specific hashes (NO unsafe-eval)
         # TODO: Update VITE_HASH after building frontend
         "script-src 'self'",  # Add 'sha256-<VITE_HASH>' when available
-
         # Styles: self + inline styles (Tailwind requires this)
         "style-src 'self' 'unsafe-inline'",
-
         # Images: self + data URIs + HTTPS
         "img-src 'self' data: https:",
-
         # Fonts: self + data URIs
         "font-src 'self' data:",
-
         # Connect: API endpoints and external services
         "connect-src 'self' "
         "https://api.truelayer.com "
@@ -63,21 +58,17 @@ def set_security_headers(response):
         "https://www.amazon.co.uk "
         "https://gmail.googleapis.com "
         "https://www.googleapis.com",
-
         # Prevent framing (clickjacking)
         "frame-ancestors 'none'",
-
         # Base URI restriction
         "base-uri 'self'",
-
         # Form submission restriction
         "form-action 'self'",
-
         # Upgrade insecure requests (HTTP -> HTTPS)
-        "upgrade-insecure-requests"
+        "upgrade-insecure-requests",
     ]
 
-    response.headers['Content-Security-Policy'] = "; ".join(csp_directives)
+    response.headers["Content-Security-Policy"] = "; ".join(csp_directives)
 
     # ============================================================================
     # HTTP STRICT TRANSPORT SECURITY (Fix #8 - NO preload initially)
@@ -90,9 +81,9 @@ def set_security_headers(response):
     # response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains; preload'
 
     if request.is_secure:
-        response.headers['Strict-Transport-Security'] = (
-            'max-age=31536000; '  # 1 year
-            'includeSubDomains'    # Apply to all subdomains
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; "  # 1 year
+            "includeSubDomains"  # Apply to all subdomains
             # NO preload yet - add after 30 days
         )
 
@@ -100,25 +91,25 @@ def set_security_headers(response):
     # CLICKJACKING PROTECTION
     # ============================================================================
 
-    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers["X-Frame-Options"] = "DENY"
 
     # ============================================================================
     # MIME SNIFFING PROTECTION
     # ============================================================================
 
-    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers["X-Content-Type-Options"] = "nosniff"
 
     # ============================================================================
     # XSS FILTER (Legacy browsers)
     # ============================================================================
 
-    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers["X-XSS-Protection"] = "1; mode=block"
 
     # ============================================================================
     # REFERRER POLICY
     # ============================================================================
 
-    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
     # ============================================================================
     # PERMISSIONS POLICY
@@ -126,30 +117,30 @@ def set_security_headers(response):
     # Disable unnecessary browser features
 
     permissions_policy = [
-        'geolocation=()',    # No location access
-        'microphone=()',     # No microphone access
-        'camera=()',         # No camera access
-        'payment=()',        # No payment API
-        'usb=()',            # No USB access
-        'magnetometer=()',   # No magnetometer
-        'gyroscope=()',      # No gyroscope
-        'accelerometer=()'   # No accelerometer
+        "geolocation=()",  # No location access
+        "microphone=()",  # No microphone access
+        "camera=()",  # No camera access
+        "payment=()",  # No payment API
+        "usb=()",  # No USB access
+        "magnetometer=()",  # No magnetometer
+        "gyroscope=()",  # No gyroscope
+        "accelerometer=()",  # No accelerometer
     ]
 
-    response.headers['Permissions-Policy'] = ', '.join(permissions_policy)
+    response.headers["Permissions-Policy"] = ", ".join(permissions_policy)
 
     # ============================================================================
     # ADDITIONAL SECURITY HEADERS
     # ============================================================================
 
     # Prevent DNS prefetching
-    response.headers['X-DNS-Prefetch-Control'] = 'off'
+    response.headers["X-DNS-Prefetch-Control"] = "off"
 
     # Disable download prompts for cross-origin resources
-    response.headers['X-Download-Options'] = 'noopen'
+    response.headers["X-Download-Options"] = "noopen"
 
     # Prevent content type sniffing in old IE
-    response.headers['X-Permitted-Cross-Domain-Policies'] = 'none'
+    response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
 
     return response
 
@@ -160,6 +151,7 @@ def init_app(app):
     Args:
         app: Flask application instance
     """
+
     @app.after_request
     def apply_security_headers(response):
         """Apply security headers to all responses."""

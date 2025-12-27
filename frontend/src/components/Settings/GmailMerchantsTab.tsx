@@ -209,22 +209,30 @@ export default function GmailMerchantsTab() {
 
   // Format line items for display
   const formatLineItems = (items: LineItem[] | null): string => {
-    if (!items || items.length === 0) return '-';
-    // Show first 2 items, with count if more
-    const displayItems = items.slice(0, 2).map(item => {
-      const name = item.name?.substring(0, 40) || 'Unknown item';
-      return name.length < (item.name?.length || 0) ? name + '...' : name;
+    // Add runtime type guard for safety
+    if (!items || !Array.isArray(items) || items.length === 0) return '-';
+
+    // Filter out invalid items (missing name)
+    const validItems = items.filter(item => item && item.name);
+    if (validItems.length === 0) return '-';
+
+    // Show first 2 items, truncated to 40 chars
+    const displayItems = validItems.slice(0, 2).map(item => {
+      const name = item.name.substring(0, 40);
+      return name.length < item.name.length ? name + '...' : name;
     });
-    const suffix = items.length > 2 ? ` (+${items.length - 2} more)` : '';
+    const suffix = validItems.length > 2 ? ` (+${validItems.length - 2} more)` : '';
     return displayItems.join(', ') + suffix;
   };
 
   // Extract brand information from line items
   const extractBrand = (items: LineItem[] | null): string => {
-    if (!items || items.length === 0) return '-';
+    // Add runtime type guard
+    if (!items || !Array.isArray(items) || items.length === 0) return '-';
 
     // Check first item for brand metadata
     const firstItem = items[0] as any;
+    if (!firstItem) return '-';
 
     // Deliveroo/Uber Eats have restaurant field
     if (firstItem.restaurant) {

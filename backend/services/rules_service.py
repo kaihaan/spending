@@ -12,16 +12,19 @@ Supports pattern types: contains, starts_with, exact, regex
 Separates business logic from HTTP routing concerns.
 """
 
-from database import matching
-from mcp.pattern_utils import parse_pattern_with_prefix, validate_pattern
 import cache_manager
 
+from database import matching
+from mcp.pattern_utils import parse_pattern_with_prefix, validate_pattern
 
 # ============================================================================
 # Category Rules
 # ============================================================================
 
-def get_category_rules(active_only: bool = True, category: str = None, source: str = None) -> list:
+
+def get_category_rules(
+    active_only: bool = True, category: str = None, source: str = None
+) -> list:
     """
     Get all category rules with optional filtering.
 
@@ -37,17 +40,23 @@ def get_category_rules(active_only: bool = True, category: str = None, source: s
 
     # Apply filters
     if category:
-        rules = [r for r in rules if r.get('category') == category]
+        rules = [r for r in rules if r.get("category") == category]
     if source:
-        rules = [r for r in rules if r.get('source') == source]
+        rules = [r for r in rules if r.get("source") == source]
 
     return rules
 
 
-def create_category_rule(rule_name: str, description_pattern: str, category: str,
-                          pattern_type: str = None, transaction_type: str = None,
-                          subcategory: str = None, priority: int = 0,
-                          source: str = 'manual') -> dict:
+def create_category_rule(
+    rule_name: str,
+    description_pattern: str,
+    category: str,
+    pattern_type: str = None,
+    transaction_type: str = None,
+    subcategory: str = None,
+    priority: int = 0,
+    source: str = "manual",
+) -> dict:
     """
     Create a new category rule.
 
@@ -85,14 +94,10 @@ def create_category_rule(rule_name: str, description_pattern: str, category: str
         subcategory=subcategory,
         pattern_type=pattern_type,
         priority=priority,
-        source=source
+        source=source,
     )
 
-    return {
-        'success': True,
-        'id': rule_id,
-        'message': f"Created rule '{rule_name}'"
-    }
+    return {"success": True, "id": rule_id, "message": f"Created rule '{rule_name}'"}
 
 
 def update_category_rule(rule_id: int, **updates) -> bool:
@@ -110,19 +115,18 @@ def update_category_rule(rule_id: int, **updates) -> bool:
         ValueError: If pattern validation fails
     """
     # Handle pattern prefix if provided
-    if 'description_pattern' in updates:
-        pattern = updates['description_pattern']
-        pattern_type = updates.get('pattern_type')
+    if "description_pattern" in updates:
+        pattern = updates["description_pattern"]
+        pattern_type = updates.get("pattern_type")
 
         if not pattern_type:
             pattern, pattern_type = parse_pattern_with_prefix(pattern)
-            updates['description_pattern'] = pattern
-            updates['pattern_type'] = pattern_type
+            updates["description_pattern"] = pattern
+            updates["pattern_type"] = pattern_type
 
         # Validate pattern
         is_valid, error_msg = validate_pattern(
-            updates['description_pattern'],
-            updates.get('pattern_type', 'contains')
+            updates["description_pattern"], updates.get("pattern_type", "contains")
         )
         if not is_valid:
             raise ValueError(error_msg)
@@ -160,15 +164,13 @@ def test_category_rule(rule_id: int, limit: int = 10) -> dict:
     """
     # Get the rule
     rules = matching.get_category_rules(active_only=False)
-    rule = next((r for r in rules if r['id'] == rule_id), None)
+    rule = next((r for r in rules if r["id"] == rule_id), None)
 
     if not rule:
-        raise ValueError('Rule not found')
+        raise ValueError("Rule not found")
 
     result = matching.test_rule_pattern(
-        rule['description_pattern'],
-        rule['pattern_type'],
-        limit=limit
+        rule["description_pattern"], rule["pattern_type"], limit=limit
     )
 
     return result
@@ -198,11 +200,7 @@ def test_pattern(pattern: str, pattern_type: str = None, limit: int = 10) -> dic
     if not is_valid:
         raise ValueError(error_msg)
 
-    result = matching.test_rule_pattern(
-        pattern,
-        pattern_type,
-        limit=limit
-    )
+    result = matching.test_rule_pattern(pattern, pattern_type, limit=limit)
 
     return result
 
@@ -210,6 +208,7 @@ def test_pattern(pattern: str, pattern_type: str = None, limit: int = 10) -> dic
 # ============================================================================
 # Merchant Normalization Rules
 # ============================================================================
+
 
 def get_merchant_rules(source: str = None, category: str = None) -> list:
     """
@@ -226,17 +225,24 @@ def get_merchant_rules(source: str = None, category: str = None) -> list:
 
     # Apply filters
     if source:
-        normalizations = [n for n in normalizations if n.get('source') == source]
+        normalizations = [n for n in normalizations if n.get("source") == source]
     if category:
-        normalizations = [n for n in normalizations if n.get('default_category') == category]
+        normalizations = [
+            n for n in normalizations if n.get("default_category") == category
+        ]
 
     return normalizations
 
 
-def create_merchant_rule(pattern: str, normalized_name: str,
-                          pattern_type: str = None, merchant_type: str = None,
-                          default_category: str = None, priority: int = 0,
-                          source: str = 'manual') -> dict:
+def create_merchant_rule(
+    pattern: str,
+    normalized_name: str,
+    pattern_type: str = None,
+    merchant_type: str = None,
+    default_category: str = None,
+    priority: int = 0,
+    source: str = "manual",
+) -> dict:
     """
     Create a new merchant normalization rule.
 
@@ -271,13 +277,13 @@ def create_merchant_rule(pattern: str, normalized_name: str,
         default_category=default_category,
         pattern_type=pattern_type,
         priority=priority,
-        source=source
+        source=source,
     )
 
     return {
-        'success': True,
-        'id': norm_id,
-        'message': f"Created merchant normalization for '{pattern}'"
+        "success": True,
+        "id": norm_id,
+        "message": f"Created merchant normalization for '{pattern}'",
     }
 
 
@@ -296,19 +302,18 @@ def update_merchant_rule(norm_id: int, **updates) -> bool:
         ValueError: If pattern validation fails
     """
     # Handle pattern prefix if provided
-    if 'pattern' in updates:
-        pattern = updates['pattern']
-        pattern_type = updates.get('pattern_type')
+    if "pattern" in updates:
+        pattern = updates["pattern"]
+        pattern_type = updates.get("pattern_type")
 
         if not pattern_type:
             pattern, pattern_type = parse_pattern_with_prefix(pattern)
-            updates['pattern'] = pattern
-            updates['pattern_type'] = pattern_type
+            updates["pattern"] = pattern
+            updates["pattern_type"] = pattern_type
 
         # Validate pattern
         is_valid, error_msg = validate_pattern(
-            updates['pattern'],
-            updates.get('pattern_type', 'contains')
+            updates["pattern"], updates.get("pattern_type", "contains")
         )
         if not is_valid:
             raise ValueError(error_msg)
@@ -345,15 +350,13 @@ def test_merchant_rule(norm_id: int, limit: int = 10) -> dict:
         ValueError: If normalization not found
     """
     normalizations = matching.get_merchant_normalizations()
-    norm = next((n for n in normalizations if n['id'] == norm_id), None)
+    norm = next((n for n in normalizations if n["id"] == norm_id), None)
 
     if not norm:
-        raise ValueError('Normalization not found')
+        raise ValueError("Normalization not found")
 
     result = matching.test_rule_pattern(
-        norm['pattern'],
-        norm['pattern_type'],
-        limit=limit
+        norm["pattern"], norm["pattern_type"], limit=limit
     )
 
     return result
@@ -362,6 +365,7 @@ def test_merchant_rule(norm_id: int, limit: int = 10) -> dict:
 # ============================================================================
 # Bulk Operations
 # ============================================================================
+
 
 def get_statistics() -> dict:
     """
@@ -402,9 +406,9 @@ def apply_all_rules() -> dict:
     cache_manager.cache_invalidate_transactions()
 
     return {
-        'success': True,
-        'updated_count': result['updated_count'],
-        'total_transactions': result['total_transactions'],
-        'rule_hits': result['rule_hits'],
-        'message': f"Updated {result['updated_count']} of {result['total_transactions']} transactions"
+        "success": True,
+        "updated_count": result["updated_count"],
+        "total_transactions": result["total_transactions"],
+        "rule_hits": result["rule_hits"],
+        "message": f"Updated {result['updated_count']} of {result['total_transactions']} transactions",
     }

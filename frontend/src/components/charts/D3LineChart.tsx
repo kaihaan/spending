@@ -2,7 +2,7 @@ import { useRef, useEffect, useState } from 'react';
 import * as d3 from 'd3';
 
 interface D3LineChartProps {
-  data: Array<{ date: string; value: number }>;
+  data: { date: string; value: number }[];
   height?: number;
 }
 

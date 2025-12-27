@@ -415,4 +415,3 @@ Requires:
 - Tailwind CSS 4.1.14 (styling)
 
 No additional dependencies required.
-

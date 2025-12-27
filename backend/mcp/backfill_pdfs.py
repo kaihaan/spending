@@ -14,17 +14,19 @@ Usage:
     DB_TYPE=postgres python -c "from mcp.backfill_pdfs import backfill_all_pdfs; backfill_all_pdfs()"
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import database_postgres as database
-from .gmail_client import build_gmail_service, get_message_content
-from .gmail_auth import get_gmail_credentials
-from .minio_client import is_available, store_pdf
-from datetime import datetime
 import json
 import time
+
+import database_postgres as database
+
+from .gmail_auth import get_gmail_credentials
+from .gmail_client import build_gmail_service, get_message_content
+from .minio_client import is_available, store_pdf
 
 
 def backfill_email_content(batch_size: int = 50, delay_seconds: float = 0.5):
@@ -61,7 +63,7 @@ def backfill_email_content(batch_size: int = 50, delay_seconds: float = 0.5):
             """)
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
-            missing = [dict(zip(columns, row)) for row in rows]
+            missing = [dict(zip(columns, row, strict=False)) for row in rows]
     finally:
         database.connection_pool.putconn(conn)
 
@@ -70,12 +72,12 @@ def backfill_email_content(batch_size: int = 50, delay_seconds: float = 0.5):
 
     if not missing:
         print("✓ All receipts have email content stored")
-        return
+        return None
 
     # Group by connection_id for efficiency
     by_connection = {}
     for receipt in missing:
-        cid = receipt['connection_id']
+        cid = receipt["connection_id"]
         if cid not in by_connection:
             by_connection[cid] = []
         by_connection[cid].append(receipt)
@@ -96,11 +98,13 @@ def backfill_email_content(batch_size: int = 50, delay_seconds: float = 0.5):
                 access_token, refresh_token = get_gmail_credentials(connection_id)
                 service = build_gmail_service(access_token, refresh_token)
                 if not service:
-                    print(f"❌ Could not build Gmail service for connection {connection_id}")
+                    print(
+                        f"❌ Could not build Gmail service for connection {connection_id}"
+                    )
                     failed += len(receipts)
                     continue
                 services[connection_id] = service
-                print(f"✓ Gmail service ready")
+                print("✓ Gmail service ready")
             except Exception as e:
                 print(f"❌ Failed to get credentials: {e}")
                 failed += len(receipts)
@@ -110,15 +114,15 @@ def backfill_email_content(batch_size: int = 50, delay_seconds: float = 0.5):
 
         # Fetch each receipt's content
         for i, receipt in enumerate(receipts):
-            message_id = receipt['message_id']
-            merchant = receipt.get('merchant_name', 'Unknown')
+            message_id = receipt["message_id"]
+            merchant = receipt.get("merchant_name", "Unknown")
 
             try:
                 # Fetch from Gmail API
                 message = get_message_content(service, message_id)
 
                 if not message:
-                    print(f"  ⚠️ [{i+1}/{len(receipts)}] Could not fetch: {merchant}")
+                    print(f"  ⚠️ [{i + 1}/{len(receipts)}] Could not fetch: {merchant}")
                     failed += 1
                     continue
 
@@ -128,21 +132,21 @@ def backfill_email_content(batch_size: int = 50, delay_seconds: float = 0.5):
 
                 # Progress update every 10 or at end
                 if (i + 1) % 10 == 0 or i == len(receipts) - 1:
-                    print(f"  ✓ [{i+1}/{len(receipts)}] Fetched: {merchant}")
+                    print(f"  ✓ [{i + 1}/{len(receipts)}] Fetched: {merchant}")
 
                 # Rate limit delay
                 time.sleep(delay_seconds)
 
             except Exception as e:
-                print(f"  ❌ [{i+1}/{len(receipts)}] Error for {merchant}: {e}")
+                print(f"  ❌ [{i + 1}/{len(receipts)}] Error for {merchant}: {e}")
                 failed += 1
 
-    print(f"\n=== Summary ===")
+    print("\n=== Summary ===")
     print(f"Total missing: {total}")
     print(f"Fetched: {fetched}")
     print(f"Failed: {failed}")
 
-    return {'fetched': fetched, 'failed': failed, 'total': total}
+    return {"fetched": fetched, "failed": failed, "total": total}
 
 
 def backfill_all_pdfs(vendor_filter: str = None):
@@ -152,7 +156,9 @@ def backfill_all_pdfs(vendor_filter: str = None):
     Args:
         vendor_filter: Optional merchant_domain to filter (e.g., 'google.com')
     """
-    title = f"Backfill PDFs for {vendor_filter}" if vendor_filter else "Backfill All PDFs"
+    title = (
+        f"Backfill PDFs for {vendor_filter}" if vendor_filter else "Backfill All PDFs"
+    )
     print(f"=== {title} ===\n")
 
     # Check MinIO availability
@@ -224,7 +230,7 @@ def backfill_all_pdfs(vendor_filter: str = None):
 
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
-            receipts = [dict(zip(columns, row)) for row in rows]
+            receipts = [dict(zip(columns, row, strict=False)) for row in rows]
     finally:
         database.connection_pool.putconn(conn)
 
@@ -240,12 +246,12 @@ def backfill_all_pdfs(vendor_filter: str = None):
 
     current_domain = None
     for receipt in receipts:
-        receipt_id = receipt['id']
-        message_id = receipt['message_id']
-        merchant = receipt['merchant_name']
-        domain = receipt.get('merchant_domain', 'unknown')
-        amount = receipt['total_amount']
-        received_at = receipt['received_at']
+        receipt_id = receipt["id"]
+        message_id = receipt["message_id"]
+        merchant = receipt["merchant_name"]
+        domain = receipt.get("merchant_domain", "unknown")
+        amount = receipt["total_amount"]
+        received_at = receipt["received_at"]
 
         # Print domain header when it changes
         if domain != current_domain:
@@ -253,7 +259,7 @@ def backfill_all_pdfs(vendor_filter: str = None):
             print(f"\n--- {domain} ---")
 
         # Parse attachments from JSON
-        attachments = receipt['attachments']
+        attachments = receipt["attachments"]
         if isinstance(attachments, str):
             attachments = json.loads(attachments)
 
@@ -261,9 +267,11 @@ def backfill_all_pdfs(vendor_filter: str = None):
         print(f"  Message ID: {message_id}")
 
         # Find PDF attachments
-        pdf_attachments = [a for a in attachments if a.get('mime_type') == 'application/pdf']
+        pdf_attachments = [
+            a for a in attachments if a.get("mime_type") == "application/pdf"
+        ]
         if not pdf_attachments:
-            print(f"  ⚠️ No PDF attachments found")
+            print("  ⚠️ No PDF attachments found")
             failed += 1
             continue
 
@@ -271,8 +279,8 @@ def backfill_all_pdfs(vendor_filter: str = None):
 
         # Download and store each PDF
         for att in pdf_attachments:
-            filename = att.get('filename', 'invoice.pdf')
-            attachment_id = att.get('attachment_id')
+            filename = att.get("filename", "invoice.pdf")
+            attachment_id = att.get("attachment_id")
 
             if not attachment_id:
                 print(f"  ⚠️ No attachment_id for {filename}")
@@ -281,13 +289,14 @@ def backfill_all_pdfs(vendor_filter: str = None):
             try:
                 # Download PDF from Gmail
                 from .gmail_client import get_pdf_attachments
+
                 pdf_contents = get_pdf_attachments(service, message_id, [att])
 
                 if not pdf_contents:
                     print(f"  ⚠️ Failed to download {filename}")
                     continue
 
-                pdf_content = pdf_contents[0]['content']
+                pdf_content = pdf_contents[0]["content"]
                 print(f"  Downloaded: {filename} ({len(pdf_content)} bytes)")
 
                 # Store in MinIO
@@ -296,7 +305,7 @@ def backfill_all_pdfs(vendor_filter: str = None):
                     message_id=message_id,
                     filename=filename,
                     received_date=received_at,
-                    metadata={'merchant': merchant}
+                    metadata={"merchant": merchant},
                 )
 
                 if not minio_result:
@@ -307,12 +316,12 @@ def backfill_all_pdfs(vendor_filter: str = None):
                 database.save_pdf_attachment(
                     gmail_receipt_id=receipt_id,
                     message_id=message_id,
-                    bucket_name=minio_result['bucket_name'],
-                    object_key=minio_result['object_key'],
-                    filename=minio_result['filename'],
-                    content_hash=minio_result['content_hash'],
-                    size_bytes=minio_result['size_bytes'],
-                    etag=minio_result['etag']
+                    bucket_name=minio_result["bucket_name"],
+                    object_key=minio_result["object_key"],
+                    filename=minio_result["filename"],
+                    content_hash=minio_result["content_hash"],
+                    size_bytes=minio_result["size_bytes"],
+                    etag=minio_result["etag"],
                 )
 
                 print(f"  ✓ Stored: {minio_result['object_key']}")
@@ -324,18 +333,19 @@ def backfill_all_pdfs(vendor_filter: str = None):
 
         print()
 
-    print(f"\n=== Summary ===")
+    print("\n=== Summary ===")
     print(f"Stored: {stored} PDFs")
     print(f"Failed: {failed}")
 
 
 def backfill_google_cloud_pdfs():
     """Backwards-compatible wrapper for Google Cloud PDFs only."""
-    backfill_all_pdfs(vendor_filter='google.com')
+    backfill_all_pdfs(vendor_filter="google.com")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
+
     if len(sys.argv) > 1:
         backfill_all_pdfs(vendor_filter=sys.argv[1])
     else:

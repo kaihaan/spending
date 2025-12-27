@@ -4,11 +4,10 @@ Analyzes 'Other' category transactions to suggest new categorization keywords.
 Uses pattern matching and similarity scoring for smart category suggestions.
 """
 
-import re
-import math
-from collections import Counter
-from typing import List, Dict, Tuple, Set
 import difflib
+import math
+import re
+from collections import Counter
 
 
 def clean_text(text: str) -> str:
@@ -21,38 +20,36 @@ def clean_text(text: str) -> str:
 
     # Remove common payment prefixes
     prefixes = [
-        'card payment to ',
-        'payment to ',
-        'transfer to ',
-        'via apple pay',
-        'via google pay',
-        'via paypal',
-        'online payment',
-        'direct debit',
-        'standing order',
+        "card payment to ",
+        "payment to ",
+        "transfer to ",
+        "via apple pay",
+        "via google pay",
+        "via paypal",
+        "online payment",
+        "direct debit",
+        "standing order",
     ]
     for prefix in prefixes:
-        text = text.replace(prefix, '')
+        text = text.replace(prefix, "")
 
     # Remove dates (various formats)
-    text = re.sub(r'\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b', '', text)
-    text = re.sub(r'\b\d{2,4}[-/]\d{1,2}[-/]\d{1,2}\b', '', text)
+    text = re.sub(r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b", "", text)
+    text = re.sub(r"\b\d{2,4}[-/]\d{1,2}[-/]\d{1,2}\b", "", text)
 
     # Remove reference numbers
-    text = re.sub(r'\bref\s*\d+\b', '', text)
-    text = re.sub(r'\b[a-z]{2,3}\d{4,}\b', '', text)
+    text = re.sub(r"\bref\s*\d+\b", "", text)
+    text = re.sub(r"\b[a-z]{2,3}\d{4,}\b", "", text)
 
     # Remove extra whitespace
-    text = ' '.join(text.split())
+    text = " ".join(text.split())
 
     return text.strip()
 
 
 def extract_keywords_from_transactions(
-    transactions: List[Dict],
-    min_frequency: int = 3,
-    max_doc_frequency: float = 0.3
-) -> Dict[str, Dict]:
+    transactions: list[dict], min_frequency: int = 3, max_doc_frequency: float = 0.3
+) -> dict[str, dict]:
     """
     Extract common keywords/phrases from transactions using TF-IDF filtering.
 
@@ -72,8 +69,8 @@ def extract_keywords_from_transactions(
     keyword_samples = {}
 
     for txn in transactions:
-        merchant = txn.get('merchant', '')
-        description = txn.get('description', '')
+        merchant = txn.get("merchant", "")
+        description = txn.get("description", "")
 
         # Prioritize merchant name
         if merchant and merchant.strip():
@@ -85,11 +82,13 @@ def extract_keywords_from_transactions(
                     if keyword not in keyword_samples:
                         keyword_samples[keyword] = []
                     if len(keyword_samples[keyword]) < 3:
-                        keyword_samples[keyword].append({
-                            'description': description,
-                            'amount': txn.get('amount', 0),
-                            'date': txn.get('date', '')
-                        })
+                        keyword_samples[keyword].append(
+                            {
+                                "description": description,
+                                "amount": txn.get("amount", 0),
+                                "date": txn.get("date", ""),
+                            }
+                        )
 
         # Also extract phrases from description
         cleaned_desc = clean_text(description)
@@ -98,7 +97,7 @@ def extract_keywords_from_transactions(
         # Extract 1-3 word phrases
         for n in [1, 2, 3]:
             for i in range(len(words) - n + 1):
-                phrase = ' '.join(words[i:i+n])
+                phrase = " ".join(words[i : i + n])
                 phrase_words = phrase.split()
 
                 # Skip if phrase contains only digits, punctuation, or very short terms
@@ -118,26 +117,26 @@ def extract_keywords_from_transactions(
                     has_noise = noise_count > 0
 
                 # Filter: length check, noise words, and high-frequency terms
-                if (len(phrase) > 3 and
-                    not has_noise and
-                    phrase not in excluded_terms):
+                if len(phrase) > 3 and not has_noise and phrase not in excluded_terms:
                     keyword_counts[phrase] += 1
                     if phrase not in keyword_samples:
                         keyword_samples[phrase] = []
                     if len(keyword_samples[phrase]) < 3:
-                        keyword_samples[phrase].append({
-                            'description': description,
-                            'amount': txn.get('amount', 0),
-                            'date': txn.get('date', '')
-                        })
+                        keyword_samples[phrase].append(
+                            {
+                                "description": description,
+                                "amount": txn.get("amount", 0),
+                                "date": txn.get("date", ""),
+                            }
+                        )
 
     # Filter by minimum frequency and return structured data
     result = {}
     for keyword, count in keyword_counts.items():
         if count >= min_frequency:
             result[keyword] = {
-                'frequency': count,
-                'sample_transactions': keyword_samples.get(keyword, [])[:3]
+                "frequency": count,
+                "sample_transactions": keyword_samples.get(keyword, [])[:3],
             }
 
     return result
@@ -147,25 +146,82 @@ def is_noise_word(word: str) -> bool:
     """Check if a word is common noise that should be filtered."""
     noise_words = {
         # Common words
-        'the', 'and', 'for', 'from', 'with', 'ltd', 'limited', 'inc',
-        'on', 'at', 'to', 'in', 'of', 'a', 'an', 'by', 'via', 'per',
-        'no', 'ref', 'app', 'num', 'id',
+        "the",
+        "and",
+        "for",
+        "from",
+        "with",
+        "ltd",
+        "limited",
+        "inc",
+        "on",
+        "at",
+        "to",
+        "in",
+        "of",
+        "a",
+        "an",
+        "by",
+        "via",
+        "per",
+        "no",
+        "ref",
+        "app",
+        "num",
+        "id",
         # Payment/transaction terms
-        'payment', 'payments', 'card', 'debit', 'credit', 'purchase', 'transaction',
-        'atm', 'cash', 'withdrawal', 'deposit', 'balance', 'fee', 'fees',
-        'transfer', 'mandate', 'faster', 'amount', 'account', 'receipt',
+        "payment",
+        "payments",
+        "card",
+        "debit",
+        "credit",
+        "purchase",
+        "transaction",
+        "atm",
+        "cash",
+        "withdrawal",
+        "deposit",
+        "balance",
+        "fee",
+        "fees",
+        "transfer",
+        "mandate",
+        "faster",
+        "amount",
+        "account",
+        "receipt",
         # Banking terminology
-        'direct', 'standing', 'order', 'bacs', 'chaps', 'reference',
-        'sort', 'code', 'iban', 'swift', 'payee', 'remittance',
-        'regular', 'bill', 'cashback',
+        "direct",
+        "standing",
+        "order",
+        "bacs",
+        "chaps",
+        "reference",
+        "sort",
+        "code",
+        "iban",
+        "swift",
+        "payee",
+        "remittance",
+        "regular",
+        "bill",
+        "cashback",
         # Common descriptors
-        'online', 'mobile', 'branch', 'counter', 'automatic',
-        'recurring', 'scheduled', 'pending', 'cleared', 'processed'
+        "online",
+        "mobile",
+        "branch",
+        "counter",
+        "automatic",
+        "recurring",
+        "scheduled",
+        "pending",
+        "cleared",
+        "processed",
     }
     return word.lower() in noise_words
 
 
-def calculate_tfidf_scores(transactions: List[Dict]) -> Dict[str, float]:
+def calculate_tfidf_scores(transactions: list[dict]) -> dict[str, float]:
     """
     Calculate TF-IDF scores for all terms across transactions.
 
@@ -185,12 +241,12 @@ def calculate_tfidf_scores(transactions: List[Dict]) -> Dict[str, float]:
         return {}
 
     # Count document frequency (how many transactions contain each term)
-    doc_frequency: Dict[str, int] = Counter()
-    term_documents: Dict[str, Set[int]] = {}
+    doc_frequency: dict[str, int] = Counter()
+    term_documents: dict[str, set[int]] = {}
 
     for idx, txn in enumerate(transactions):
-        merchant = txn.get('merchant', '')
-        description = txn.get('description', '')
+        merchant = txn.get("merchant", "")
+        description = txn.get("description", "")
 
         # Extract unique terms from this transaction
         text = f"{merchant} {description}"
@@ -208,7 +264,7 @@ def calculate_tfidf_scores(transactions: List[Dict]) -> Dict[str, float]:
         # 2-3 word phrases
         for n in [2, 3]:
             for i in range(len(words) - n + 1):
-                phrase = ' '.join(words[i:i+n])
+                phrase = " ".join(words[i : i + n])
                 if len(phrase) > 3:
                     unique_terms.add(phrase)
 
@@ -221,7 +277,7 @@ def calculate_tfidf_scores(transactions: List[Dict]) -> Dict[str, float]:
 
     # Calculate IDF scores
     num_docs = len(transactions)
-    idf_scores: Dict[str, float] = {}
+    idf_scores: dict[str, float] = {}
 
     for term, df in doc_frequency.items():
         # IDF = log(total_documents / documents_containing_term)
@@ -233,9 +289,8 @@ def calculate_tfidf_scores(transactions: List[Dict]) -> Dict[str, float]:
 
 
 def filter_terms_by_document_frequency(
-    transactions: List[Dict],
-    max_doc_frequency: float = 0.3
-) -> Set[str]:
+    transactions: list[dict], max_doc_frequency: float = 0.3
+) -> set[str]:
     """
     Filter out terms that appear in too many transactions (likely boilerplate).
 
@@ -251,11 +306,11 @@ def filter_terms_by_document_frequency(
         return set()
 
     # Count how many transactions contain each term
-    doc_frequency: Dict[str, int] = Counter()
+    doc_frequency: dict[str, int] = Counter()
 
     for txn in transactions:
-        merchant = txn.get('merchant', '')
-        description = txn.get('description', '')
+        merchant = txn.get("merchant", "")
+        description = txn.get("description", "")
 
         text = f"{merchant} {description}"
         cleaned = clean_text(text)
@@ -271,7 +326,7 @@ def filter_terms_by_document_frequency(
 
         for n in [2, 3]:
             for i in range(len(words) - n + 1):
-                phrase = ' '.join(words[i:i+n])
+                phrase = " ".join(words[i : i + n])
                 if len(phrase) > 3:
                     seen_terms.add(phrase)
 
@@ -321,7 +376,9 @@ def calculate_similarity(keyword: str, target: str) -> float:
     return ratio * 100
 
 
-def suggest_category_for_keyword(keyword: str, category_rules: Dict[str, List[str]]) -> Tuple[str, float]:
+def suggest_category_for_keyword(
+    keyword: str, category_rules: dict[str, list[str]]
+) -> tuple[str, float]:
     """
     Suggest the best category for a keyword using similarity matching.
 
@@ -332,11 +389,11 @@ def suggest_category_for_keyword(keyword: str, category_rules: Dict[str, List[st
     Returns:
         Tuple of (suggested_category, confidence_score)
     """
-    best_category = 'Other'
+    best_category = "Other"
     best_score = 0.0
 
     for category, rule_keywords in category_rules.items():
-        if category == 'Other':
+        if category == "Other":
             continue
 
         # Calculate maximum similarity to any keyword in this category
@@ -352,19 +409,19 @@ def suggest_category_for_keyword(keyword: str, category_rules: Dict[str, List[st
 
     # Only suggest if confidence is reasonable
     if best_score < 40:
-        best_category = 'Other'
+        best_category = "Other"
         best_score = 0.0
 
     return best_category, best_score
 
 
 def analyze_other_transactions(
-    transactions: List[Dict],
-    category_rules: Dict[str, List[str]],
+    transactions: list[dict],
+    category_rules: dict[str, list[str]],
     min_frequency: int = 3,
     min_confidence: float = 40.0,
-    max_doc_frequency: float = 0.3
-) -> List[Dict]:
+    max_doc_frequency: float = 0.3,
+) -> list[dict]:
     """
     Analyze 'Other' category transactions and generate keyword suggestions.
 
@@ -379,48 +436,50 @@ def analyze_other_transactions(
         List of suggestion dictionaries with keyword, frequency, category, confidence
     """
     # Filter to only 'Other' category transactions
-    other_transactions = [txn for txn in transactions if txn.get('category') == 'Other']
+    other_transactions = [txn for txn in transactions if txn.get("category") == "Other"]
 
     if not other_transactions:
         return []
 
     # Extract keywords with TF-IDF filtering
     keywords_data = extract_keywords_from_transactions(
-        other_transactions,
-        min_frequency,
-        max_doc_frequency
+        other_transactions, min_frequency, max_doc_frequency
     )
 
     # Generate suggestions with category matching
     suggestions = []
     for keyword, data in keywords_data.items():
-        suggested_category, confidence = suggest_category_for_keyword(keyword, category_rules)
+        suggested_category, confidence = suggest_category_for_keyword(
+            keyword, category_rules
+        )
 
         # Only include if meets confidence threshold
         if confidence >= min_confidence:
-            suggestions.append({
-                'keyword': keyword,
-                'frequency': data['frequency'],
-                'suggested_category': suggested_category,
-                'confidence': round(confidence, 1),
-                'sample_transactions': [
-                    txn['description'] for txn in data['sample_transactions']
-                ]
-            })
+            suggestions.append(
+                {
+                    "keyword": keyword,
+                    "frequency": data["frequency"],
+                    "suggested_category": suggested_category,
+                    "confidence": round(confidence, 1),
+                    "sample_transactions": [
+                        txn["description"] for txn in data["sample_transactions"]
+                    ],
+                }
+            )
 
     # Sort by frequency (most common first)
-    suggestions.sort(key=lambda x: x['frequency'], reverse=True)
+    suggestions.sort(key=lambda x: x["frequency"], reverse=True)
 
     return suggestions
 
 
 def get_keyword_suggestions(
-    transactions: List[Dict],
-    category_rules: Dict[str, List[str]],
+    transactions: list[dict],
+    category_rules: dict[str, list[str]],
     min_frequency: int = 3,
     min_confidence: float = 40.0,
-    max_doc_frequency: float = 0.3
-) -> Dict:
+    max_doc_frequency: float = 0.3,
+) -> dict:
     """
     Main function to get keyword suggestions with metadata.
 
@@ -437,21 +496,17 @@ def get_keyword_suggestions(
     from datetime import datetime
 
     suggestions = analyze_other_transactions(
-        transactions,
-        category_rules,
-        min_frequency,
-        min_confidence,
-        max_doc_frequency
+        transactions, category_rules, min_frequency, min_confidence, max_doc_frequency
     )
 
-    other_count = len([txn for txn in transactions if txn.get('category') == 'Other'])
+    other_count = len([txn for txn in transactions if txn.get("category") == "Other"])
 
     return {
-        'suggestions': suggestions,
-        'total_other_transactions': other_count,
-        'analyzed_at': datetime.now().isoformat(),
-        'parameters': {
-            'min_frequency': min_frequency,
-            'min_confidence': min_confidence
-        }
+        "suggestions": suggestions,
+        "total_other_transactions": other_count,
+        "analyzed_at": datetime.now().isoformat(),
+        "parameters": {
+            "min_frequency": min_frequency,
+            "min_confidence": min_confidence,
+        },
     }

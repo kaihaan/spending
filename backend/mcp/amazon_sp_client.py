@@ -17,27 +17,28 @@ API Reference: https://developer-docs.amazon.com/amazon-business/docs/reporting-
 Data Model: https://developer-docs.amazon.com/amazon-business/docs/reporting-api-v1-model
 """
 
-import time
 import os
-import requests
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict
+import time
+from datetime import datetime
+
 import database_postgres as database
+import requests
+
 from mcp.amazon_sp_auth import get_valid_access_token
 
 # Regional API base URLs for Amazon Business
 REGION_API_BASES = {
-    'UK': 'https://eu.business-api.amazon.com',
-    'DE': 'https://eu.business-api.amazon.com',
-    'FR': 'https://eu.business-api.amazon.com',
-    'ES': 'https://eu.business-api.amazon.com',
-    'IT': 'https://eu.business-api.amazon.com',
-    'IN': 'https://eu.business-api.amazon.com',
-    'US': 'https://na.business-api.amazon.com',
-    'CA': 'https://na.business-api.amazon.com',
-    'MX': 'https://na.business-api.amazon.com',
-    'JP': 'https://jp.business-api.amazon.com',
-    'AU': 'https://jp.business-api.amazon.com'
+    "UK": "https://eu.business-api.amazon.com",
+    "DE": "https://eu.business-api.amazon.com",
+    "FR": "https://eu.business-api.amazon.com",
+    "ES": "https://eu.business-api.amazon.com",
+    "IT": "https://eu.business-api.amazon.com",
+    "IN": "https://eu.business-api.amazon.com",
+    "US": "https://na.business-api.amazon.com",
+    "CA": "https://na.business-api.amazon.com",
+    "MX": "https://na.business-api.amazon.com",
+    "JP": "https://jp.business-api.amazon.com",
+    "AU": "https://jp.business-api.amazon.com",
 }
 
 # Rate limiting (Amazon Business Reporting API)
@@ -56,16 +57,17 @@ class AmazonBusinessClient:
             user_id: User ID for looking up connection (default 1)
         """
         self.connection = database.get_amazon_business_connection(
-            connection_id=connection_id,
-            user_id=user_id
+            connection_id=connection_id, user_id=user_id
         )
 
         if not self.connection:
-            raise ValueError("No Amazon Business API connection found. Please connect first.")
+            raise ValueError(
+                "No Amazon Business API connection found. Please connect first."
+            )
 
         # Determine environment and region
-        self.is_sandbox = self.connection.get('is_sandbox', True)
-        self.region = self.connection.get('region', 'UK')
+        self.is_sandbox = self.connection.get("is_sandbox", True)
+        self.region = self.connection.get("region", "UK")
 
         # Set API base URL (from env or region mapping)
         self.api_base = self._get_api_base()
@@ -80,12 +82,12 @@ class AmazonBusinessClient:
             Base URL for Amazon Business API
         """
         # Check for explicit base URL in environment
-        env_base = os.getenv('AMAZON_BUSINESS_API_BASE')
+        env_base = os.getenv("AMAZON_BUSINESS_API_BASE")
         if env_base:
-            return env_base.rstrip('/')
+            return env_base.rstrip("/")
 
         # Use regional mapping
-        return REGION_API_BASES.get(self.region, REGION_API_BASES['UK'])
+        return REGION_API_BASES.get(self.region, REGION_API_BASES["UK"])
 
     def _get_headers(self) -> dict:
         """Get request headers with valid access token.
@@ -99,7 +101,7 @@ class AmazonBusinessClient:
         return {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Accept": "application/json",
         }
 
     def _rate_limit(self):
@@ -111,8 +113,9 @@ class AmazonBusinessClient:
             time.sleep(sleep_time)
         self._last_request_time = time.time()
 
-    def _make_request(self, method: str, endpoint: str, params: dict = None,
-                      data: dict = None) -> dict:
+    def _make_request(
+        self, method: str, endpoint: str, params: dict = None, data: dict = None
+    ) -> dict:
         """Make rate-limited API request to Amazon Business API.
 
         Args:
@@ -143,15 +146,17 @@ class AmazonBusinessClient:
             headers=headers,
             params=params,
             json=data,
-            timeout=30
+            timeout=30,
         )
 
         # Handle token expiry
         if response.status_code == 401:
-            print("[Amazon Business API] 401 Unauthorized - token might be invalid, refreshing connection")
+            print(
+                "[Amazon Business API] 401 Unauthorized - token might be invalid, refreshing connection"
+            )
             # Refresh connection from database
             self.connection = database.get_amazon_business_connection(
-                connection_id=self.connection['id']
+                connection_id=self.connection["id"]
             )
             headers = self._get_headers()
 
@@ -162,13 +167,15 @@ class AmazonBusinessClient:
                 headers=headers,
                 params=params,
                 json=data,
-                timeout=30
+                timeout=30,
             )
 
         # Handle rate limiting
         if response.status_code == 429:
-            retry_after = int(response.headers.get('Retry-After', 60))
-            print(f"[Amazon Business API] Rate limited (429), waiting {retry_after}s...")
+            retry_after = int(response.headers.get("Retry-After", 60))
+            print(
+                f"[Amazon Business API] Rate limited (429), waiting {retry_after}s..."
+            )
             time.sleep(retry_after)
             return self._make_request(method, endpoint, params, data)
 
@@ -177,14 +184,16 @@ class AmazonBusinessClient:
             error_msg = f"Amazon Business API request failed: {response.status_code}"
             try:
                 error_data = response.json()
-                if 'errors' in error_data:
-                    error_details = ', '.join([e.get('message', '') for e in error_data['errors']])
+                if "errors" in error_data:
+                    error_details = ", ".join(
+                        [e.get("message", "") for e in error_data["errors"]]
+                    )
                     error_msg += f" - {error_details}"
-                elif 'message' in error_data:
+                elif "message" in error_data:
                     error_msg += f" - {error_data['message']}"
                 else:
                     error_msg += f" - {response.text}"
-            except:
+            except Exception:  # Fixed: was bare except
                 error_msg += f" - {response.text}"
 
             print(f"[Amazon Business API] {error_msg}")
@@ -192,10 +201,14 @@ class AmazonBusinessClient:
 
         return response.json()
 
-    def get_orders(self, start_date: str, end_date: str,
-                   include_line_items: bool = True,
-                   include_shipments: bool = False,
-                   include_charges: bool = False) -> List[dict]:
+    def get_orders(
+        self,
+        start_date: str,
+        end_date: str,
+        include_line_items: bool = True,
+        include_shipments: bool = False,
+        include_charges: bool = False,
+    ) -> list[dict]:
         """Fetch buyer's purchase orders in date range using Reporting API v2021-01-08.
 
         Args:
@@ -212,7 +225,9 @@ class AmazonBusinessClient:
         next_page_token = None
 
         print(f"[Amazon Business API] Fetching orders from {start_date} to {end_date}")
-        print(f"[Amazon Business API] Environment: {'SANDBOX' if self.is_sandbox else 'PRODUCTION'}")
+        print(
+            f"[Amazon Business API] Environment: {'SANDBOX' if self.is_sandbox else 'PRODUCTION'}"
+        )
         print(f"[Amazon Business API] Region: {self.region}")
         print(f"[Amazon Business API] Base URL: {self.api_base}")
 
@@ -223,26 +238,26 @@ class AmazonBusinessClient:
                 "endDate": end_date + "T23:59:59Z",
                 "includeLineItems": str(include_line_items).lower(),
                 "includeShipments": str(include_shipments).lower(),
-                "includeCharges": str(include_charges).lower()
+                "includeCharges": str(include_charges).lower(),
             }
 
             if next_page_token:
                 params["nextPageToken"] = next_page_token
 
             response = self._make_request(
-                "GET",
-                "/reports/2021-01-08/orders",
-                params=params
+                "GET", "/reports/2021-01-08/orders", params=params
             )
 
             # Extract orders from response
-            orders = response.get('orders', [])
+            orders = response.get("orders", [])
             all_orders.extend(orders)
 
-            print(f"[Amazon Business API] Fetched {len(orders)} orders (total: {len(all_orders)})")
+            print(
+                f"[Amazon Business API] Fetched {len(orders)} orders (total: {len(all_orders)})"
+            )
 
             # Check for next page
-            next_page_token = response.get('nextPageToken')
+            next_page_token = response.get("nextPageToken")
             if not next_page_token:
                 break
 
@@ -258,28 +273,28 @@ class AmazonBusinessClient:
             Normalized order dictionary for database insertion
         """
         # Extract financial data (Money objects with amount and currencyCode)
-        subtotal = order.get('orderSubTotal', {})
-        shipping = order.get('orderShippingAndHandling', {})
-        tax = order.get('orderTax', {})
-        net_total = order.get('orderNetTotal', {})
+        subtotal = order.get("orderSubTotal", {})
+        shipping = order.get("orderShippingAndHandling", {})
+        tax = order.get("orderTax", {})
+        net_total = order.get("orderNetTotal", {})
 
         # Extract buyer info
-        buyer = order.get('buyingCustomer', {})
+        buyer = order.get("buyingCustomer", {})
 
         return {
-            'order_id': order.get('orderId'),
-            'order_date': order.get('orderDate', '').split('T')[0],  # Extract date only
-            'region': self.region,
-            'purchase_order_number': order.get('purchaseOrderNumber'),
-            'order_status': order.get('orderStatus'),
-            'buyer_name': buyer.get('name'),
-            'buyer_email': buyer.get('email'),
-            'subtotal': float(subtotal.get('amount', 0)) if subtotal else 0,
-            'tax': float(tax.get('amount', 0)) if tax else 0,
-            'shipping': float(shipping.get('amount', 0)) if shipping else 0,
-            'net_total': float(net_total.get('amount', 0)) if net_total else 0,
-            'currency': net_total.get('currencyCode', 'GBP') if net_total else 'GBP',
-            'item_count': len(order.get('lineItems', []))
+            "order_id": order.get("orderId"),
+            "order_date": order.get("orderDate", "").split("T")[0],  # Extract date only
+            "region": self.region,
+            "purchase_order_number": order.get("purchaseOrderNumber"),
+            "order_status": order.get("orderStatus"),
+            "buyer_name": buyer.get("name"),
+            "buyer_email": buyer.get("email"),
+            "subtotal": float(subtotal.get("amount", 0)) if subtotal else 0,
+            "tax": float(tax.get("amount", 0)) if tax else 0,
+            "shipping": float(shipping.get("amount", 0)) if shipping else 0,
+            "net_total": float(net_total.get("amount", 0)) if net_total else 0,
+            "currency": net_total.get("currencyCode", "GBP") if net_total else "GBP",
+            "item_count": len(order.get("lineItems", [])),
         }
 
     def _normalize_order_item(self, item: dict, order_id: str) -> dict:
@@ -293,24 +308,24 @@ class AmazonBusinessClient:
             Normalized item dictionary for database insertion
         """
         # Extract pricing (Money objects)
-        unit_price = item.get('purchasedPricePerUnit', {})
-        total_price = item.get('itemNetTotal', {})
-        quantity = item.get('itemQuantity', 1)
+        unit_price = item.get("purchasedPricePerUnit", {})
+        total_price = item.get("itemNetTotal", {})
+        quantity = item.get("itemQuantity", 1)
 
         # Extract seller info
-        seller = item.get('seller', {})
+        seller = item.get("seller", {})
 
         return {
-            'order_id': order_id,
-            'line_item_id': None,  # Amazon Business API doesn't provide line item ID
-            'asin': item.get('asin'),
-            'title': item.get('title'),
-            'brand': None,  # Not directly provided in API response
-            'category': item.get('productCategory'),
-            'quantity': quantity,
-            'unit_price': float(unit_price.get('amount', 0)) if unit_price else 0,
-            'total_price': float(total_price.get('amount', 0)) if total_price else 0,
-            'seller_name': seller.get('name') if seller else None
+            "order_id": order_id,
+            "line_item_id": None,  # Amazon Business API doesn't provide line item ID
+            "asin": item.get("asin"),
+            "title": item.get("title"),
+            "brand": None,  # Not directly provided in API response
+            "category": item.get("productCategory"),
+            "quantity": quantity,
+            "unit_price": float(unit_price.get("amount", 0)) if unit_price else 0,
+            "total_price": float(total_price.get("amount", 0)) if total_price else 0,
+            "seller_name": seller.get("name") if seller else None,
         }
 
     def test_connection(self) -> dict:
@@ -321,15 +336,15 @@ class AmazonBusinessClient:
         """
         try:
             # Try to fetch orders from today only as a test
-            today = datetime.now().strftime('%Y-%m-%d')
+            today = datetime.now().strftime("%Y-%m-%d")
             self._make_request(
                 "GET",
                 "/reports/2021-01-08/orders",
                 params={
                     "startDate": today + "T00:00:00Z",
                     "endDate": today + "T23:59:59Z",
-                    "includeLineItems": "false"
-                }
+                    "includeLineItems": "false",
+                },
             )
 
             return {
@@ -337,11 +352,11 @@ class AmazonBusinessClient:
                 "region": self.region,
                 "api_base": self.api_base,
                 "environment": "sandbox" if self.is_sandbox else "production",
-                "status": "active"
+                "status": "active",
             }
         except Exception as e:
             return {
                 "connected": False,
                 "error": str(e),
-                "environment": "sandbox" if self.is_sandbox else "production"
+                "environment": "sandbox" if self.is_sandbox else "production",
             }

@@ -375,4 +375,3 @@ Full detailed plan: `/.claude/docs/architecture/TRUELAYER_IMPORT_BATCH_PLAN.md`
 ---
 
 **Status:** Ready to begin Phase 1 implementation when approved.
-

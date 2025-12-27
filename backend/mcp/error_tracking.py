@@ -28,41 +28,44 @@ Usage:
     error.log(connection_id=conn_id)
 """
 
-from enum import Enum
 import traceback
-from typing import Optional, Dict, Any
-import database_postgres as db
-from mcp.logging_config import get_logger
+from enum import Enum
+from typing import Any
 
+import database_postgres as db
+
+from mcp.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 
 class ErrorStage(Enum):
     """Error stage classification for Gmail workflow."""
-    FETCH = 'fetch'  # Gmail API fetch errors
-    PARSE = 'parse'  # General parsing errors
-    VENDOR_PARSE = 'vendor_parse'  # Vendor-specific parser errors
-    SCHEMA_PARSE = 'schema_parse'  # Schema.org extraction errors
-    PATTERN_PARSE = 'pattern_parse'  # Pattern extraction errors
-    LLM_PARSE = 'llm_parse'  # LLM enrichment errors
-    PDF_PARSE = 'pdf_parse'  # PDF processing errors
-    STORAGE = 'storage'  # Database storage errors
-    MATCH = 'match'  # Transaction matching errors
-    VALIDATION = 'validation'  # Data validation errors
+
+    FETCH = "fetch"  # Gmail API fetch errors
+    PARSE = "parse"  # General parsing errors
+    VENDOR_PARSE = "vendor_parse"  # Vendor-specific parser errors
+    SCHEMA_PARSE = "schema_parse"  # Schema.org extraction errors
+    PATTERN_PARSE = "pattern_parse"  # Pattern extraction errors
+    LLM_PARSE = "llm_parse"  # LLM enrichment errors
+    PDF_PARSE = "pdf_parse"  # PDF processing errors
+    STORAGE = "storage"  # Database storage errors
+    MATCH = "match"  # Transaction matching errors
+    VALIDATION = "validation"  # Data validation errors
 
 
 class ErrorType(Enum):
     """Error type classification for retry and debugging."""
-    API_ERROR = 'api_error'  # External API errors
-    TIMEOUT = 'timeout'  # Timeout errors (retryable)
-    PARSE_ERROR = 'parse_error'  # Parsing/extraction failures
-    VALIDATION = 'validation'  # Data validation failures
-    DB_ERROR = 'db_error'  # Database errors
-    NETWORK = 'network'  # Network connectivity issues
-    RATE_LIMIT = 'rate_limit'  # API rate limiting (retryable)
-    AUTH_ERROR = 'auth_error'  # Authentication failures
-    UNKNOWN = 'unknown'  # Uncategorized errors
+
+    API_ERROR = "api_error"  # External API errors
+    TIMEOUT = "timeout"  # Timeout errors (retryable)
+    PARSE_ERROR = "parse_error"  # Parsing/extraction failures
+    VALIDATION = "validation"  # Data validation failures
+    DB_ERROR = "db_error"  # Database errors
+    NETWORK = "network"  # Network connectivity issues
+    RATE_LIMIT = "rate_limit"  # API rate limiting (retryable)
+    AUTH_ERROR = "auth_error"  # Authentication failures
+    UNKNOWN = "unknown"  # Uncategorized errors
 
 
 class GmailError:
@@ -83,9 +86,9 @@ class GmailError:
         stage: ErrorStage,
         error_type: ErrorType,
         message: str,
-        exception: Optional[Exception] = None,
-        context: Optional[Dict[str, Any]] = None,
-        is_retryable: bool = False
+        exception: Exception | None = None,
+        context: dict[str, Any] | None = None,
+        is_retryable: bool = False,
     ):
         """Initialize Gmail error.
 
@@ -107,16 +110,14 @@ class GmailError:
 
         # Extract stack trace if exception provided
         if exception:
-            self.stack_trace = ''.join(
+            self.stack_trace = "".join(
                 traceback.format_exception(
                     type(exception), exception, exception.__traceback__
                 )
             )
 
     def log(
-        self,
-        connection_id: Optional[int] = None,
-        sync_job_id: Optional[int] = None
+        self, connection_id: int | None = None, sync_job_id: int | None = None
     ) -> None:
         """Log error and save to database.
 
@@ -128,12 +129,12 @@ class GmailError:
         logger.error(
             f"[{self.stage.value}] {self.message}",
             extra={
-                'connection_id': connection_id,
-                'sync_job_id': sync_job_id,
-                'merchant': self.context.get('sender_domain'),
-                'parse_method': self.context.get('parse_method')
+                "connection_id": connection_id,
+                "sync_job_id": sync_job_id,
+                "merchant": self.context.get("sender_domain"),
+                "parse_method": self.context.get("parse_method"),
             },
-            exc_info=self.exception
+            exc_info=self.exception,
         )
 
         # Save to database for querying and analytics
@@ -141,20 +142,20 @@ class GmailError:
             db.save_gmail_error(
                 connection_id=connection_id,
                 sync_job_id=sync_job_id,
-                message_id=self.context.get('message_id'),
-                receipt_id=self.context.get('receipt_id'),
+                message_id=self.context.get("message_id"),
+                receipt_id=self.context.get("receipt_id"),
                 error_stage=self.stage.value,
                 error_type=self.error_type.value,
                 error_message=self.message,
                 stack_trace=self.stack_trace,
                 error_context=self.context,
-                is_retryable=self.is_retryable
+                is_retryable=self.is_retryable,
             )
         except Exception as e:
             # Don't fail the workflow if error tracking fails
             logger.warning(
                 f"Failed to save error to database: {e}",
-                extra={'sync_job_id': sync_job_id}
+                extra={"sync_job_id": sync_job_id},
             )
 
     @classmethod
@@ -162,8 +163,8 @@ class GmailError:
         cls,
         exception: Exception,
         stage: ErrorStage,
-        context: Optional[Dict[str, Any]] = None
-    ) -> 'GmailError':
+        context: dict[str, Any] | None = None,
+    ) -> "GmailError":
         """Auto-classify error from exception.
 
         Examines exception type and message to determine error type
@@ -194,44 +195,44 @@ class GmailError:
         exception_name = type(exception).__name__
 
         # Timeout errors (retryable)
-        if 'timeout' in error_str or exception_name in ['TimeoutError', 'ReadTimeout']:
+        if "timeout" in error_str or exception_name in ["TimeoutError", "ReadTimeout"]:
             error_type = ErrorType.TIMEOUT
             is_retryable = True
 
         # Rate limiting (retryable with backoff)
-        elif 'rate' in error_str or '429' in error_str or 'quota' in error_str:
+        elif "rate" in error_str or "429" in error_str or "quota" in error_str:
             error_type = ErrorType.RATE_LIMIT
             is_retryable = True
 
         # Authentication errors (requires user intervention)
-        elif 'auth' in error_str or '401' in error_str or 'unauthorized' in error_str:
+        elif "auth" in error_str or "401" in error_str or "unauthorized" in error_str:
             error_type = ErrorType.AUTH_ERROR
             is_retryable = False
 
         # Network errors (retryable)
         elif (
-            'connection' in error_str
-            or 'network' in error_str
-            or exception_name in ['ConnectionError', 'ConnectionResetError']
+            "connection" in error_str
+            or "network" in error_str
+            or exception_name in ["ConnectionError", "ConnectionResetError"]
         ):
             error_type = ErrorType.NETWORK
             is_retryable = True
 
         # Database errors
         elif (
-            'database' in error_str
-            or 'psycopg2' in error_str
-            or 'postgres' in error_str
-            or 'constraint' in error_str
+            "database" in error_str
+            or "psycopg2" in error_str
+            or "postgres" in error_str
+            or "constraint" in error_str
         ):
             error_type = ErrorType.DB_ERROR
             is_retryable = False
 
         # Validation errors
         elif (
-            'validation' in error_str
-            or 'invalid' in error_str
-            or exception_name in ['ValueError', 'ValidationError']
+            "validation" in error_str
+            or "invalid" in error_str
+            or exception_name in ["ValueError", "ValidationError"]
         ):
             error_type = ErrorType.VALIDATION
             is_retryable = False
@@ -241,13 +242,13 @@ class GmailError:
             ErrorStage.PARSE,
             ErrorStage.VENDOR_PARSE,
             ErrorStage.SCHEMA_PARSE,
-            ErrorStage.PATTERN_PARSE
+            ErrorStage.PATTERN_PARSE,
         ]:
             error_type = ErrorType.PARSE_ERROR
             is_retryable = False  # Can't retry parsing same data
 
         # API errors (general external API failures)
-        elif '4' in error_str or '5' in error_str or 'api' in error_str:
+        elif "4" in error_str or "5" in error_str or "api" in error_str:
             error_type = ErrorType.API_ERROR
             is_retryable = True  # Most API errors worth retrying
 
@@ -257,13 +258,11 @@ class GmailError:
             message=str(exception),
             exception=exception,
             context=context,
-            is_retryable=is_retryable
+            is_retryable=is_retryable,
         )
 
 
-def classify_parse_status(
-    parse_result: Optional[Dict[str, Any]]
-) -> str:
+def classify_parse_status(parse_result: dict[str, Any] | None) -> str:
     """Classify parsing status for statistics tracking.
 
     Args:
@@ -273,15 +272,14 @@ def classify_parse_status(
         Status string: 'parsed', 'unparseable', 'filtered', or 'failed'
     """
     if not parse_result:
-        return 'failed'
+        return "failed"
 
-    if parse_result.get('parsing_status'):
-        return parse_result['parsing_status']
+    if parse_result.get("parsing_status"):
+        return parse_result["parsing_status"]
 
     # Infer status from contents
-    if parse_result.get('pre_filter_reject'):
-        return 'filtered'
-    elif parse_result.get('total_amount') or parse_result.get('line_items'):
-        return 'parsed'
-    else:
-        return 'unparseable'
+    if parse_result.get("pre_filter_reject"):
+        return "filtered"
+    if parse_result.get("total_amount") or parse_result.get("line_items"):
+        return "parsed"
+    return "unparseable"

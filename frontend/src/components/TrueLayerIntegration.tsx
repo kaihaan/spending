@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { ImportWizard } from './TrueLayer/ImportWizard';
 
@@ -19,7 +19,19 @@ interface TrueLayerConnection {
   provider_name: string;
   connection_status: string;
   last_synced_at: string | null;
+  is_token_expired?: boolean;  // Token expiry status from backend
   accounts: TrueLayerAccount[];
+}
+
+interface SyncProgress {
+  jobId: string;
+  connectionId: number;
+  status: string;
+  totalAccounts?: number;
+  accountsProcessed?: number;
+  transactionsSynced?: number;
+  duplicates?: number;
+  errors?: number;
 }
 
 export default function TrueLayerIntegration() {
@@ -27,12 +39,30 @@ export default function TrueLayerIntegration() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<number | null>(null);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [showImportWizard, setShowImportWizard] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<TrueLayerConnection | null>(null);
 
+  // Date range for sync (90 days back by default)
+  const [syncDateFrom, setSyncDateFrom] = useState(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 90);
+    return date.toISOString().split('T')[0];
+  });
+  const [syncDateTo, setSyncDateTo] = useState(() => new Date().toISOString().split('T')[0]);
+
   useEffect(() => {
     fetchConnections();
+  }, []);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      // Clear sync progress if component unmounts
+      setSyncProgress(null);
+      setSyncing(null);
+    };
   }, []);
 
   const fetchConnections = async () => {
@@ -65,27 +95,73 @@ export default function TrueLayerIntegration() {
     }
   };
 
+  const pollJobStatus = async (jobId: string, connectionId: number) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await axios.get(`${API_URL}/truelayer/jobs/${jobId}`);
+        const status = response.data;
+
+        setSyncProgress({
+          jobId,
+          connectionId,
+          status: status.status,
+          totalAccounts: status.total_accounts,
+          accountsProcessed: status.accounts_processed,
+          transactionsSynced: status.transactions_synced,
+          duplicates: status.duplicates,
+          errors: status.errors,
+        });
+
+        // Stop polling if completed or failed
+        if (status.status === 'completed' || status.status === 'failed') {
+          clearInterval(pollInterval);
+          setSyncing(null);
+
+          if (status.status === 'completed') {
+            // Wait a bit to show final progress, then clear
+            setTimeout(() => {
+              setSyncProgress(null);
+              fetchConnections();
+              window.dispatchEvent(new Event('transactions-updated'));
+            }, 2000);
+          } else {
+            alert(`Sync failed: ${status.error || 'Unknown error'}`);
+            setSyncProgress(null);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to poll job status:', err);
+        clearInterval(pollInterval);
+        setSyncing(null);
+        setSyncProgress(null);
+      }
+    }, 2000); // Poll every 2 seconds
+  };
+
   const handleSync = async (connectionId: number) => {
     try {
       setSyncing(connectionId);
-      const response = await axios.post(`${API_URL}/truelayer/sync`, {
-        connection_id: connectionId
+      setSyncProgress({
+        jobId: '',
+        connectionId,
+        status: 'queued',
       });
 
-      const result = response.data.result;
-      alert(
-        `Sync complete!\n` +
-        `Synced: ${result.total_synced} transactions\n` +
-        `Duplicates: ${result.total_duplicates}\n` +
-        `Errors: ${result.total_errors}`
-      );
+      // Use async mode
+      const response = await axios.post(`${API_URL}/truelayer/sync?async=true`, {
+        connection_id: connectionId,
+        date_from: syncDateFrom,
+        date_to: syncDateTo
+      });
 
-      fetchConnections();
-      window.dispatchEvent(new Event('transactions-updated'));
+      const { job_id } = response.data;
+
+      // Start polling for progress
+      pollJobStatus(job_id, connectionId);
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to sync transactions');
-    } finally {
       setSyncing(null);
+      setSyncProgress(null);
     }
   };
 
@@ -158,6 +234,124 @@ export default function TrueLayerIntegration() {
         </button>
       </div>
 
+      {/* Sync Date Range */}
+      <div className="card bg-base-200">
+        <div className="card-body py-3 px-4">
+          <div className="flex flex-col gap-3">
+            {/* Date Inputs */}
+            <div className="flex items-center gap-4">
+              <span className="text-sm font-medium">Sync Date Range:</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={syncDateFrom}
+                  onChange={(e) => setSyncDateFrom(e.target.value)}
+                  className="input input-sm input-bordered"
+                />
+                <span className="text-sm">to</span>
+                <input
+                  type="date"
+                  value={syncDateTo}
+                  onChange={(e) => setSyncDateTo(e.target.value)}
+                  max={new Date().toISOString().split('T')[0]}
+                  className="input input-sm input-bordered"
+                />
+              </div>
+            </div>
+
+            {/* Preset Buttons */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-base-content/70">Quick select:</span>
+              <div className="flex gap-2">
+                <button
+                  className="btn btn-xs btn-outline"
+                  onClick={() => {
+                    const date = new Date();
+                    date.setDate(date.getDate() - 30);
+                    setSyncDateFrom(date.toISOString().split('T')[0]);
+                    setSyncDateTo(new Date().toISOString().split('T')[0]);
+                  }}
+                >
+                  Last 30 Days
+                </button>
+                <button
+                  className="btn btn-xs btn-outline"
+                  onClick={() => {
+                    const date = new Date();
+                    date.setDate(date.getDate() - 90);
+                    setSyncDateFrom(date.toISOString().split('T')[0]);
+                    setSyncDateTo(new Date().toISOString().split('T')[0]);
+                  }}
+                >
+                  Last 90 Days
+                </button>
+                <button
+                  className="btn btn-xs btn-outline"
+                  onClick={() => {
+                    const date = new Date();
+                    date.setFullYear(date.getFullYear() - 1);
+                    setSyncDateFrom(date.toISOString().split('T')[0]);
+                    setSyncDateTo(new Date().toISOString().split('T')[0]);
+                  }}
+                >
+                  Last Year
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Sync Progress Bar */}
+      {syncProgress && (
+        <div className="card bg-primary/10 border border-primary/30">
+          <div className="card-body py-4 px-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium">
+                {syncProgress.status === 'queued' && 'Starting sync...'}
+                {syncProgress.status === 'syncing' && `Syncing accounts...`}
+                {syncProgress.status === 'completed' && '✓ Sync completed!'}
+                {syncProgress.status === 'failed' && '✗ Sync failed'}
+              </span>
+              {syncProgress.totalAccounts !== undefined && syncProgress.accountsProcessed !== undefined && (
+                <span className="text-sm text-base-content/70">
+                  {syncProgress.accountsProcessed} / {syncProgress.totalAccounts} accounts
+                </span>
+              )}
+            </div>
+
+            {/* Progress bar */}
+            <div className="w-full bg-base-300 rounded-full h-2.5 mb-2">
+              <div
+                className={`h-2.5 rounded-full transition-all duration-300 ${
+                  syncProgress.status === 'completed' ? 'bg-success' :
+                  syncProgress.status === 'failed' ? 'bg-error' :
+                  'bg-primary'
+                }`}
+                style={{
+                  width: syncProgress.totalAccounts
+                    ? `${(syncProgress.accountsProcessed || 0) / syncProgress.totalAccounts * 100}%`
+                    : '0%'
+                }}
+              ></div>
+            </div>
+
+            {/* Stats */}
+            {syncProgress.transactionsSynced !== undefined && (
+              <div className="flex gap-4 text-xs text-base-content/70">
+                <span>Synced: {syncProgress.transactionsSynced}</span>
+                {syncProgress.duplicates !== undefined && syncProgress.duplicates > 0 && (
+                  <span>Duplicates: {syncProgress.duplicates}</span>
+                )}
+                {syncProgress.errors !== undefined && syncProgress.errors > 0 && (
+                  <span className="text-error">Errors: {syncProgress.errors}</span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="alert alert-error">
           <span>{error}</span>
@@ -180,10 +374,9 @@ export default function TrueLayerIntegration() {
             </thead>
             <tbody>
               {connections.map((connection) => (
-                <>
+                <React.Fragment key={connection.id}>
                   {/* Bank Row (Level 1) */}
                   <tr
-                    key={connection.id}
                     className="hover cursor-pointer"
                     onClick={() => toggleExpanded(connection.id)}
                   >
@@ -194,7 +387,12 @@ export default function TrueLayerIntegration() {
                     </td>
                     <td className="pl-2">
                       <span className="font-medium">{connection.provider_name}</span>
-                      {connection.connection_status !== 'active' && (
+                      {connection.is_token_expired && (
+                        <span className="badge badge-error badge-sm ml-2">
+                          Token Expired
+                        </span>
+                      )}
+                      {connection.connection_status !== 'active' && !connection.is_token_expired && (
                         <span className="badge badge-warning badge-sm ml-2">
                           {connection.connection_status}
                         </span>
@@ -202,17 +400,27 @@ export default function TrueLayerIntegration() {
                     </td>
                     <td className="text-right">
                       <div className="flex gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          className="btn btn-xs btn-primary"
-                          onClick={() => handleSync(connection.id)}
-                          disabled={syncing === connection.id}
-                        >
-                          {syncing === connection.id ? (
-                            <span className="loading loading-spinner loading-xs"></span>
-                          ) : (
-                            'Sync'
-                          )}
-                        </button>
+                        {connection.is_token_expired ? (
+                          <button
+                            className="btn btn-xs btn-primary"
+                            onClick={handleAuthorize}
+                            disabled={loading}
+                          >
+                            Reconnect
+                          </button>
+                        ) : (
+                          <button
+                            className="btn btn-xs btn-primary"
+                            onClick={() => handleSync(connection.id)}
+                            disabled={syncing === connection.id}
+                          >
+                            {syncing === connection.id ? (
+                              <span className="loading loading-spinner loading-xs"></span>
+                            ) : (
+                              'Sync'
+                            )}
+                          </button>
+                        )}
                         <button
                           className="btn btn-xs btn-outline"
                           onClick={() => {
@@ -272,7 +480,7 @@ export default function TrueLayerIntegration() {
                       </td>
                     </tr>
                   )}
-                </>
+                </React.Fragment>
               ))}
             </tbody>
           </table>

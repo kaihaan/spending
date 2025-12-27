@@ -10,8 +10,13 @@ from mcp import gmail_sync
 from tasks.gmail_tasks import sync_gmail_receipts_task
 
 
-def start_sync(user_id: int, sync_type: str = 'full', from_date: str = None,
-               to_date: str = None, force_reparse: bool = False) -> dict:
+def start_sync(
+    user_id: int,
+    sync_type: str = "full",
+    from_date: str = None,
+    to_date: str = None,
+    force_reparse: bool = False,
+) -> dict:
     """
     Start a Gmail receipt sync job asynchronously.
 
@@ -31,9 +36,9 @@ def start_sync(user_id: int, sync_type: str = 'full', from_date: str = None,
     # Get connection for user
     connection = gmail.get_gmail_connection(user_id)
     if not connection:
-        raise ValueError('No Gmail connection found')
+        raise ValueError("No Gmail connection found")
 
-    connection_id = connection['id']
+    connection_id = connection["id"]
 
     # Create job record first for tracking
     job_id = gmail.create_gmail_sync_job(connection_id, job_type=sync_type)
@@ -44,25 +49,22 @@ def start_sync(user_id: int, sync_type: str = 'full', from_date: str = None,
 
     # Dispatch async task
     sync_gmail_receipts_task.delay(
-        connection_id,
-        sync_type,
-        job_id,
-        from_date,
-        to_date,
-        force_reparse
+        connection_id, sync_type, job_id, from_date, to_date, force_reparse
     )
 
-    print(f"📧 Gmail sync queued: job_id={job_id}, type={sync_type}, "
-          f"dates={from_date} to {to_date}, force_reparse={force_reparse}")
+    print(
+        f"📧 Gmail sync queued: job_id={job_id}, type={sync_type}, "
+        f"dates={from_date} to {to_date}, force_reparse={force_reparse}"
+    )
 
     return {
-        'job_id': job_id,
-        'status': 'queued',
-        'sync_type': sync_type,
-        'from_date': from_date,
-        'to_date': to_date,
-        'force_reparse': force_reparse,
-        'connection_id': connection_id,
+        "job_id": job_id,
+        "status": "queued",
+        "sync_type": sync_type,
+        "from_date": from_date,
+        "to_date": to_date,
+        "force_reparse": force_reparse,
+        "connection_id": connection_id,
     }
 
 
@@ -79,12 +81,9 @@ def get_sync_status(user_id: int) -> dict:
     # Get connection for user
     connection = gmail.get_gmail_connection(user_id)
     if not connection:
-        return {
-            'connected': False,
-            'message': 'No Gmail connection found'
-        }
+        return {"connected": False, "message": "No Gmail connection found"}
 
-    status = gmail_sync.get_sync_status(connection['id'])
+    status = gmail_sync.get_sync_status(connection["id"])
     return status
 
 
@@ -116,9 +115,9 @@ def disconnect(user_id: int) -> bool:
     """
     connection = gmail.get_gmail_connection(user_id)
     if not connection:
-        raise ValueError('No Gmail connection found')
+        raise ValueError("No Gmail connection found")
 
-    return gmail.delete_gmail_connection(connection['id'])
+    return gmail.delete_gmail_connection(connection["id"])
 
 
 def get_statistics(user_id: int) -> dict:
@@ -134,8 +133,9 @@ def get_statistics(user_id: int) -> dict:
     return gmail.get_gmail_statistics(user_id)
 
 
-def get_receipts(user_id: int, limit: int = 100, offset: int = 0,
-                 parsing_status: str = None) -> list:
+def get_receipts(
+    user_id: int, limit: int = 100, offset: int = 0, parsing_status: str = None
+) -> list:
     """
     Get Gmail receipts for a user.
 
@@ -154,10 +154,10 @@ def get_receipts(user_id: int, limit: int = 100, offset: int = 0,
         return []
 
     return gmail.get_gmail_receipts(
-        connection_id=connection['id'],
+        connection_id=connection["id"],
         limit=limit,
         offset=offset,
-        status=parsing_status
+        status=parsing_status,
     )
 
 
@@ -226,7 +226,7 @@ def delete_match(match_id: int) -> bool:
     return gmail.delete_gmail_match(match_id)
 
 
-def get_merchants(user_id: int = 1) -> list:
+def get_merchants(user_id: int = 1) -> dict:
     """
     Get merchant summary from Gmail receipts.
 
@@ -234,10 +234,40 @@ def get_merchants(user_id: int = 1) -> list:
         user_id: User ID
 
     Returns:
-        List of merchant summary dicts
+        Dictionary with 'merchants' list and 'summary' stats
     """
-    summary = gmail.get_gmail_merchants_summary(user_id)
-    return summary.get('merchants', [])
+    return gmail.get_gmail_merchants_summary(user_id)
+
+
+def get_merchant_receipts(
+    merchant_identifier: str, user_id: int = 1, limit: int = 50, offset: int = 0
+) -> dict:
+    """
+    Get receipts for a specific merchant.
+
+    Args:
+        merchant_identifier: Merchant domain or normalized name
+        user_id: User ID
+        limit: Max receipts to return
+        offset: Pagination offset
+
+    Returns:
+        Dictionary with 'receipts' list and 'total' count
+    """
+    # Auto-detect if identifier is a domain (contains '.') or normalized name
+    if "." in merchant_identifier:
+        return gmail.get_receipts_by_domain(
+            merchant_domain=merchant_identifier,
+            user_id=user_id,
+            limit=limit,
+            offset=offset,
+        )
+    return gmail.get_receipts_by_domain(
+        merchant_normalized=merchant_identifier,
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 def get_sender_patterns(user_id: int = 1) -> list:

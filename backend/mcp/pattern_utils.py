@@ -6,10 +6,9 @@ Supports: starts:, contains:, exact:, regex: prefixes
 """
 
 import re
-from typing import Tuple, Optional
 
 
-def parse_pattern_with_prefix(pattern: str) -> Tuple[str, str]:
+def parse_pattern_with_prefix(pattern: str) -> tuple[str, str]:
     """
     Parse explicit prefix pattern syntax.
 
@@ -53,7 +52,7 @@ def parse_pattern_with_prefix(pattern: str) -> Tuple[str, str]:
 
     for prefix, pattern_type in prefix_map.items():
         if pattern.lower().startswith(prefix):
-            cleaned = pattern[len(prefix):].strip()
+            cleaned = pattern[len(prefix) :].strip()
             return (cleaned, pattern_type)
 
     # Default to contains
@@ -91,7 +90,7 @@ def format_pattern_with_prefix(pattern: str, pattern_type: str) -> str:
     return f"{prefix}{pattern}"
 
 
-def validate_pattern(pattern: str, pattern_type: str) -> Tuple[bool, Optional[str]]:
+def validate_pattern(pattern: str, pattern_type: str) -> tuple[bool, str | None]:
     """
     Validate a pattern for the given pattern type.
 
@@ -158,11 +157,11 @@ def test_pattern_match(description: str, pattern: str, pattern_type: str) -> boo
 
     if pattern_type == "contains":
         return pattern_upper in description_upper
-    elif pattern_type == "starts_with":
+    if pattern_type == "starts_with":
         return description_upper.startswith(pattern_upper)
-    elif pattern_type == "exact":
+    if pattern_type == "exact":
         return description_upper == pattern_upper
-    elif pattern_type == "regex":
+    if pattern_type == "regex":
         try:
             return bool(re.search(pattern, description, re.IGNORECASE))
         except re.error:

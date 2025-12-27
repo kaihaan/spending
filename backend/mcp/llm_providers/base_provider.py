@@ -3,32 +3,34 @@ Base LLM Provider Abstract Class
 Defines the interface that all LLM provider implementations must follow
 """
 
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
 import json
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class TransactionEnrichment:
     """Enriched transaction data from LLM"""
+
     primary_category: str
     subcategory: str
     merchant_clean_name: str
     merchant_type: str
     essential_discretionary: str  # "Essential" or "Discretionary"
     payment_method: str
-    payment_method_subtype: Optional[str]
+    payment_method_subtype: str | None
     purchase_date: str
     confidence_score: float  # 0-1
     raw_response: str  # Store original LLM response for debugging
-    llm_provider: Optional[str] = None  # e.g., "anthropic", "openai"
-    llm_model: Optional[str] = None  # e.g., "claude-3-5-sonnet-20241022"
+    llm_provider: str | None = None  # e.g., "anthropic", "openai"
+    llm_model: str | None = None  # e.g., "claude-3-5-sonnet-20241022"
 
 
 @dataclass
 class ProviderStats:
     """Statistics from a provider query"""
+
     tokens_used: int
     estimated_cost: float
     response_time_ms: float
@@ -40,18 +42,20 @@ class ProviderStats:
 @dataclass
 class AccountInfo:
     """Provider account information for billing/subscription status"""
+
     provider: str
     available: bool  # Whether account info API is available for this provider
-    balance: Optional[float] = None  # Remaining credits/balance in USD
-    subscription_tier: Optional[str] = None  # e.g., "Free", "Pay-as-you-go", "Scale"
-    usage_this_month: Optional[float] = None  # Current month spend in USD
-    error: Optional[str] = None  # Error message if fetch failed
-    extra: Optional[Dict[str, Any]] = None  # Provider-specific extra data
+    balance: float | None = None  # Remaining credits/balance in USD
+    subscription_tier: str | None = None  # e.g., "Free", "Pay-as-you-go", "Scale"
+    usage_this_month: float | None = None  # Current month spend in USD
+    error: str | None = None  # Error message if fetch failed
+    extra: dict[str, Any] | None = None  # Provider-specific extra data
 
 
 @dataclass
 class LLMResponse:
     """Simple response from LLM completion"""
+
     content: str  # The text content of the response
     input_tokens: int = 0
     output_tokens: int = 0
@@ -62,7 +66,9 @@ class LLMResponse:
 class BaseLLMProvider(ABC):
     """Abstract base class for LLM providers"""
 
-    def __init__(self, api_key: str, model: str, timeout: int = 30, debug: bool = False):
+    def __init__(
+        self, api_key: str, model: str, timeout: int = 30, debug: bool = False
+    ):
         """
         Initialize LLM provider.
 
@@ -79,10 +85,8 @@ class BaseLLMProvider(ABC):
 
     @abstractmethod
     def enrich_transactions(
-        self,
-        transactions: List[Dict[str, str]],
-        direction: str = "out"
-    ) -> tuple[List[TransactionEnrichment], ProviderStats]:
+        self, transactions: list[dict[str, str]], direction: str = "out"
+    ) -> tuple[list[TransactionEnrichment], ProviderStats]:
         """
         Enrich a batch of transactions.
 
@@ -95,7 +99,6 @@ class BaseLLMProvider(ABC):
         Returns:
             Tuple of (enriched_list, stats)
         """
-        pass
 
     @abstractmethod
     def validate_api_key(self) -> bool:
@@ -105,7 +108,6 @@ class BaseLLMProvider(ABC):
         Returns:
             True if valid, False otherwise
         """
-        pass
 
     @abstractmethod
     def calculate_cost(self, tokens_in: int, tokens_out: int) -> float:
@@ -119,7 +121,6 @@ class BaseLLMProvider(ABC):
         Returns:
             Estimated cost in USD
         """
-        pass
 
     @abstractmethod
     def get_account_info(self) -> AccountInfo:
@@ -131,7 +132,6 @@ class BaseLLMProvider(ABC):
             If the provider doesn't support account APIs, returns
             AccountInfo with available=False and an error message.
         """
-        pass
 
     @abstractmethod
     def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
@@ -145,18 +145,37 @@ class BaseLLMProvider(ABC):
         Returns:
             LLMResponse with content and token/cost info
         """
-        pass
 
     # Base categories (fallback only - prefer normalized_categories table)
     BASE_CATEGORIES = [
-        'Groceries', 'Transportation', 'Clothing', 'Dining', 'Entertainment',
-        'Shopping', 'Healthcare', 'Utilities', 'Income', 'Taxes',
-        'Subscriptions', 'Insurance', 'Education', 'Travel', 'Personal Care',
-        'Gifts', 'Pet Care', 'Home & Garden', 'Electronics', 'Sports & Outdoors',
-        'Books & Media', 'Office Supplies', 'Automotive', 'Banking Fees', 'Other'
+        "Groceries",
+        "Transportation",
+        "Clothing",
+        "Dining",
+        "Entertainment",
+        "Shopping",
+        "Healthcare",
+        "Utilities",
+        "Income",
+        "Taxes",
+        "Subscriptions",
+        "Insurance",
+        "Education",
+        "Travel",
+        "Personal Care",
+        "Gifts",
+        "Pet Care",
+        "Home & Garden",
+        "Electronics",
+        "Sports & Outdoors",
+        "Books & Media",
+        "Office Supplies",
+        "Automotive",
+        "Banking Fees",
+        "Other",
     ]
 
-    def _get_active_categories(self) -> List[str]:
+    def _get_active_categories(self) -> list[str]:
         """
         Get the list of active categories for LLM enrichment.
         Returns: List of category names from normalized_categories table (active only)
@@ -164,15 +183,18 @@ class BaseLLMProvider(ABC):
         """
         try:
             # Import here to avoid circular imports
-            import sys
             import os
-            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            import sys
+
+            sys.path.insert(
+                0, os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            )
             import database_postgres as database
 
             # Get active categories from normalized table
             categories_data = database.get_normalized_categories(active_only=True)
             if categories_data:
-                return [cat['name'] for cat in categories_data]
+                return [cat["name"] for cat in categories_data]
 
         except Exception as e:
             # If we can't load from database, use base categories
@@ -188,9 +210,12 @@ class BaseLLMProvider(ABC):
         """
         try:
             # Import here to avoid circular imports
-            import sys
             import os
-            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            import sys
+
+            sys.path.insert(
+                0, os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            )
             import database_postgres as database
 
             # Get active categories with descriptions
@@ -198,7 +223,7 @@ class BaseLLMProvider(ABC):
             if categories_data:
                 lines = []
                 for cat in categories_data:
-                    if cat.get('description'):
+                    if cat.get("description"):
                         lines.append(f"- {cat['name']}: {cat['description']}")
                     else:
                         lines.append(f"- {cat['name']}")
@@ -220,7 +245,7 @@ class BaseLLMProvider(ABC):
         """
         # Get dynamic category list with descriptions for better LLM context
         categories = self._get_active_categories()
-        category_list = ', '.join(categories)
+        category_list = ", ".join(categories)
         category_context = self._get_category_context()
 
         return f"""You are a financial transaction classification expert. Your task is to analyze transaction descriptions and enrich them with structured data.
@@ -252,14 +277,16 @@ Never include amounts or actual monetary values in your analysis."""
 
     # Source type to human-readable label mapping for LLM prompts
     SOURCE_TYPE_LABELS = {
-        'amazon': 'Amazon Products',
-        'amazon_business': 'Amazon Business',
-        'apple': 'Apple/App Store',
-        'gmail': 'Email Receipt',
-        'manual': 'Manual Entry'
+        "amazon": "Amazon Products",
+        "amazon_business": "Amazon Business",
+        "apple": "Apple/App Store",
+        "gmail": "Email Receipt",
+        "manual": "Manual Entry",
     }
 
-    def _build_user_prompt(self, transactions: List[Dict[str, str]], direction: str) -> str:
+    def _build_user_prompt(
+        self, transactions: list[dict[str, str]], direction: str
+    ) -> str:
         """
         Build the user prompt with transactions to classify.
 
@@ -277,11 +304,11 @@ Never include amounts or actual monetary values in your analysis."""
         """
         transaction_lines = []
         for i, txn in enumerate(transactions, 1):
-            desc = txn.get('description', '').strip()
+            desc = txn.get("description", "").strip()
             # Handle date as either string or date object
-            date_val = txn.get('date', '')
-            date = str(date_val).strip() if date_val else ''
-            merchant = txn.get('merchant', '').strip()
+            date_val = txn.get("date", "")
+            date = str(date_val).strip() if date_val else ""
+            merchant = txn.get("merchant", "").strip()
 
             direction_label = "INCOME" if direction.lower() == "in" else "EXPENSE"
             line = f"{i}. [{direction_label}] {desc}"
@@ -294,13 +321,13 @@ Never include amounts or actual monetary values in your analysis."""
                 context_parts.append(f"Merchant: {merchant}")
 
             # Add all enrichment sources with labeled context
-            enrichment_sources = txn.get('enrichment_sources', [])
+            enrichment_sources = txn.get("enrichment_sources", [])
             if enrichment_sources and isinstance(enrichment_sources, list):
                 for source in enrichment_sources:
-                    source_type = source.get('source_type', 'unknown')
-                    source_desc = source.get('description', '').strip()
+                    source_type = source.get("source_type", "unknown")
+                    source_desc = source.get("description", "").strip()
                     if source_desc:
-                        label = self.SOURCE_TYPE_LABELS.get(source_type, 'Details')
+                        label = self.SOURCE_TYPE_LABELS.get(source_type, "Details")
                         context_parts.append(f"{label}: {source_desc}")
 
             if context_parts:
@@ -314,7 +341,9 @@ Never include amounts or actual monetary values in your analysis."""
 
 Return the enriched data as a JSON array with one object per transaction, in the same order."""
 
-    def _parse_enrichment_response(self, response_text: str, num_transactions: int) -> List[TransactionEnrichment]:
+    def _parse_enrichment_response(
+        self, response_text: str, num_transactions: int
+    ) -> list[TransactionEnrichment]:
         """
         Parse enrichment response from LLM.
 
@@ -347,7 +376,9 @@ Return the enriched data as a JSON array with one object per transaction, in the
                         subcategory=item.get("subcategory", ""),
                         merchant_clean_name=item.get("merchant_clean_name", ""),
                         merchant_type=item.get("merchant_type", ""),
-                        essential_discretionary=item.get("essential_discretionary", "Discretionary"),
+                        essential_discretionary=item.get(
+                            "essential_discretionary", "Discretionary"
+                        ),
                         payment_method=item.get("payment_method", "Unknown"),
                         payment_method_subtype=item.get("payment_method_subtype"),
                         purchase_date=item.get("purchase_date", ""),

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "spending-app": {
+      "command": "/home/kaihaan/prj/spending/backend/mcp_server/run.sh",
+      "args": [],
+      "env": {
+        "FLASK_API_URL": "http://localhost:5000",
+        "LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}

@@ -6,20 +6,16 @@ Supports multiple LLM providers (Anthropic, OpenAI, Google, DeepSeek, Ollama).
 """
 
 import json
-from typing import Optional
 
 from mcp.logging_config import get_logger
+
 from .utilities import normalize_merchant_name
 
 # Initialize logger
 logger = get_logger(__name__)
 
 
-def extract_with_llm(
-    subject: str,
-    sender: str,
-    body_text: str
-) -> Optional[dict]:
+def extract_with_llm(subject: str, sender: str, body_text: str) -> dict | None:
     """
     Extract receipt data using LLM.
 
@@ -35,13 +31,13 @@ def extract_with_llm(
         Parsed receipt dictionary or None
     """
     try:
-        from config.llm_config import load_llm_config, LLMProvider
+        from config.llm_config import LLMProvider, load_llm_config
         from mcp.llm_providers import (
             AnthropicProvider,
-            OpenAIProvider,
-            GoogleProvider,
             DeepseekProvider,
+            GoogleProvider,
             OllamaProvider,
+            OpenAIProvider,
         )
     except ImportError as e:
         logger.warning(f"LLM providers not available: {e}")
@@ -131,32 +127,40 @@ Important:
         content = response.content.strip()
 
         # Handle markdown code blocks
-        if '```json' in content:
-            content = content.split('```json')[1].split('```')[0].strip()
-        elif '```' in content:
-            content = content.split('```')[1].split('```')[0].strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
 
         parsed = json.loads(content)
 
         # Calculate cost in cents
         cost_cents = 0
-        if hasattr(response, 'total_tokens') and hasattr(response, 'cost_per_1k_tokens'):
-            cost_cents = int((response.total_tokens / 1000) * response.cost_per_1k_tokens * 100)
-        elif hasattr(response, 'cost'):
+        if hasattr(response, "total_tokens") and hasattr(
+            response, "cost_per_1k_tokens"
+        ):
+            cost_cents = int(
+                (response.total_tokens / 1000) * response.cost_per_1k_tokens * 100
+            )
+        elif hasattr(response, "cost"):
             cost_cents = int(response.cost * 100)
 
         return {
-            'merchant_name': parsed.get('merchant_name'),
-            'merchant_name_normalized': normalize_merchant_name(parsed.get('merchant_name')),
-            'order_id': parsed.get('order_id'),
-            'total_amount': float(parsed['total_amount']) if parsed.get('total_amount') else None,
-            'currency_code': parsed.get('currency_code', 'GBP'),
-            'receipt_date': parsed.get('receipt_date'),
-            'line_items': parsed.get('line_items'),
-            'parse_method': 'llm',
-            'parse_confidence': 70,
-            'parsing_status': 'parsed',
-            'llm_cost_cents': cost_cents,
+            "merchant_name": parsed.get("merchant_name"),
+            "merchant_name_normalized": normalize_merchant_name(
+                parsed.get("merchant_name")
+            ),
+            "order_id": parsed.get("order_id"),
+            "total_amount": float(parsed["total_amount"])
+            if parsed.get("total_amount")
+            else None,
+            "currency_code": parsed.get("currency_code", "GBP"),
+            "receipt_date": parsed.get("receipt_date"),
+            "line_items": parsed.get("line_items"),
+            "parse_method": "llm",
+            "parse_confidence": 70,
+            "parsing_status": "parsed",
+            "llm_cost_cents": cost_cents,
         }
 
     except json.JSONDecodeError as e:

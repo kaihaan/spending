@@ -1,0 +1,59 @@
+# Pre-commit hooks for code quality
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Ruff - Fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.5
+    hooks:
+      # Run the linter
+      - id: ruff
+        args: [--fix]
+        files: ^backend/
+      # Run the formatter
+      - id: ruff-format
+        files: ^backend/
+
+  # Pyright - Type checking (optional - can be slow)
+  # Uncomment to enable type checking on every commit
+  # - repo: https://github.com/RobertCraigie/pyright-python
+  #   rev: v1.1.400
+  #   hooks:
+  #     - id: pyright
+  #       files: ^backend/(mcp|tasks|config|database|routes|services|mcp_server)/
+
+  # ESLint - Frontend linting (disabled - needs eslint.config.js setup)
+  # Uncomment after creating frontend/eslint.config.js
+  # - repo: https://github.com/pre-commit/mirrors-eslint
+  #   rev: v9.17.0
+  #   hooks:
+  #     - id: eslint
+  #       files: ^frontend/src/.*\.[jt]sx?$
+  #       types: [file]
+  #       args: [--fix, --max-warnings=0]
+  #       additional_dependencies:
+  #         - eslint@9.36.0
+  #         - '@eslint/js@9.36.0'
+  #         - '@typescript-eslint/parser@8.20.0'
+  #         - '@typescript-eslint/eslint-plugin@8.20.0'
+  #         - typescript-eslint@8.20.0
+  #         - eslint-plugin-react-hooks@5.2.0
+  #         - eslint-plugin-react-refresh@0.4.22
+  #         - globals@16.4.0
+  #         - typescript@5.9.3
+
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        exclude: ^frontend/
+      - id: check-json
+        exclude: ^(frontend/tsconfig.*\.json|\.vscode/.*\.json)$  # JSONC files (support comments)
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: detect-private-key

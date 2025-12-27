@@ -11,32 +11,33 @@ Documentation: https://developer-docs.amazon.com/amazon-business/docs/website-au
 """
 
 import os
-import requests
 import secrets
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
+
+import requests
 from cryptography.fernet import Fernet
 
 # Login with Amazon (LWA) endpoints for Amazon Business API
 # Regional OAuth URLs by region
 AMAZON_BUSINESS_OAUTH_URLS = {
-    'UK': 'https://www.amazon.co.uk/b2b/abws/oauth',
-    'DE': 'https://www.amazon.de/b2b/abws/oauth',
-    'FR': 'https://www.amazon.fr/b2b/abws/oauth',
-    'ES': 'https://www.amazon.es/b2b/abws/oauth',
-    'IT': 'https://www.amazon.it/b2b/abws/oauth',
-    'US': 'https://www.amazon.com/b2b/abws/oauth',
-    'CA': 'https://www.amazon.ca/b2b/abws/oauth',
-    'MX': 'https://www.amazon.com.mx/b2b/abws/oauth',
-    'JP': 'https://www.amazon.co.jp/b2b/abws/oauth',
-    'AU': 'https://www.amazon.com.au/b2b/abws/oauth'
+    "UK": "https://www.amazon.co.uk/b2b/abws/oauth",
+    "DE": "https://www.amazon.de/b2b/abws/oauth",
+    "FR": "https://www.amazon.fr/b2b/abws/oauth",
+    "ES": "https://www.amazon.es/b2b/abws/oauth",
+    "IT": "https://www.amazon.it/b2b/abws/oauth",
+    "US": "https://www.amazon.com/b2b/abws/oauth",
+    "CA": "https://www.amazon.ca/b2b/abws/oauth",
+    "MX": "https://www.amazon.com.mx/b2b/abws/oauth",
+    "JP": "https://www.amazon.co.jp/b2b/abws/oauth",
+    "AU": "https://www.amazon.com.au/b2b/abws/oauth",
 }
 
 # Token exchange endpoint (same for all regions)
 LWA_TOKEN_URL = "https://api.amazon.com/auth/o2/token"
 
 # Encryption for token storage
-ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 cipher = Fernet(ENCRYPTION_KEY.encode()) if ENCRYPTION_KEY else None
 
 
@@ -49,11 +50,11 @@ def get_client_credentials():
     Raises:
         ValueError: If required credentials are missing
     """
-    client_id = os.getenv('AMAZON_BUSINESS_CLIENT_ID')
-    client_secret = os.getenv('AMAZON_BUSINESS_CLIENT_SECRET')
+    client_id = os.getenv("AMAZON_BUSINESS_CLIENT_ID")
+    client_secret = os.getenv("AMAZON_BUSINESS_CLIENT_SECRET")
     redirect_uri = os.getenv(
-        'AMAZON_BUSINESS_REDIRECT_URI',
-        'http://localhost:5000/api/amazon-business/callback'
+        "AMAZON_BUSINESS_REDIRECT_URI",
+        "http://localhost:5000/api/amazon-business/callback",
     )
 
     if not client_id or not client_secret:
@@ -75,7 +76,7 @@ def generate_state_token() -> str:
     return secrets.token_hex(16)
 
 
-def get_authorization_url(state: str = None, region: str = 'UK') -> dict:
+def get_authorization_url(state: str = None, region: str = "UK") -> dict:
     """Generate OAuth authorization URL for Amazon Business API.
 
     CRITICAL: Amazon Business API uses different parameters than SP-API:
@@ -96,22 +97,21 @@ def get_authorization_url(state: str = None, region: str = 'UK') -> dict:
         state = generate_state_token()
 
     # Get regional OAuth URL
-    oauth_base_url = AMAZON_BUSINESS_OAUTH_URLS.get(region, AMAZON_BUSINESS_OAUTH_URLS['UK'])
+    oauth_base_url = AMAZON_BUSINESS_OAUTH_URLS.get(
+        region, AMAZON_BUSINESS_OAUTH_URLS["UK"]
+    )
 
     # Amazon Business API specific parameters
     params = {
         "applicationId": client_id,  # Note: 'applicationId', not 'application_id'
         "state": state,
-        "redirect_uri": redirect_uri
+        "redirect_uri": redirect_uri,
         # Note: NO 'version' parameter (unlike SP-API)
     }
 
     authorization_url = f"{oauth_base_url}?{urlencode(params)}"
 
-    return {
-        "authorization_url": authorization_url,
-        "state": state
-    }
+    return {"authorization_url": authorization_url, "state": state}
 
 
 def exchange_code_for_tokens(code: str) -> dict:
@@ -143,16 +143,16 @@ def exchange_code_for_tokens(code: str) -> dict:
             "code": code,
             "client_id": client_id,
             "client_secret": client_secret,
-            "redirect_uri": redirect_uri
+            "redirect_uri": redirect_uri,
         },
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
 
     if response.status_code != 200:
         error_data = response.json()
-        error_msg = error_data.get('error_description', error_data.get('error', 'Unknown error'))
+        error_msg = error_data.get(
+            "error_description", error_data.get("error", "Unknown error")
+        )
         raise Exception(f"Amazon Business API token exchange failed: {error_msg}")
 
     return response.json()
@@ -184,16 +184,16 @@ def refresh_access_token(refresh_token: str) -> dict:
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": client_id,
-            "client_secret": client_secret
+            "client_secret": client_secret,
         },
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
 
     if response.status_code != 200:
         error_data = response.json()
-        error_msg = error_data.get('error_description', error_data.get('error', 'Unknown error'))
+        error_msg = error_data.get(
+            "error_description", error_data.get("error", "Unknown error")
+        )
         raise Exception(f"Amazon Business API token refresh failed: {error_msg}")
 
     return response.json()
@@ -259,35 +259,30 @@ def get_valid_access_token(connection: dict) -> str:
     import database_postgres as database
 
     # Decrypt stored token
-    access_token = decrypt_token(connection['access_token'])
+    access_token = decrypt_token(connection["access_token"])
 
     # Check if token needs refresh
-    if is_token_expired(connection['token_expires_at']):
+    if is_token_expired(connection["token_expires_at"]):
         print("[Amazon Business API] Access token expired, refreshing...")
 
         # Decrypt refresh token
-        refresh_token = decrypt_token(connection['refresh_token'])
+        refresh_token = decrypt_token(connection["refresh_token"])
 
         # Get new tokens
         tokens = refresh_access_token(refresh_token)
 
         # Calculate new expiry
-        expires_at = datetime.now() + timedelta(seconds=tokens['expires_in'])
+        expires_at = datetime.now() + timedelta(seconds=tokens["expires_in"])
 
         # Encrypt new tokens
-        new_access_token = encrypt_token(tokens['access_token'])
-        new_refresh_token = encrypt_token(
-            tokens.get('refresh_token', refresh_token)
-        )
+        new_access_token = encrypt_token(tokens["access_token"])
+        new_refresh_token = encrypt_token(tokens.get("refresh_token", refresh_token))
 
         # Update tokens in database
         database.update_amazon_business_tokens(
-            connection['id'],
-            new_access_token,
-            new_refresh_token,
-            expires_at
+            connection["id"], new_access_token, new_refresh_token, expires_at
         )
 
-        return tokens['access_token']
+        return tokens["access_token"]
 
     return access_token

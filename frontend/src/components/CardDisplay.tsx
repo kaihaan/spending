@@ -44,7 +44,7 @@ export default function CardDisplay({ card }: Props) {
   };
 
   const getCardTypeDisplay = (type: string): string => {
-    const typeMap: { [key: string]: string } = {
+    const typeMap: Record<string, string> = {
       'CREDIT_CARD': 'Credit Card',
       'DEBIT_CARD': 'Debit Card',
       'PREPAID_CARD': 'Prepaid Card',

@@ -474,4 +474,3 @@ This analysis provides a complete understanding of the TrueLayer transaction imp
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2025-11-28 | Initial complete analysis and documentation |
-

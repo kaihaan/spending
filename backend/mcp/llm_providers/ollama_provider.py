@@ -5,10 +5,16 @@ Supports any Ollama-compatible model running on localhost:11434
 """
 
 import time
-import requests
-from typing import List, Dict, Optional
 
-from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats, AccountInfo, LLMResponse
+import requests
+
+from .base_provider import (
+    AccountInfo,
+    BaseLLMProvider,
+    LLMResponse,
+    ProviderStats,
+    TransactionEnrichment,
+)
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -22,8 +28,8 @@ class OllamaProvider(BaseLLMProvider):
         model: str = "mistral:7b",
         timeout: int = 30,
         debug: bool = False,
-        api_base_url: Optional[str] = None,
-        cost_per_token: Optional[float] = None
+        api_base_url: str | None = None,
+        cost_per_token: float | None = None,
     ):
         """
         Initialize Ollama provider.
@@ -60,7 +66,9 @@ class OllamaProvider(BaseLLMProvider):
 
             if response.status_code != 200:
                 if self.debug:
-                    print(f"Ollama health check failed with status {response.status_code}")
+                    print(
+                        f"Ollama health check failed with status {response.status_code}"
+                    )
                 return False
 
             # Check if model is available
@@ -81,10 +89,8 @@ class OllamaProvider(BaseLLMProvider):
             return False
 
     def enrich_transactions(
-        self,
-        transactions: List[Dict[str, str]],
-        direction: str = "out"
-    ) -> tuple[List[TransactionEnrichment], ProviderStats]:
+        self, transactions: list[dict[str, str]], direction: str = "out"
+    ) -> tuple[list[TransactionEnrichment], ProviderStats]:
         """
         Enrich transactions using local Ollama model.
 
@@ -102,7 +108,7 @@ class OllamaProvider(BaseLLMProvider):
                 response_time_ms=0,
                 batch_size=0,
                 success_count=0,
-                failure_count=0
+                failure_count=0,
             )
 
         system_prompt = self._build_system_prompt()
@@ -126,17 +132,19 @@ class OllamaProvider(BaseLLMProvider):
                     "temperature": 0.3,  # Lower temperature for consistent results
                     "top_p": 0.9,
                     "top_k": 40,
-                }
+                },
             }
 
             response = requests.post(
                 url,
                 json=payload,
-                timeout=self.timeout * 2  # Longer timeout for local inference
+                timeout=self.timeout * 2,  # Longer timeout for local inference
             )
 
             if response.status_code != 200:
-                raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
+                raise Exception(
+                    f"Ollama API error: {response.status_code} - {response.text}"
+                )
 
             response_data = response.json()
             response_time_ms = (time.time() - start_time) * 1000
@@ -150,7 +158,9 @@ class OllamaProvider(BaseLLMProvider):
             total_tokens = input_tokens + output_tokens
 
             # Parse enrichments
-            enrichments = self._parse_enrichment_response(response_text, len(transactions))
+            enrichments = self._parse_enrichment_response(
+                response_text, len(transactions)
+            )
 
             # Calculate cost based on token usage
             cost = total_tokens * self.cost_per_token
@@ -161,7 +171,7 @@ class OllamaProvider(BaseLLMProvider):
                 response_time_ms=response_time_ms,
                 batch_size=len(transactions),
                 success_count=len(enrichments),
-                failure_count=len(transactions) - len(enrichments)
+                failure_count=len(transactions) - len(enrichments),
             )
 
             return enrichments, stats
@@ -207,7 +217,7 @@ class OllamaProvider(BaseLLMProvider):
                 return AccountInfo(
                     provider="ollama",
                     available=False,
-                    error=f"Ollama service returned status {tags_response.status_code}"
+                    error=f"Ollama service returned status {tags_response.status_code}",
                 )
 
             models = tags_response.json().get("models", [])
@@ -225,7 +235,7 @@ class OllamaProvider(BaseLLMProvider):
                     # Calculate total VRAM usage
                     total_vram = sum(m.get("size_vram", 0) for m in running)
                     if total_vram > 0:
-                        vram_used_gb = round(total_vram / (1024 ** 3), 2)
+                        vram_used_gb = round(total_vram / (1024**3), 2)
             except Exception:
                 pass  # ps endpoint may not be available in older versions
 
@@ -233,7 +243,7 @@ class OllamaProvider(BaseLLMProvider):
                 "status": "running",
                 "available_models": len(model_names),
                 "running_models": len(running_models),
-                "host": self.base_url
+                "host": self.base_url,
             }
             if vram_used_gb is not None:
                 extra_data["vram_used_gb"] = vram_used_gb
@@ -243,14 +253,14 @@ class OllamaProvider(BaseLLMProvider):
                 available=True,
                 balance=None,  # Local - no billing
                 subscription_tier="Local (Free)",
-                extra=extra_data
+                extra=extra_data,
             )
 
         except requests.exceptions.RequestException as e:
             return AccountInfo(
                 provider="ollama",
                 available=False,
-                error=f"Could not connect to Ollama at {self.base_url}: {str(e)}"
+                error=f"Could not connect to Ollama at {self.base_url}: {str(e)}",
             )
 
     def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
@@ -281,17 +291,15 @@ class OllamaProvider(BaseLLMProvider):
                     "temperature": 0.3,
                     "top_p": 0.9,
                     "top_k": 40,
-                }
+                },
             }
 
-            response = requests.post(
-                url,
-                json=payload,
-                timeout=self.timeout * 2
-            )
+            response = requests.post(url, json=payload, timeout=self.timeout * 2)
 
             if response.status_code != 200:
-                raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
+                raise Exception(
+                    f"Ollama API error: {response.status_code} - {response.text}"
+                )
 
             response_data = response.json()
 
@@ -311,7 +319,7 @@ class OllamaProvider(BaseLLMProvider):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                cost=cost
+                cost=cost,
             )
 
         except Exception as e:

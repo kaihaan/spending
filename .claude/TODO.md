@@ -1,7 +1,7 @@
 TODO:
 1. Add smart recategorise feature - keeps record of recatorgisations, so I can evaluate what needs ot be improved
     - repeat LLM for amazon enriched to analyse anazon spend
-    - add email reciept 
+    - add email reciept
     - run gmail.md plan!!!
     - change column chooser to RHS drawer - OVER table
 2. add monthly averga

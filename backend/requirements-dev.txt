@@ -1,0 +1,14 @@
+# Development dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Code quality tools
+ruff>=0.8.0
+pyright>=1.1.400
+
+# Testing
+pytest>=8.0.0
+pytest-cov>=6.0.0
+pytest-asyncio>=0.24.0
+
+# Pre-commit hooks (optional)
+pre-commit>=4.0.0

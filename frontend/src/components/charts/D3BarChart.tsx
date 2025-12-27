@@ -2,7 +2,7 @@ import { useRef, useEffect, useState } from 'react';
 import * as d3 from 'd3';
 
 interface D3BarChartProps {
-  data: Array<{ label: string; value: number }>;
+  data: { label: string; value: number }[];
   height?: number;
   onBarClick?: (label: string) => void;
 }

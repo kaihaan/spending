@@ -43,7 +43,7 @@ export default function AccountCard({ account }: Props) {
   };
 
   const getAccountTypeDisplay = (type: string): string => {
-    const typeMap: { [key: string]: string } = {
+    const typeMap: Record<string, string> = {
       'TRANSACTION_ACCOUNT': 'Transaction',
       'SAVINGS_ACCOUNT': 'Savings',
       'CREDIT_CARD': 'Credit Card',

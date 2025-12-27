@@ -14,18 +14,21 @@ These are helper endpoints for development, testing, and system monitoring.
 Routes are thin controllers that delegate to utilities_service for business logic.
 """
 
-from flask import Blueprint, request, jsonify
-from services import utilities_service
 import traceback
 
-utilities_bp = Blueprint('utilities', __name__, url_prefix='/api')
+from flask import Blueprint, jsonify, request
+
+from services import utilities_service
+
+utilities_bp = Blueprint("utilities", __name__, url_prefix="/api")
 
 
 # ============================================================================
 # Cache Statistics
 # ============================================================================
 
-@utilities_bp.route('/cache/stats', methods=['GET'])
+
+@utilities_bp.route("/cache/stats", methods=["GET"])
 def get_cache_stats():
     """
     Get Redis cache statistics.
@@ -54,14 +57,15 @@ def get_cache_stats():
     except Exception as e:
         print(f"❌ Cache stats error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Pre-Enrichment Status Tracking
 # ============================================================================
 
-@utilities_bp.route('/pre-enrichment/summary', methods=['GET'])
+
+@utilities_bp.route("/pre-enrichment/summary", methods=["GET"])
 def get_pre_enrichment_summary():
     """
     Get summary of identified transactions by vendor.
@@ -91,10 +95,10 @@ def get_pre_enrichment_summary():
     except Exception as e:
         print(f"❌ Pre-enrichment summary error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@utilities_bp.route('/pre-enrichment/backfill', methods=['POST'])
+@utilities_bp.route("/pre-enrichment/backfill", methods=["POST"])
 def backfill_pre_enrichment():
     """
     Backfill pre_enrichment_status for all existing transactions.
@@ -131,23 +135,26 @@ def backfill_pre_enrichment():
     try:
         counts = utilities_service.backfill_pre_enrichment_status()
 
-        return jsonify({
-            'success': True,
-            'counts': counts,
-            'message': f"Analyzed {sum(counts.values())} transactions"
-        })
+        return jsonify(
+            {
+                "success": True,
+                "counts": counts,
+                "message": f"Analyzed {sum(counts.values())} transactions",
+            }
+        )
 
     except Exception as e:
         print(f"❌ Backfill pre-enrichment error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Active Job Monitoring
 # ============================================================================
 
-@utilities_bp.route('/preai/jobs/active', methods=['GET'])
+
+@utilities_bp.route("/preai/jobs/active", methods=["GET"])
 def get_active_preai_jobs():
     """
     Get all active Pre-AI jobs for the current user.
@@ -182,7 +189,7 @@ def get_active_preai_jobs():
         }
     """
     try:
-        user_id = int(request.args.get('user_id', 1))
+        user_id = int(request.args.get("user_id", 1))
         jobs = utilities_service.get_active_jobs(user_id)
 
         return jsonify(jobs)
@@ -190,14 +197,15 @@ def get_active_preai_jobs():
     except Exception as e:
         print(f"❌ Active jobs error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Testing Data Cleanup
 # ============================================================================
 
-@utilities_bp.route('/testing/clear', methods=['POST'])
+
+@utilities_bp.route("/testing/clear", methods=["POST"])
 def clear_testing_data():
     """
     Clear selected data types for testing purposes.
@@ -241,33 +249,28 @@ def clear_testing_data():
     """
     try:
         # Get and parse types parameter
-        types_str = request.args.get('types', '').strip()
-        types_list = [t.strip() for t in types_str.split(',') if t.strip()]
+        types_str = request.args.get("types", "").strip()
+        types_list = [t.strip() for t in types_str.split(",") if t.strip()]
 
         result = utilities_service.clear_testing_data(types_list)
         return jsonify(result), 200
 
     except ValueError as e:
         # Validation errors (invalid types, empty list, etc.)
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
+        return jsonify({"success": False, "error": str(e)}), 400
 
     except Exception as e:
         print(f"❌ Clear testing data error: {e}")
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ============================================================================
 # Storage Status Monitoring
 # ============================================================================
 
-@utilities_bp.route('/storage/status', methods=['GET'])
+
+@utilities_bp.route("/storage/status", methods=["GET"])
 def get_storage_status():
     """
     Get MinIO storage status and statistics.
@@ -310,17 +313,15 @@ def get_storage_status():
     except Exception as e:
         print(f"❌ Storage status error: {e}")
         traceback.print_exc()
-        return jsonify({
-            'error': str(e),
-            'minio_available': False
-        }), 500
+        return jsonify({"error": str(e), "minio_available": False}), 500
 
 
 # ============================================================================
 # Enrichment Source Details
 # ============================================================================
 
-@utilities_bp.route('/enrichment-sources/<int:source_id>/details', methods=['GET'])
+
+@utilities_bp.route("/enrichment-sources/<int:source_id>/details", methods=["GET"])
 def get_enrichment_source_details(source_id):
     """
     Fetch full details from the source table for an enrichment source.
@@ -356,9 +357,9 @@ def get_enrichment_source_details(source_id):
 
     except ValueError as e:
         # Source not found
-        return jsonify({'error': str(e)}), 404
+        return jsonify({"error": str(e)}), 404
 
     except Exception as e:
         print(f"❌ Enrichment source details error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500

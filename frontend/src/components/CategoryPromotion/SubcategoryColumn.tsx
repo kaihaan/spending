@@ -1,4 +1,4 @@
-import { Subcategory } from './types';
+import type { Subcategory } from './types';
 
 interface SubcategoryColumnProps {
   subcategories: Subcategory[];

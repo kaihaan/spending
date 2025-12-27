@@ -1,19 +1,20 @@
 """Celery tasks for Gmail receipt processing."""
 
 from datetime import datetime, timedelta
-from celery_app import celery_app
+
 import database_postgres as db
+from celery_app import celery_app
 
 
 @celery_app.task(bind=True, time_limit=1800, soft_time_limit=1700)
 def sync_gmail_receipts_task(
     self,
     connection_id: int,
-    sync_type: str = 'auto',
+    sync_type: str = "auto",
     job_id: int = None,
     from_date_str: str = None,
     to_date_str: str = None,
-    force_reparse: bool = False
+    force_reparse: bool = False,
 ):
     """
     Celery task to sync Gmail receipts in the background.
@@ -36,124 +37,141 @@ def sync_gmail_receipts_task(
         from_date = datetime.fromisoformat(from_date_str) if from_date_str else None
         to_date = datetime.fromisoformat(to_date_str) if to_date_str else None
 
-        self.update_state(state='STARTED', meta={
-            'status': 'initializing',
-            'connection_id': connection_id,
-            'job_id': job_id,
-            'from_date': from_date_str,
-            'to_date': to_date_str,
-        })
+        self.update_state(
+            state="STARTED",
+            meta={
+                "status": "initializing",
+                "connection_id": connection_id,
+                "job_id": job_id,
+                "from_date": from_date_str,
+                "to_date": to_date_str,
+            },
+        )
 
         # Get connection info
         connection = db.get_gmail_connection_by_id(connection_id)
         if not connection:
-            return {
-                'status': 'failed',
-                'error': 'Connection not found'
-            }
+            return {"status": "failed", "error": "Connection not found"}
 
         # Determine sync type
-        if sync_type == 'auto':
+        if sync_type == "auto":
             # Use incremental if we have a history ID
-            if connection.get('history_id'):
-                sync_type = 'incremental'
+            if connection.get("history_id"):
+                sync_type = "incremental"
             else:
-                sync_type = 'full'
+                sync_type = "full"
 
         results = {
-            'total_messages': 0,
-            'processed': 0,
-            'parsed': 0,
-            'failed': 0,
-            'duplicates': 0,
+            "total_messages": 0,
+            "processed": 0,
+            "parsed": 0,
+            "failed": 0,
+            "duplicates": 0,
         }
 
-        if sync_type == 'incremental':
-            self.update_state(state='PROGRESS', meta={
-                'status': 'syncing',
-                'sync_type': 'incremental',
-                'connection_id': connection_id,
-                'job_id': job_id,
-            })
+        if sync_type == "incremental":
+            self.update_state(
+                state="PROGRESS",
+                meta={
+                    "status": "syncing",
+                    "sync_type": "incremental",
+                    "connection_id": connection_id,
+                    "job_id": job_id,
+                },
+            )
 
-            result = sync_receipts_incremental(connection_id, job_id=job_id, force_reparse=force_reparse)
+            result = sync_receipts_incremental(
+                connection_id, job_id=job_id, force_reparse=force_reparse
+            )
 
-            if result.get('error'):
-                return {
-                    'status': 'failed',
-                    'error': result['error']
-                }
+            if result.get("error"):
+                return {"status": "failed", "error": result["error"]}
 
             results = {
-                'total_messages': result.get('new_messages', 0),
-                'processed': result.get('new_messages', 0),
-                'parsed': result.get('parsed', 0),
-                'failed': result.get('failed', 0),
-                'duplicates': result.get('duplicates', 0),
+                "total_messages": result.get("new_messages", 0),
+                "processed": result.get("new_messages", 0),
+                "parsed": result.get("parsed", 0),
+                "failed": result.get("failed", 0),
+                "duplicates": result.get("duplicates", 0),
             }
-            job_id = result.get('job_id', job_id)
+            job_id = result.get("job_id", job_id)
         else:
             # Full sync with progress tracking
-            for progress in sync_receipts_full(connection_id, from_date=from_date, to_date=to_date, job_id=job_id, force_reparse=force_reparse):
-                status = progress.get('status')
+            for progress in sync_receipts_full(
+                connection_id,
+                from_date=from_date,
+                to_date=to_date,
+                job_id=job_id,
+                force_reparse=force_reparse,
+            ):
+                status = progress.get("status")
 
-                if status == 'started':
-                    job_id = progress.get('job_id', job_id)
-                    self.update_state(state='PROGRESS', meta={
-                        'status': 'started',
-                        'sync_type': 'full',
-                        'job_id': job_id,
-                        'from_date': progress.get('from_date'),
-                        'to_date': progress.get('to_date'),
-                        'connection_id': connection_id,
-                    })
+                if status == "started":
+                    job_id = progress.get("job_id", job_id)
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "status": "started",
+                            "sync_type": "full",
+                            "job_id": job_id,
+                            "from_date": progress.get("from_date"),
+                            "to_date": progress.get("to_date"),
+                            "connection_id": connection_id,
+                        },
+                    )
 
-                elif status == 'scanning':
-                    self.update_state(state='PROGRESS', meta={
-                        'status': 'scanning',
-                        'sync_type': 'full',
-                        'job_id': job_id,
-                        'total_messages': progress.get('total_messages', 0),
-                        'processed': 0,
-                        'connection_id': connection_id,
-                    })
+                elif status == "scanning":
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "status": "scanning",
+                            "sync_type": "full",
+                            "job_id": job_id,
+                            "total_messages": progress.get("total_messages", 0),
+                            "processed": 0,
+                            "connection_id": connection_id,
+                        },
+                    )
 
-                elif status == 'processing':
-                    self.update_state(state='PROGRESS', meta={
-                        'status': 'processing',
-                        'sync_type': 'full',
-                        'job_id': job_id,
-                        'total_messages': progress.get('total_messages', 0),
-                        'processed': progress.get('processed', 0),
-                        'parsed': progress.get('parsed', 0),
-                        'failed': progress.get('failed', 0),
-                        'duplicates': progress.get('duplicates', 0),
-                        'connection_id': connection_id,
-                    })
+                elif status == "processing":
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "status": "processing",
+                            "sync_type": "full",
+                            "job_id": job_id,
+                            "total_messages": progress.get("total_messages", 0),
+                            "processed": progress.get("processed", 0),
+                            "parsed": progress.get("parsed", 0),
+                            "failed": progress.get("failed", 0),
+                            "duplicates": progress.get("duplicates", 0),
+                            "connection_id": connection_id,
+                        },
+                    )
 
-                elif status == 'completed':
+                elif status == "completed":
                     results = {
-                        'total_messages': progress.get('total_messages', 0),
-                        'processed': progress.get('processed', 0),
-                        'parsed': progress.get('parsed', 0),
-                        'failed': progress.get('failed', 0),
-                        'duplicates': progress.get('duplicates', 0),
+                        "total_messages": progress.get("total_messages", 0),
+                        "processed": progress.get("processed", 0),
+                        "parsed": progress.get("parsed", 0),
+                        "failed": progress.get("failed", 0),
+                        "duplicates": progress.get("duplicates", 0),
                     }
-                    job_id = progress.get('job_id', job_id)
+                    job_id = progress.get("job_id", job_id)
 
         return {
-            'status': 'completed',
-            'sync_type': sync_type,
-            'job_id': job_id,
-            'stats': results,
-            'completed_at': datetime.now().isoformat()
+            "status": "completed",
+            "sync_type": sync_type,
+            "job_id": job_id,
+            "stats": results,
+            "completed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
         return {
-            'status': 'failed',
-            'error': str(e),
-            'job_id': job_id,
+            "status": "failed",
+            "error": str(e),
+            "job_id": job_id,
         }
 
 
@@ -173,15 +191,15 @@ def parse_gmail_receipts_task(self, connection_id: int, limit: int = 100):
         dict: Parse statistics (will show 0 parsed since parse-on-sync is active)
     """
     return {
-        'status': 'completed',
-        'stats': {
-            'total': 0,
-            'parsed': 0,
-            'failed': 0,
-            'skipped': 0,
+        "status": "completed",
+        "stats": {
+            "total": 0,
+            "parsed": 0,
+            "failed": 0,
+            "skipped": 0,
         },
-        'message': 'Parsing now happens during sync - no separate parse step needed',
-        'completed_at': datetime.now().isoformat()
+        "message": "Parsing now happens during sync - no separate parse step needed",
+        "completed_at": datetime.now().isoformat(),
     }
 
 
@@ -199,30 +217,26 @@ def match_gmail_receipts_task(self, user_id: int = 1):
     try:
         from mcp.gmail_matcher import match_all_gmail_receipts
 
-        self.update_state(state='STARTED', meta={
-            'status': 'initializing',
-            'user_id': user_id
-        })
+        self.update_state(
+            state="STARTED", meta={"status": "initializing", "user_id": user_id}
+        )
 
         results = match_all_gmail_receipts(user_id)
 
         return {
-            'status': 'completed',
-            'stats': {
-                'total_receipts': results.get('total_receipts', 0),
-                'matched': results.get('matched', 0),
-                'unmatched': results.get('unmatched', 0),
-                'auto_matched': results.get('auto_matched', 0),
-                'needs_confirmation': results.get('needs_confirmation', 0),
+            "status": "completed",
+            "stats": {
+                "total_receipts": results.get("total_receipts", 0),
+                "matched": results.get("matched", 0),
+                "unmatched": results.get("unmatched", 0),
+                "auto_matched": results.get("auto_matched", 0),
+                "needs_confirmation": results.get("needs_confirmation", 0),
             },
-            'completed_at': datetime.now().isoformat()
+            "completed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
-        return {
-            'status': 'failed',
-            'error': str(e)
-        }
+        return {"status": "failed", "error": str(e)}
 
 
 @celery_app.task(bind=True, time_limit=300, soft_time_limit=280)
@@ -242,10 +256,9 @@ def cleanup_old_gmail_receipts_task(self, days: int = 90):
         dict: Cleanup statistics
     """
     try:
-        self.update_state(state='STARTED', meta={
-            'status': 'cleaning',
-            'retention_days': days
-        })
+        self.update_state(
+            state="STARTED", meta={"status": "cleaning", "retention_days": days}
+        )
 
         cutoff_date = datetime.now() - timedelta(days=days)
 
@@ -253,20 +266,17 @@ def cleanup_old_gmail_receipts_task(self, days: int = 90):
         deleted = db.delete_old_unmatched_gmail_receipts(cutoff_date)
 
         return {
-            'status': 'completed',
-            'stats': {
-                'deleted_count': deleted,
-                'cutoff_date': cutoff_date.isoformat(),
-                'retention_days': days,
+            "status": "completed",
+            "stats": {
+                "deleted_count": deleted,
+                "cutoff_date": cutoff_date.isoformat(),
+                "retention_days": days,
             },
-            'completed_at': datetime.now().isoformat()
+            "completed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
-        return {
-            'status': 'failed',
-            'error': str(e)
-        }
+        return {"status": "failed", "error": str(e)}
 
 
 @celery_app.task(bind=True, time_limit=900, soft_time_limit=850)
@@ -287,80 +297,70 @@ def full_gmail_pipeline_task(self, connection_id: int, user_id: int = 1):
         dict: Combined statistics from all steps
     """
     try:
-        from mcp.gmail_sync import sync_receipts_full, sync_receipts_incremental
         from mcp.gmail_matcher import match_all_gmail_receipts
+        from mcp.gmail_sync import sync_receipts_full, sync_receipts_incremental
 
         pipeline_results = {
-            'sync': {},
-            'match': {},
+            "sync": {},
+            "match": {},
         }
 
         # Step 1: Sync (parsing happens inline)
-        self.update_state(state='PROGRESS', meta={
-            'status': 'syncing',
-            'step': 1,
-            'total_steps': 2
-        })
+        self.update_state(
+            state="PROGRESS", meta={"status": "syncing", "step": 1, "total_steps": 2}
+        )
 
         connection = db.get_gmail_connection_by_id(connection_id)
         if not connection:
-            return {
-                'status': 'failed',
-                'error': 'Connection not found'
-            }
+            return {"status": "failed", "error": "Connection not found"}
 
-        if connection.get('history_id'):
+        if connection.get("history_id"):
             sync_result = sync_receipts_incremental(connection_id)
-            pipeline_results['sync'] = {
-                'type': 'incremental',
-                'messages_found': sync_result.get('new_messages', 0),
-                'stored': sync_result.get('parsed', 0),
-                'filtered': sync_result.get('filtered', 0),
-                'duplicates': sync_result.get('duplicates', 0),
+            pipeline_results["sync"] = {
+                "type": "incremental",
+                "messages_found": sync_result.get("new_messages", 0),
+                "stored": sync_result.get("parsed", 0),
+                "filtered": sync_result.get("filtered", 0),
+                "duplicates": sync_result.get("duplicates", 0),
             }
         else:
-            sync_results = {'total': 0, 'stored': 0}
+            sync_results = {"total": 0, "stored": 0}
             for progress in sync_receipts_full(connection_id):
-                if progress.get('status') == 'completed':
+                if progress.get("status") == "completed":
                     sync_results = {
-                        'total': progress.get('total_messages', 0),
-                        'stored': progress.get('parsed', 0),
-                        'filtered': progress.get('filtered', 0),
-                        'duplicates': progress.get('duplicates', 0),
+                        "total": progress.get("total_messages", 0),
+                        "stored": progress.get("parsed", 0),
+                        "filtered": progress.get("filtered", 0),
+                        "duplicates": progress.get("duplicates", 0),
                     }
-            pipeline_results['sync'] = {
-                'type': 'full',
-                'messages_found': sync_results['total'],
-                'stored': sync_results.get('stored', 0),
-                'filtered': sync_results.get('filtered', 0),
-                'duplicates': sync_results.get('duplicates', 0),
+            pipeline_results["sync"] = {
+                "type": "full",
+                "messages_found": sync_results["total"],
+                "stored": sync_results.get("stored", 0),
+                "filtered": sync_results.get("filtered", 0),
+                "duplicates": sync_results.get("duplicates", 0),
             }
 
         # Step 2: Match
-        self.update_state(state='PROGRESS', meta={
-            'status': 'matching',
-            'step': 2,
-            'total_steps': 2
-        })
+        self.update_state(
+            state="PROGRESS", meta={"status": "matching", "step": 2, "total_steps": 2}
+        )
 
         match_result = match_all_gmail_receipts(user_id)
-        pipeline_results['match'] = {
-            'total': match_result.get('total_receipts', 0),
-            'matched': match_result.get('matched', 0),
-            'unmatched': match_result.get('unmatched', 0),
+        pipeline_results["match"] = {
+            "total": match_result.get("total_receipts", 0),
+            "matched": match_result.get("matched", 0),
+            "unmatched": match_result.get("unmatched", 0),
         }
 
         return {
-            'status': 'completed',
-            'pipeline': pipeline_results,
-            'completed_at': datetime.now().isoformat()
+            "status": "completed",
+            "pipeline": pipeline_results,
+            "completed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
-        return {
-            'status': 'failed',
-            'error': str(e)
-        }
+        return {"status": "failed", "error": str(e)}
 
 
 @celery_app.task(bind=True, time_limit=120, soft_time_limit=110, max_retries=3)
@@ -371,7 +371,7 @@ def process_pdf_receipt_task(
     attachment_info: dict,
     sender_domain: str,
     connection_id: int,
-    received_date=None
+    received_date=None,
 ):
     """
     Process PDF receipt asynchronously (Phase 2 Optimization).
@@ -391,6 +391,7 @@ def process_pdf_receipt_task(
         dict: Processing result with status and timing
     """
     import time
+
     from celery.utils.log import get_task_logger
 
     logger = get_task_logger(__name__)
@@ -398,18 +399,19 @@ def process_pdf_receipt_task(
 
     try:
         # Update status to 'processing'
-        db.update_gmail_receipt_pdf_status(receipt_id, 'processing')
+        db.update_gmail_receipt_pdf_status(receipt_id, "processing")
         logger.info(f"[PDF] Starting processing for receipt {receipt_id}")
 
         # 1. Fetch PDF content
         fetch_start = time.time()
         pdf_bytes = None
-        filename = attachment_info.get('filename', 'receipt.pdf')
+        filename = attachment_info.get("filename", "receipt.pdf")
 
-        if 'external_url' in attachment_info:
+        if "external_url" in attachment_info:
             # Download from external URL (e.g., Translink)
             import requests
-            url = attachment_info['external_url']
+
+            url = attachment_info["external_url"]
             logger.info(f"[PDF] Downloading from external URL: {url}")
             response = requests.get(url, timeout=30)
             if response.status_code == 200:
@@ -417,26 +419,34 @@ def process_pdf_receipt_task(
             else:
                 raise Exception(f"Failed to download PDF: HTTP {response.status_code}")
 
-        elif 'attachment_id' in attachment_info:
+        elif "attachment_id" in attachment_info:
             # Download from Gmail API
-            from mcp.gmail_client import build_gmail_service, get_pdf_attachments
             from mcp.gmail_auth import get_gmail_credentials
-            logger.info(f"[PDF] Downloading from Gmail attachment: {attachment_info['attachment_id']}")
+            from mcp.gmail_client import build_gmail_service, get_pdf_attachments
+
+            logger.info(
+                f"[PDF] Downloading from Gmail attachment: {attachment_info['attachment_id']}"
+            )
 
             # Get valid credentials (handles token refresh if needed)
-            logger.info(f"[PDF] Refreshing access token if needed...")
+            logger.info("[PDF] Refreshing access token if needed...")
             access_token, refresh_token = get_gmail_credentials(connection_id)
-            logger.info(f"[PDF] Token refresh check complete")
+            logger.info("[PDF] Token refresh check complete")
 
             # Build Gmail service with fresh tokens
             service = build_gmail_service(access_token, refresh_token)
 
             # Download PDF
-            attachments = [{'attachment_id': attachment_info['attachment_id'], 'filename': filename}]
+            attachments = [
+                {
+                    "attachment_id": attachment_info["attachment_id"],
+                    "filename": filename,
+                }
+            ]
             pdf_contents = get_pdf_attachments(service, message_id, attachments)
 
             if pdf_contents and len(pdf_contents) > 0:
-                pdf_bytes = pdf_contents[0]['content']
+                pdf_bytes = pdf_contents[0]["content"]
             else:
                 raise Exception("No PDF content retrieved from Gmail")
         else:
@@ -456,13 +466,15 @@ def process_pdf_receipt_task(
         parse_time = time.time() - parse_start
         logger.info(f"[PERF] PDF parse for receipt {receipt_id}: {parse_time:.3f}s")
 
-        if not pdf_result or pdf_result.get('total_amount') is None:
+        if not pdf_result or pdf_result.get("total_amount") is None:
             # Parsing failed but don't retry
-            db.update_gmail_receipt_pdf_status(receipt_id, 'failed', error='PDF parsing returned no data')
+            db.update_gmail_receipt_pdf_status(
+                receipt_id, "failed", error="PDF parsing returned no data"
+            )
             return {
-                'status': 'failed',
-                'reason': 'parse_failed',
-                'duration': time.time() - task_start
+                "status": "failed",
+                "reason": "parse_failed",
+                "duration": time.time() - task_start,
             }
 
         # 3. Upload to MinIO
@@ -470,15 +482,18 @@ def process_pdf_receipt_task(
         minio_object_key = None
 
         try:
-            from mcp.minio_client import is_available, store_pdf
             from datetime import datetime
+
+            from mcp.minio_client import is_available, store_pdf
 
             if is_available():
                 # Convert received_date to datetime if it's a string
                 minio_received_date = received_date
                 if isinstance(received_date, str):
                     try:
-                        minio_received_date = datetime.fromisoformat(received_date.replace('Z', '+00:00'))
+                        minio_received_date = datetime.fromisoformat(
+                            received_date.replace("Z", "+00:00")
+                        )
                     except Exception:
                         minio_received_date = None
 
@@ -487,7 +502,7 @@ def process_pdf_receipt_task(
                     message_id=message_id,
                     filename=filename,
                     received_date=minio_received_date,
-                    metadata={'merchant': pdf_result.get('merchant_name')}
+                    metadata={"merchant": pdf_result.get("merchant_name")},
                 )
 
                 if minio_result:
@@ -495,14 +510,14 @@ def process_pdf_receipt_task(
                     db.save_pdf_attachment(
                         gmail_receipt_id=receipt_id,
                         message_id=message_id,
-                        bucket_name=minio_result['bucket_name'],
-                        object_key=minio_result['object_key'],
-                        filename=minio_result['filename'],
-                        content_hash=minio_result['content_hash'],
-                        size_bytes=minio_result['size_bytes'],
-                        etag=minio_result['etag']
+                        bucket_name=minio_result["bucket_name"],
+                        object_key=minio_result["object_key"],
+                        filename=minio_result["filename"],
+                        content_hash=minio_result["content_hash"],
+                        size_bytes=minio_result["size_bytes"],
+                        etag=minio_result["etag"],
                     )
-                    minio_object_key = minio_result['object_key']
+                    minio_object_key = minio_result["object_key"]
                     logger.info(f"[PDF] Stored to MinIO: {minio_object_key}")
         except Exception as e:
             # MinIO failure is non-fatal, continue with receipt update
@@ -516,32 +531,36 @@ def process_pdf_receipt_task(
 
         # 5. Set status to 'completed'
         total_time = time.time() - task_start
-        db.update_gmail_receipt_pdf_status(receipt_id, 'completed')
+        db.update_gmail_receipt_pdf_status(receipt_id, "completed")
 
-        logger.info(f"[PERF] Total PDF processing for receipt {receipt_id}: {total_time:.3f}s")
+        logger.info(
+            f"[PERF] Total PDF processing for receipt {receipt_id}: {total_time:.3f}s"
+        )
         return {
-            'status': 'completed',
-            'duration': total_time,
-            'fetch_time': fetch_time,
-            'parse_time': parse_time,
-            'upload_time': upload_time,
-            'merchant': pdf_result.get('merchant_name'),
-            'amount': pdf_result.get('total_amount')
+            "status": "completed",
+            "duration": total_time,
+            "fetch_time": fetch_time,
+            "parse_time": parse_time,
+            "upload_time": upload_time,
+            "merchant": pdf_result.get("merchant_name"),
+            "amount": pdf_result.get("total_amount"),
         }
 
     except Exception as e:
         error_msg = str(e)
         logger.error(f"[PDF] Processing failed for receipt {receipt_id}: {error_msg}")
-        db.update_gmail_receipt_pdf_status(receipt_id, 'failed', error=error_msg)
+        db.update_gmail_receipt_pdf_status(receipt_id, "failed", error=error_msg)
 
         # Retry with exponential backoff
         if self.request.retries < self.max_retries:
-            countdown = 2 ** self.request.retries  # 2, 4, 8 seconds
-            logger.info(f"[PDF] Retrying in {countdown}s (attempt {self.request.retries + 1}/{self.max_retries})")
+            countdown = 2**self.request.retries  # 2, 4, 8 seconds
+            logger.info(
+                f"[PDF] Retrying in {countdown}s (attempt {self.request.retries + 1}/{self.max_retries})"
+            )
             raise self.retry(exc=e, countdown=countdown)
 
         return {
-            'status': 'failed',
-            'error': error_msg,
-            'duration': time.time() - task_start
+            "status": "failed",
+            "error": error_msg,
+            "duration": time.time() - task_start,
         }

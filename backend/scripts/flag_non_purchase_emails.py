@@ -5,15 +5,17 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 DB_CONFIG = {
-    'host': 'localhost',
-    'port': '5433',
-    'user': 'spending_user',
-    'password': 'aC0_Xbvulrw8ldPgU6sa',
-    'database': 'spending_db'
+    "host": "localhost",
+    "port": "5433",
+    "user": "spending_user",
+    "password": "aC0_Xbvulrw8ldPgU6sa",
+    "database": "spending_db",
 }
+
 
 def connect_db():
     return psycopg2.connect(**DB_CONFIG)
+
 
 def flag_non_purchase_emails():
     """Flag emails that are informational only, not actual purchases"""
@@ -121,13 +123,17 @@ def flag_non_purchase_emails():
 
         stats = cursor.fetchone()
 
-        print(f"\n" + "="*80)
+        print("\n" + "=" * 80)
         print("SUMMARY")
-        print("="*80)
+        print("=" * 80)
         print(f"Total receipts: {stats['total']}")
-        print(f"Actual purchases: {stats['purchases']} ({stats['purchases']/stats['total']*100:.1f}%)")
-        print(f"Informational emails: {stats['informational']} ({stats['informational']/stats['total']*100:.1f}%)")
-        print("="*80)
+        print(
+            f"Actual purchases: {stats['purchases']} ({stats['purchases'] / stats['total'] * 100:.1f}%)"
+        )
+        print(
+            f"Informational emails: {stats['informational']} ({stats['informational'] / stats['total'] * 100:.1f}%)"
+        )
+        print("=" * 80)
 
     except Exception as e:
         print(f"Error: {e}")
@@ -137,5 +143,6 @@ def flag_non_purchase_emails():
         cursor.close()
         conn.close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     flag_non_purchase_emails()

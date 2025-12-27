@@ -10,22 +10,25 @@ Handles all LLM enrichment endpoints including:
 Routes are thin controllers that delegate to enrichment_service for business logic.
 """
 
-from flask import Blueprint, request, jsonify, Response, stream_with_context
-from services import enrichment_service
-import traceback
 import json
 import logging
+import traceback
+
+from flask import Blueprint, Response, jsonify, request, stream_with_context
+
+from services import enrichment_service
 
 logger = logging.getLogger(__name__)
 
-enrichment_bp = Blueprint('enrichment', __name__)
+enrichment_bp = Blueprint("enrichment", __name__)
 
 
 # ============================================================================
 # Configuration
 # ============================================================================
 
-@enrichment_bp.route('/api/enrichment/config', methods=['GET'])
+
+@enrichment_bp.route("/api/enrichment/config", methods=["GET"])
 def get_config():
     """
     Get LLM enrichment configuration.
@@ -40,10 +43,10 @@ def get_config():
     except Exception as e:
         print(f"❌ Enrichment config error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@enrichment_bp.route('/api/enrichment/account-info', methods=['GET'])
+@enrichment_bp.route("/api/enrichment/account-info", methods=["GET"])
 def get_account_info():
     """
     Get LLM provider account information (balance, tier, usage).
@@ -58,10 +61,10 @@ def get_account_info():
     except Exception as e:
         print(f"❌ Enrichment account info error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@enrichment_bp.route('/api/enrichment/validate', methods=['POST'])
+@enrichment_bp.route("/api/enrichment/validate", methods=["POST"])
 def validate_config():
     """
     Validate LLM enrichment configuration.
@@ -71,16 +74,16 @@ def validate_config():
     """
     try:
         validation = enrichment_service.validate_config()
-        status_code = 200 if validation['valid'] else 500
+        status_code = 200 if validation["valid"] else 500
         return jsonify(validation), status_code
 
     except Exception as e:
         print(f"❌ Enrichment validation error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@enrichment_bp.route('/api/llm/available-models', methods=['GET'])
+@enrichment_bp.route("/api/llm/available-models", methods=["GET"])
 def get_available_models():
     """
     Get list of available models for all LLM providers.
@@ -95,14 +98,15 @@ def get_available_models():
     except Exception as e:
         print(f"❌ Get available models error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Statistics & Cache
 # ============================================================================
 
-@enrichment_bp.route('/api/enrichment/cache/stats', methods=['GET'])
+
+@enrichment_bp.route("/api/enrichment/cache/stats", methods=["GET"])
 def get_cache_stats():
     """
     Get enrichment cache statistics.
@@ -117,10 +121,10 @@ def get_cache_stats():
     except Exception as e:
         print(f"❌ Enrichment cache stats error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@enrichment_bp.route('/api/enrichment/stats', methods=['GET'])
+@enrichment_bp.route("/api/enrichment/stats", methods=["GET"])
 def get_stats():
     """
     Get overall enrichment statistics for TrueLayer transactions.
@@ -135,10 +139,10 @@ def get_stats():
     except Exception as e:
         print(f"❌ Enrichment stats error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@enrichment_bp.route('/api/enrichment/status', methods=['GET'])
+@enrichment_bp.route("/api/enrichment/status", methods=["GET"])
 def get_status():
     """
     Get enrichment status (alias for /stats).
@@ -153,10 +157,10 @@ def get_status():
     except Exception as e:
         print(f"❌ Enrichment status error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@enrichment_bp.route('/api/enrichment/failed', methods=['GET'])
+@enrichment_bp.route("/api/enrichment/failed", methods=["GET"])
 def get_failed():
     """
     Get failed enrichment records.
@@ -168,21 +172,22 @@ def get_failed():
         Failed enrichments list
     """
     try:
-        limit = request.args.get('limit', 20, type=int)
+        limit = request.args.get("limit", 20, type=int)
         failed = enrichment_service.get_failed_enrichments(limit=limit)
         return jsonify(failed)
 
     except Exception as e:
         print(f"❌ Get failed enrichments error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Cost Estimation & Job Triggering
 # ============================================================================
 
-@enrichment_bp.route('/api/enrichment/estimate', methods=['POST'])
+
+@enrichment_bp.route("/api/enrichment/estimate", methods=["POST"])
 def estimate_cost():
     """
     Estimate cost for enriching TrueLayer transactions.
@@ -196,29 +201,25 @@ def estimate_cost():
     """
     try:
         data = request.get_json() or {}
-        transaction_ids = data.get('transaction_ids')
-        force_refresh = data.get('force_refresh', False)
+        transaction_ids = data.get("transaction_ids")
+        force_refresh = data.get("force_refresh", False)
 
         estimate = enrichment_service.estimate_cost(
-            transaction_ids=transaction_ids,
-            force_refresh=force_refresh
+            transaction_ids=transaction_ids, force_refresh=force_refresh
         )
 
         return jsonify(estimate)
 
     except ValueError as e:
         # LLM not configured
-        return jsonify({
-            'configured': False,
-            'error': str(e)
-        }), 503
+        return jsonify({"configured": False, "error": str(e)}), 503
     except Exception as e:
         print(f"❌ Enrichment estimate error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@enrichment_bp.route('/api/enrichment/trigger', methods=['POST'])
+@enrichment_bp.route("/api/enrichment/trigger", methods=["POST"])
 def trigger_enrichment():
     """
     Start enrichment job (requires cost confirmation).
@@ -233,34 +234,30 @@ def trigger_enrichment():
     """
     try:
         data = request.get_json() or {}
-        transaction_ids = data.get('transaction_ids')
-        force_refresh = data.get('force_refresh', False)
-        confirm_cost = data.get('confirm_cost', False)
+        transaction_ids = data.get("transaction_ids")
+        force_refresh = data.get("force_refresh", False)
+        confirm_cost = data.get("confirm_cost", False)
 
         result = enrichment_service.trigger_enrichment(
             transaction_ids=transaction_ids,
             force_refresh=force_refresh,
-            confirm_cost=confirm_cost
+            confirm_cost=confirm_cost,
         )
 
         return jsonify(result), 202
 
     except ValueError as e:
         # Cost not confirmed or LLM not configured
-        if 'confirmation' in str(e).lower():
-            return jsonify({'error': str(e)}), 400
-        else:
-            return jsonify({
-                'configured': False,
-                'error': str(e)
-            }), 503
+        if "confirmation" in str(e).lower():
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"configured": False, "error": str(e)}), 503
     except Exception as e:
         print(f"❌ Trigger enrichment error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@enrichment_bp.route('/api/enrichment/status/<job_id>', methods=['GET'])
+@enrichment_bp.route("/api/enrichment/status/<job_id>", methods=["GET"])
 def get_job_status(job_id):
     """
     Get enrichment job status by Celery task ID.
@@ -275,17 +272,17 @@ def get_job_status(job_id):
         status = enrichment_service.get_job_status(job_id)
 
         # Check if service indicated a specific HTTP status
-        http_status = status.pop('_http_status', 200)
+        http_status = status.pop("_http_status", 200)
 
         return jsonify(status), http_status
 
     except Exception as e:
         print(f"❌ Enrichment job status error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@enrichment_bp.route('/api/enrichment/retry', methods=['POST'])
+@enrichment_bp.route("/api/enrichment/retry", methods=["POST"])
 def retry_failed():
     """
     Retry failed enrichments.
@@ -298,7 +295,7 @@ def retry_failed():
     """
     try:
         data = request.get_json() or {}
-        transaction_ids = data.get('transaction_ids')
+        transaction_ids = data.get("transaction_ids")
 
         result = enrichment_service.retry_failed(transaction_ids=transaction_ids)
         return jsonify(result), 202
@@ -306,14 +303,15 @@ def retry_failed():
     except Exception as e:
         print(f"❌ Retry enrichment error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Streaming Enrichment (Server-Sent Events)
 # ============================================================================
 
-@enrichment_bp.route('/api/enrichment/enrich-stream', methods=['GET', 'POST'])
+
+@enrichment_bp.route("/api/enrichment/enrich-stream", methods=["GET", "POST"])
 def enrich_stream():
     """
     Start enrichment and stream progress via Server-Sent Events.
@@ -332,21 +330,21 @@ def enrich_stream():
         logger.info(f"enrich-stream endpoint called with method {request.method}")
 
         # Handle both GET (query params) and POST (JSON body) requests
-        if request.method == 'POST':
+        if request.method == "POST":
             data = request.get_json() or {}
         else:
             data = request.args.to_dict()
 
         # Parse parameters
-        transaction_ids = data.get('transaction_ids')
-        mode = data.get('mode', 'required')
-        limit = data.get('limit')
-        direction = data.get('direction', 'out')
+        transaction_ids = data.get("transaction_ids")
+        mode = data.get("mode", "required")
+        limit = data.get("limit")
+        direction = data.get("direction", "out")
 
         # Handle force_refresh as either string (GET) or bool (POST JSON)
-        force_refresh_raw = data.get('force_refresh', False)
+        force_refresh_raw = data.get("force_refresh", False)
         if isinstance(force_refresh_raw, str):
-            force_refresh = force_refresh_raw.lower() == 'true'
+            force_refresh = force_refresh_raw.lower() == "true"
         else:
             force_refresh = bool(force_refresh_raw)
 
@@ -363,7 +361,7 @@ def enrich_stream():
             mode=mode,
             limit=limit,
             direction=direction,
-            force_refresh=force_refresh
+            force_refresh=force_refresh,
         )
 
         def generate_progress_stream():
@@ -377,6 +375,7 @@ def enrich_stream():
             - percentage: 0-100
             """
             import time
+
             from celery.result import AsyncResult
             from celery_app import celery_app
 
@@ -388,46 +387,58 @@ def enrich_stream():
                 try:
                     task_result = AsyncResult(task_id, app=celery_app)
 
-                    if task_result.state == 'PROGRESS':
+                    if task_result.state == "PROGRESS":
                         progress_data = task_result.info or {}
-                        current = progress_data.get('current', 0)
-                        total = progress_data.get('total', len(transaction_ids))
+                        current = progress_data.get("current", 0)
+                        total = progress_data.get("total", len(transaction_ids))
                         percentage = round((current / total * 100) if total > 0 else 0)
 
-                        yield f"data: {json.dumps({
-                            'type': 'progress',
-                            'processed': current,
-                            'total': total,
-                            'percentage': percentage,
-                            'successful': progress_data.get('successful', 0),
-                            'failed': progress_data.get('failed', 0),
-                            'tokens_used': progress_data.get('tokens_used', 0),
-                            'cost': progress_data.get('cost', 0.0)
-                        })}\n\n"
+                        yield f"data: {
+                            json.dumps(
+                                {
+                                    'type': 'progress',
+                                    'processed': current,
+                                    'total': total,
+                                    'percentage': percentage,
+                                    'successful': progress_data.get('successful', 0),
+                                    'failed': progress_data.get('failed', 0),
+                                    'tokens_used': progress_data.get('tokens_used', 0),
+                                    'cost': progress_data.get('cost', 0.0),
+                                }
+                            )
+                        }\n\n"
 
-                    elif task_result.state == 'SUCCESS':
+                    elif task_result.state == "SUCCESS":
                         result = task_result.result or {}
-                        if isinstance(result, dict) and 'stats' in result:
-                            stats = result.get('stats', {})
-                            yield f"data: {json.dumps({
-                                'type': 'complete',
-                                'processed': stats.get('total_transactions', 0),
-                                'total': stats.get('total_transactions', 0),
-                                'percentage': 100,
-                                'successful': stats.get('successful_enrichments', 0),
-                                'failed': stats.get('failed_enrichments', 0),
-                                'total_tokens': stats.get('total_tokens_used', 0),
-                                'total_cost': stats.get('total_cost', 0.0)
-                            })}\n\n"
+                        if isinstance(result, dict) and "stats" in result:
+                            stats = result.get("stats", {})
+                            yield f"data: {
+                                json.dumps(
+                                    {
+                                        'type': 'complete',
+                                        'processed': stats.get('total_transactions', 0),
+                                        'total': stats.get('total_transactions', 0),
+                                        'percentage': 100,
+                                        'successful': stats.get(
+                                            'successful_enrichments', 0
+                                        ),
+                                        'failed': stats.get('failed_enrichments', 0),
+                                        'total_tokens': stats.get(
+                                            'total_tokens_used', 0
+                                        ),
+                                        'total_cost': stats.get('total_cost', 0.0),
+                                    }
+                                )
+                            }\n\n"
                         else:
                             yield f"data: {json.dumps({'type': 'complete', 'result': result})}\n\n"
                         break
 
-                    elif task_result.state == 'FAILURE':
+                    elif task_result.state == "FAILURE":
                         yield f"data: {json.dumps({'type': 'error', 'error': str(task_result.info)})}\n\n"
                         break
 
-                    elif task_result.state == 'PENDING':
+                    elif task_result.state == "PENDING":
                         yield f"data: {json.dumps({'type': 'start', 'processed': 0, 'total': len(transaction_ids), 'percentage': 0, 'message': 'Queued'})}\n\n"
 
                     else:
@@ -441,34 +452,32 @@ def enrich_stream():
 
         return Response(
             stream_with_context(generate_progress_stream()),
-            mimetype='text/event-stream',
+            mimetype="text/event-stream",
             headers={
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                'X-Accel-Buffering': 'no'  # Disable Nginx buffering
-            }
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable Nginx buffering
+            },
         )
 
     except ValueError as e:
         # LLM not configured
         logger.error(f"Enrich-stream config error: {str(e)}")
-        return jsonify({
-            'configured': False,
-            'error': str(e)
-        }), 503
+        return jsonify({"configured": False, "error": str(e)}), 503
     except Exception as e:
         logger.error(f"Enrich-stream endpoint error: {str(e)}")
         logger.error(traceback.format_exc())
         print(f"ERROR in enrich-stream: {str(e)}")
         print(f"TRACEBACK: {traceback.format_exc()}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
 # Enrichment Sources
 # ============================================================================
 
-@enrichment_bp.route('/api/enrichment-sources/<int:source_id>/details', methods=['GET'])
+
+@enrichment_bp.route("/api/enrichment-sources/<int:source_id>/details", methods=["GET"])
 def get_source_details(source_id):
     """
     Fetch full details from the source table for an enrichment source.
@@ -486,4 +495,4 @@ def get_source_details(source_id):
     except Exception as e:
         print(f"❌ Enrichment source details error: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500

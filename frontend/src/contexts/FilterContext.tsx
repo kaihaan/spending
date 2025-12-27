@@ -1,10 +1,12 @@
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import type { Transaction } from '../types';
+import type {
+  TransactionFilters} from '../utils/filterUtils';
 import {
   loadFilters,
   saveFilters,
-  TransactionFilters,
   DEFAULT_FILTERS,
   getFilteredTransactions,
   getFilteredCountForCategory,

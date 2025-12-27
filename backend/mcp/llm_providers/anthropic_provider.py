@@ -4,12 +4,18 @@ Uses Claude models via Anthropic API
 """
 
 import time
-from typing import List, Dict, Optional
 from datetime import datetime
+
 import anthropic
 import requests
 
-from .base_provider import BaseLLMProvider, TransactionEnrichment, ProviderStats, AccountInfo, LLMResponse
+from .base_provider import (
+    AccountInfo,
+    BaseLLMProvider,
+    LLMResponse,
+    ProviderStats,
+    TransactionEnrichment,
+)
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -21,8 +27,8 @@ class AnthropicProvider(BaseLLMProvider):
         model: str = "claude-3-5-sonnet-20241022",
         timeout: int = 30,
         debug: bool = False,
-        api_base_url: Optional[str] = None,
-        admin_api_key: Optional[str] = None
+        api_base_url: str | None = None,
+        admin_api_key: str | None = None,
     ):
         """
         Initialize Anthropic provider.
@@ -52,9 +58,7 @@ class AnthropicProvider(BaseLLMProvider):
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=10,
-                messages=[
-                    {"role": "user", "content": "Say 'OK'"}
-                ]
+                messages=[{"role": "user", "content": "Say 'OK'"}],
             )
             return bool(response)
         except Exception as e:
@@ -63,10 +67,8 @@ class AnthropicProvider(BaseLLMProvider):
             return False
 
     def enrich_transactions(
-        self,
-        transactions: List[Dict[str, str]],
-        direction: str = "out"
-    ) -> tuple[List[TransactionEnrichment], ProviderStats]:
+        self, transactions: list[dict[str, str]], direction: str = "out"
+    ) -> tuple[list[TransactionEnrichment], ProviderStats]:
         """
         Enrich transactions using Claude.
 
@@ -84,7 +86,7 @@ class AnthropicProvider(BaseLLMProvider):
                 response_time_ms=0,
                 batch_size=0,
                 success_count=0,
-                failure_count=0
+                failure_count=0,
             )
 
         system_prompt = self._build_system_prompt()
@@ -97,10 +99,8 @@ class AnthropicProvider(BaseLLMProvider):
                 model=self.model,
                 max_tokens=4096,
                 system=system_prompt,
-                messages=[
-                    {"role": "user", "content": user_prompt}
-                ],
-                timeout=self.timeout
+                messages=[{"role": "user", "content": user_prompt}],
+                timeout=self.timeout,
             )
 
             response_time_ms = (time.time() - start_time) * 1000
@@ -114,7 +114,9 @@ class AnthropicProvider(BaseLLMProvider):
             response_text = response.content[0].text
 
             # Parse enrichments
-            enrichments = self._parse_enrichment_response(response_text, len(transactions))
+            enrichments = self._parse_enrichment_response(
+                response_text, len(transactions)
+            )
 
             # Calculate cost
             cost = self.calculate_cost(input_tokens, output_tokens)
@@ -125,7 +127,7 @@ class AnthropicProvider(BaseLLMProvider):
                 response_time_ms=response_time_ms,
                 batch_size=len(transactions),
                 success_count=len(enrichments),
-                failure_count=len(transactions) - len(enrichments)
+                failure_count=len(transactions) - len(enrichments),
             )
 
             return enrichments, stats
@@ -172,7 +174,9 @@ class AnthropicProvider(BaseLLMProvider):
                 break
 
         # Calculate total cost
-        total_cost = (tokens_in / 1000) * input_cost_per_1k + (tokens_out / 1000) * output_cost_per_1k
+        total_cost = (tokens_in / 1000) * input_cost_per_1k + (
+            tokens_out / 1000
+        ) * output_cost_per_1k
 
         return round(total_cost, 6)
 
@@ -193,36 +197,40 @@ class AnthropicProvider(BaseLLMProvider):
             return AccountInfo(
                 provider="anthropic",
                 available=False,
-                error="Set ANTHROPIC_ADMIN_API_KEY for billing data"
+                error="Set ANTHROPIC_ADMIN_API_KEY for billing data",
             )
 
         try:
             # Get first day of current month
             now = datetime.now()
-            month_start = datetime(now.year, now.month, 1).strftime("%Y-%m-%dT00:00:00Z")
+            month_start = datetime(now.year, now.month, 1).strftime(
+                "%Y-%m-%dT00:00:00Z"
+            )
 
             # Call cost report API
             response = requests.get(
                 "https://api.anthropic.com/v1/organizations/cost_report",
                 headers={
                     "x-api-key": self.admin_api_key,
-                    "anthropic-version": "2023-06-01"
+                    "anthropic-version": "2023-06-01",
                 },
                 params={"starting_at": month_start, "bucket_width": "1d"},
-                timeout=10
+                timeout=10,
             )
 
             if response.status_code != 200:
                 # Try to get error details from response
                 try:
                     error_data = response.json()
-                    error_msg = error_data.get("error", {}).get("message", str(response.status_code))
+                    error_msg = error_data.get("error", {}).get(
+                        "message", str(response.status_code)
+                    )
                 except Exception:
                     error_msg = str(response.status_code)
                 return AccountInfo(
                     provider="anthropic",
                     available=False,
-                    error=f"Admin API error: {error_msg}"
+                    error=f"Admin API error: {error_msg}",
                 )
 
             # Sum all costs (amount is in cents as string)
@@ -238,7 +246,7 @@ class AnthropicProvider(BaseLLMProvider):
                 provider="anthropic",
                 available=True,
                 subscription_tier="Pay-as-you-go",
-                usage_this_month=total_dollars
+                usage_this_month=total_dollars,
             )
 
         except Exception as e:
@@ -247,7 +255,7 @@ class AnthropicProvider(BaseLLMProvider):
             return AccountInfo(
                 provider="anthropic",
                 available=False,
-                error=f"Failed to fetch: {str(e)}"
+                error=f"Failed to fetch: {str(e)}",
             )
 
     def complete(self, prompt: str, system_prompt: str = None) -> LLMResponse:
@@ -268,7 +276,7 @@ class AnthropicProvider(BaseLLMProvider):
                 "model": self.model,
                 "max_tokens": 4096,
                 "messages": messages,
-                "timeout": self.timeout
+                "timeout": self.timeout,
             }
 
             if system_prompt:
@@ -292,7 +300,7 @@ class AnthropicProvider(BaseLLMProvider):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
-                cost=cost
+                cost=cost,
             )
 
         except Exception as e:

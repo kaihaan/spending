@@ -6,25 +6,23 @@ Includes account number detection for friendly payment names.
 """
 
 import re
-from typing import Dict, Optional, Tuple
-
 
 # Merchant-specific mappings for better normalization
-MERCHANT_MAPPINGS: Dict[str, str] = {
-    'amznmktplace': 'Amazon Marketplace',
-    'amazon marketplace': 'Amazon Marketplace',
-    'www.amazon.*': 'Amazon',
-    'amazon.co.uk': 'Amazon.co.uk',
-    'amazon.com': 'Amazon.com',
-    'amazon.de': 'Amazon.de',
-    'amazon.fr': 'Amazon.fr',
-    'amazon prime': 'Amazon Prime',
-    'ebay': 'eBay',
-    'paypal': 'PayPal',
+MERCHANT_MAPPINGS: dict[str, str] = {
+    "amznmktplace": "Amazon Marketplace",
+    "amazon marketplace": "Amazon Marketplace",
+    "www.amazon.*": "Amazon",
+    "amazon.co.uk": "Amazon.co.uk",
+    "amazon.com": "Amazon.com",
+    "amazon.de": "Amazon.de",
+    "amazon.fr": "Amazon.fr",
+    "amazon prime": "Amazon Prime",
+    "ebay": "eBay",
+    "paypal": "PayPal",
 }
 
 
-def detect_account_pattern(text: str) -> Optional[Tuple[str, str]]:
+def detect_account_pattern(text: str) -> tuple[str, str] | None:
     """
     Detect bank account details (sort code + account number) in text.
 
@@ -41,7 +39,7 @@ def detect_account_pattern(text: str) -> Optional[Tuple[str, str]]:
     """
     # Pattern 1: ACCOUNT [6 digits] [8 digits]
     # Example: "ACCOUNT 090129 30458079"
-    pattern1 = r'ACCOUNT\s+(\d{6})\s+(\d{8})'
+    pattern1 = r"ACCOUNT\s+(\d{6})\s+(\d{8})"
     match = re.search(pattern1, text, re.IGNORECASE)
     if match:
         return (match.group(1), match.group(2))
@@ -52,7 +50,7 @@ def detect_account_pattern(text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
-def apply_account_mappings(merchant: str, description: str = '') -> str:
+def apply_account_mappings(merchant: str, description: str = "") -> str:
     """
     Replace account details with friendly name if mapping exists.
 
@@ -76,18 +74,19 @@ def apply_account_mappings(merchant: str, description: str = '') -> str:
     # Look up mapping from database
     try:
         import database
+
         mapping = database.get_account_mapping_by_details(sort_code, account_number)
         if mapping:
             # Replace with friendly name
             return f"Payment to {mapping['friendly_name']}"
-    except Exception as e:
+    except Exception:
         # If database lookup fails, just return original
         pass
 
     return merchant
 
 
-def normalize_merchant_name(merchant: str, description: str = '') -> str:
+def normalize_merchant_name(merchant: str, description: str = "") -> str:
     """
     Normalize merchant name by removing order IDs and applying standardization.
 
@@ -118,30 +117,30 @@ def normalize_merchant_name(merchant: str, description: str = '') -> str:
         return mapped_merchant
 
     # Remove "CREDIT FROM" prefix
-    cleaned = re.sub(r'^CREDIT FROM\s+', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^CREDIT FROM\s+", "", cleaned, flags=re.IGNORECASE)
 
     # Remove "REFUND FROM" prefix
-    cleaned = re.sub(r'^REFUND FROM\s+', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^REFUND FROM\s+", "", cleaned, flags=re.IGNORECASE)
 
     # eBay specific patterns
     # "eBay O*08-12045-48091" -> "eBay"
-    if re.match(r'ebay\s+O\*\d+', cleaned, flags=re.IGNORECASE):
-        cleaned = 'eBay'
+    if re.match(r"ebay\s+O\*\d+", cleaned, flags=re.IGNORECASE):
+        cleaned = "eBay"
 
     # Remove asterisk and everything after (order IDs)
     # "Amazon.co.uk*6Q22J0R25" -> "Amazon.co.uk"
     # "AMZNMktplace*E25645GE5" -> "AMZNMktplace"
-    cleaned = re.sub(r'\*[A-Z0-9]+\d+$', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\*[A-Z0-9]+\d+$", "", cleaned, flags=re.IGNORECASE)
 
     # Remove space followed by long alphanumeric code (order IDs)
     # "WWW.AMAZON.* TH2TK7EM4" -> "WWW.AMAZON.*"
-    cleaned = re.sub(r'\s+[A-Z0-9]{8,}$', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+[A-Z0-9]{8,}$", "", cleaned, flags=re.IGNORECASE)
 
     # Remove trailing asterisk if present
-    cleaned = re.sub(r'\*+$', '', cleaned)
+    cleaned = re.sub(r"\*+$", "", cleaned)
 
     # Remove trailing dots if present
-    cleaned = cleaned.rstrip('.')
+    cleaned = cleaned.rstrip(".")
 
     # Trim whitespace
     cleaned = cleaned.strip()
@@ -174,27 +173,26 @@ def get_merchant_group(merchant: str) -> str:
     merchant_lower = merchant.lower()
 
     # Amazon group
-    if 'amazon' in merchant_lower:
-        if 'marketplace' in merchant_lower:
-            return 'Amazon Marketplace'
-        elif 'prime' in merchant_lower:
-            return 'Amazon Prime'
-        else:
-            return 'Amazon'
+    if "amazon" in merchant_lower:
+        if "marketplace" in merchant_lower:
+            return "Amazon Marketplace"
+        if "prime" in merchant_lower:
+            return "Amazon Prime"
+        return "Amazon"
 
     # eBay group
-    if 'ebay' in merchant_lower:
-        return 'eBay'
+    if "ebay" in merchant_lower:
+        return "eBay"
 
     # PayPal group
-    if 'paypal' in merchant_lower:
-        return 'PayPal'
+    if "paypal" in merchant_lower:
+        return "PayPal"
 
     # Default: use the merchant name itself
     return merchant
 
 
-def batch_normalize_merchants(merchants: list) -> Dict[str, str]:
+def batch_normalize_merchants(merchants: list) -> dict[str, str]:
     """
     Normalize a batch of merchant names.
 
@@ -211,7 +209,7 @@ def batch_normalize_merchants(merchants: list) -> Dict[str, str]:
     return result
 
 
-def get_normalization_stats(transactions: list) -> Dict:
+def get_normalization_stats(transactions: list) -> dict:
     """
     Analyze how many transactions would be affected by normalization.
 
@@ -226,23 +224,25 @@ def get_normalization_stats(transactions: list) -> Dict:
     changes = []
 
     for txn in transactions:
-        merchant = txn.get('merchant')
+        merchant = txn.get("merchant")
         if merchant:
             normalized = normalize_merchant_name(merchant)
             original_merchants.add(merchant)
             normalized_merchants.add(normalized)
 
             if merchant != normalized:
-                changes.append({
-                    'original': merchant,
-                    'normalized': normalized,
-                    'transaction_id': txn.get('id')
-                })
+                changes.append(
+                    {
+                        "original": merchant,
+                        "normalized": normalized,
+                        "transaction_id": txn.get("id"),
+                    }
+                )
 
     return {
-        'original_merchant_count': len(original_merchants),
-        'normalized_merchant_count': len(normalized_merchants),
-        'merchants_reduced_by': len(original_merchants) - len(normalized_merchants),
-        'transactions_affected': len(changes),
-        'sample_changes': changes[:10]  # Show first 10 examples
+        "original_merchant_count": len(original_merchants),
+        "normalized_merchant_count": len(normalized_merchants),
+        "merchants_reduced_by": len(original_merchants) - len(normalized_merchants),
+        "transactions_affected": len(changes),
+        "sample_changes": changes[:10],  # Show first 10 examples
     }

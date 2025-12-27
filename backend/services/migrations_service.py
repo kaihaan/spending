@@ -9,15 +9,16 @@ Provides data migration operations for:
 These are typically run once when updating the database schema or cleaning data.
 """
 
-from database import transactions as db_transactions
-from database import base
-from mcp.merchant_normalizer import detect_account_pattern
 import re
 
+from database import base
+from database import transactions as db_transactions
+from mcp.merchant_normalizer import detect_account_pattern
 
 # ============================================================================
 # Merchant Name Cleanups
 # ============================================================================
+
 
 def fix_card_payment_merchants() -> dict:
     """
@@ -35,11 +36,13 @@ def fix_card_payment_merchants() -> dict:
     changes = []
 
     # Pattern: "CARD PAYMENT TO <merchant>" or "CARD PAYMENT <merchant>"
-    card_payment_pattern = re.compile(r'^CARD\s+PAYMENT\s+(?:TO\s+)?(.+)$', re.IGNORECASE)
+    card_payment_pattern = re.compile(
+        r"^CARD\s+PAYMENT\s+(?:TO\s+)?(.+)$", re.IGNORECASE
+    )
 
     for txn in all_transactions:
-        description = txn.get('description', '') or ''
-        current_merchant = txn.get('merchant_name', '') or ''
+        description = txn.get("description", "") or ""
+        current_merchant = txn.get("merchant_name", "") or ""
 
         # Try to extract merchant from description
         match = card_payment_pattern.match(description)
@@ -49,31 +52,33 @@ def fix_card_payment_merchants() -> dict:
             # Only update if different from current merchant
             if extracted_merchant and extracted_merchant != current_merchant:
                 success = db_transactions.update_truelayer_transaction_merchant(
-                    txn['id'],
-                    extracted_merchant
+                    txn["id"], extracted_merchant
                 )
 
                 if success:
                     updated_count += 1
                     if len(changes) < 10:  # Keep first 10 as examples
-                        changes.append({
-                            'transaction_id': txn['id'],
-                            'original': current_merchant,
-                            'extracted': extracted_merchant,
-                            'description': description[:80]
-                        })
+                        changes.append(
+                            {
+                                "transaction_id": txn["id"],
+                                "original": current_merchant,
+                                "extracted": extracted_merchant,
+                                "description": description[:80],
+                            }
+                        )
 
     return {
-        'success': True,
-        'transactions_updated': updated_count,
-        'transactions_total': len(all_transactions),
-        'sample_changes': changes
+        "success": True,
+        "transactions_updated": updated_count,
+        "transactions_total": len(all_transactions),
+        "sample_changes": changes,
     }
 
 
 # ============================================================================
 # Schema Migrations
 # ============================================================================
+
 
 def migrate_add_huququllah_column() -> bool:
     """
@@ -85,35 +90,35 @@ def migrate_add_huququllah_column() -> bool:
     Returns:
         True if column was added, False if already exists
     """
-    with base.get_db() as conn:
-        with conn.cursor() as cursor:
-            # Check if column already exists
-            cursor.execute("""
+    with base.get_db() as conn, conn.cursor() as cursor:
+        # Check if column already exists
+        cursor.execute("""
                 SELECT column_name
                 FROM information_schema.columns
                 WHERE table_name = 'truelayer_transactions'
                 AND column_name = 'huququllah_classification'
             """)
 
-            exists = cursor.fetchone() is not None
+        exists = cursor.fetchone() is not None
 
-            if exists:
-                return False
+        if exists:
+            return False
 
-            # Add column with CHECK constraint
-            cursor.execute("""
+        # Add column with CHECK constraint
+        cursor.execute("""
                 ALTER TABLE truelayer_transactions
                 ADD COLUMN huququllah_classification VARCHAR(20)
                 CHECK(huququllah_classification IN ('essential', 'discretionary'))
             """)
 
-            conn.commit()
-            return True
+        conn.commit()
+        return True
 
 
 # ============================================================================
 # Account Mapping Reapplication
 # ============================================================================
+
 
 def reapply_account_mappings() -> dict:
     """
@@ -135,16 +140,15 @@ def reapply_account_mappings() -> dict:
 
     if not mappings:
         return {
-            'success': True,
-            'transactions_updated': 0,
-            'transactions_total': 0,
-            'message': 'No account mappings configured'
+            "success": True,
+            "transactions_updated": 0,
+            "transactions_total": 0,
+            "message": "No account mappings configured",
         }
 
     # Create lookup dict for mappings
     mapping_lookup = {
-        (m['sort_code'], m['account_number']): m['friendly_name']
-        for m in mappings
+        (m["sort_code"], m["account_number"]): m["friendly_name"] for m in mappings
     }
 
     # Get all TrueLayer transactions
@@ -153,8 +157,8 @@ def reapply_account_mappings() -> dict:
     updated = 0
 
     for txn in transactions:
-        description = txn.get('description', '') or ''
-        merchant = txn.get('merchant_name', '') or ''
+        description = txn.get("description", "") or ""
+        merchant = txn.get("merchant_name", "") or ""
 
         # Try to detect account pattern in description or merchant
         account_info = detect_account_pattern(description)
@@ -171,15 +175,14 @@ def reapply_account_mappings() -> dict:
                 # Only update if merchant name is different
                 if merchant != new_merchant:
                     success = db_transactions.update_truelayer_transaction_merchant(
-                        txn['id'],
-                        new_merchant
+                        txn["id"], new_merchant
                     )
                     if success:
                         updated += 1
 
     return {
-        'success': True,
-        'transactions_updated': updated,
-        'transactions_total': total,
-        'message': f'Applied {len(mappings)} account mappings to {updated} transactions'
+        "success": True,
+        "transactions_updated": updated,
+        "transactions_total": total,
+        "message": f"Applied {len(mappings)} account mappings to {updated} transactions",
     }

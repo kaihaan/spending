@@ -12,18 +12,24 @@ Provides utility operations for:
 These are helper endpoints for development, testing, and system monitoring.
 """
 
-from database import enrichment as db_enrichment
-from database import pdf as db_pdf
-from database import gmail as db_gmail
-from database import base
-import database_postgres  # For legacy methods not yet migrated
 import cache_manager
-from mcp.minio_client import is_available as minio_is_available, get_storage_stats as minio_get_storage_stats
 
+import database
+from database import base
+from database import enrichment as db_enrichment
+from database import gmail as db_gmail
+from database import pdf as db_pdf
+from mcp.minio_client import (
+    get_storage_stats as minio_get_storage_stats,
+)
+from mcp.minio_client import (
+    is_available as minio_is_available,
+)
 
 # ============================================================================
 # Cache Statistics
 # ============================================================================
+
 
 def get_cache_stats() -> dict:
     """
@@ -40,6 +46,7 @@ def get_cache_stats() -> dict:
 # Pre-Enrichment Status Tracking
 # ============================================================================
 
+
 def get_pre_enrichment_summary() -> dict:
     """
     Get summary of identified transactions by vendor.
@@ -53,8 +60,7 @@ def get_pre_enrichment_summary() -> dict:
     Returns:
         Dict with counts: {'Apple': N, 'AMZN': N, 'AMZN RTN': N, 'total': N}
     """
-    # TODO: Move this to database/transactions.py when legacy migration is complete
-    summary = database_postgres.get_identified_summary()
+    summary = database.get_identified_summary()
     return summary
 
 
@@ -75,8 +81,7 @@ def backfill_pre_enrichment_status() -> dict:
     Returns:
         Dict with counts of each status assigned
     """
-    # TODO: Move this to database/transactions.py when legacy migration is complete
-    counts = database_postgres.backfill_pre_enrichment_status()
+    counts = database.backfill_pre_enrichment_status()
 
     # Invalidate transaction cache after backfill
     cache_manager.cache_invalidate_transactions()
@@ -87,6 +92,7 @@ def backfill_pre_enrichment_status() -> dict:
 # ============================================================================
 # Active Job Monitoring
 # ============================================================================
+
 
 def get_active_jobs(user_id: int = 1) -> dict:
     """
@@ -106,8 +112,10 @@ def get_active_jobs(user_id: int = 1) -> dict:
     # Auto-cleanup stale jobs before checking active ones
     cleanup_result = db_gmail.cleanup_stale_matching_jobs(stale_threshold_minutes=30)
 
-    if cleanup_result['cleaned_up'] > 0:
-        print(f"🧹 Auto-cleaned {cleanup_result['cleaned_up']} stale matching jobs: {cleanup_result['job_ids']}")
+    if cleanup_result["cleaned_up"] > 0:
+        print(
+            f"🧹 Auto-cleaned {cleanup_result['cleaned_up']} stale matching jobs: {cleanup_result['job_ids']}"
+        )
 
     # Get active Gmail sync job
     gmail_job = db_gmail.get_latest_active_gmail_sync_job(user_id)
@@ -115,15 +123,13 @@ def get_active_jobs(user_id: int = 1) -> dict:
     # Get active matching jobs
     matching_jobs = db_gmail.get_active_matching_jobs(user_id)
 
-    return {
-        'gmail_sync': gmail_job,
-        'matching': matching_jobs
-    }
+    return {"gmail_sync": gmail_job, "matching": matching_jobs}
 
 
 # ============================================================================
 # Testing Data Cleanup
 # ============================================================================
+
 
 def clear_testing_data(data_types: list[str]) -> dict:
     """
@@ -156,22 +162,22 @@ def clear_testing_data(data_types: list[str]) -> dict:
         ValueError: If invalid data type provided or no types specified
     """
     if not data_types:
-        raise ValueError('No data types specified. At least one type must be selected.')
+        raise ValueError("No data types specified. At least one type must be selected.")
 
     # Define allowed types and their corresponding tables
     allowed_types = {
-        'truelayer_transactions': 'DELETE FROM truelayer_transactions',
-        'amazon_orders': 'DELETE FROM amazon_orders',
-        'truelayer_amazon_matches': 'DELETE FROM truelayer_amazon_transaction_matches',
-        'apple_transactions': 'DELETE FROM apple_transactions',
-        'truelayer_apple_matches': 'DELETE FROM truelayer_apple_transaction_matches',
-        'enrichment_cache': 'DELETE FROM llm_enrichment_cache',
-        'import_history': 'DELETE FROM truelayer_import_jobs',
-        'category_rules': 'DELETE FROM category_keywords',
-        'gmail_receipts': 'DELETE FROM gmail_receipts',
-        'gmail_email_content': 'DELETE FROM gmail_email_content',
-        'gmail_sync_jobs': 'DELETE FROM gmail_sync_jobs',
-        'gmail_transaction_matches': 'DELETE FROM gmail_transaction_matches'
+        "truelayer_transactions": "DELETE FROM truelayer_transactions",
+        "amazon_orders": "DELETE FROM amazon_orders",
+        "truelayer_amazon_matches": "DELETE FROM truelayer_amazon_transaction_matches",
+        "apple_transactions": "DELETE FROM apple_transactions",
+        "truelayer_apple_matches": "DELETE FROM truelayer_apple_transaction_matches",
+        "enrichment_cache": "DELETE FROM llm_enrichment_cache",
+        "import_history": "DELETE FROM truelayer_import_jobs",
+        "category_rules": "DELETE FROM category_keywords",
+        "gmail_receipts": "DELETE FROM gmail_receipts",
+        "gmail_email_content": "DELETE FROM gmail_email_content",
+        "gmail_sync_jobs": "DELETE FROM gmail_sync_jobs",
+        "gmail_transaction_matches": "DELETE FROM gmail_transaction_matches",
     }
 
     # Validate types
@@ -183,35 +189,32 @@ def clear_testing_data(data_types: list[str]) -> dict:
         )
 
     # Execute clearing operations with fail-fast behavior
-    cleared_counts = {t: 0 for t in allowed_types.keys()}
+    cleared_counts = dict.fromkeys(allowed_types.keys(), 0)
 
-    with base.get_db() as conn:
-        with conn.cursor() as cursor:
-            for data_type in data_types:
-                try:
-                    delete_sql = allowed_types[data_type]
-                    cursor.execute(delete_sql)
-                    row_count = cursor.rowcount
-                    cleared_counts[data_type] = row_count
-                    conn.commit()
+    with base.get_db() as conn, conn.cursor() as cursor:
+        for data_type in data_types:
+            try:
+                delete_sql = allowed_types[data_type]
+                cursor.execute(delete_sql)
+                row_count = cursor.rowcount
+                cleared_counts[data_type] = row_count
+                conn.commit()
 
-                except Exception as e:
-                    # Fail-fast: stop on first error
-                    conn.rollback()
-                    raise ValueError(f"Failed to clear {data_type}: {str(e)}")
+            except Exception as e:
+                # Fail-fast: stop on first error
+                conn.rollback()
+                raise ValueError(f"Failed to clear {data_type}: {str(e)}")
 
     # Invalidate caches after clearing data
     cache_manager.cache_invalidate_transactions()
 
-    return {
-        'success': True,
-        'cleared': cleared_counts
-    }
+    return {"success": True, "cleared": cleared_counts}
 
 
 # ============================================================================
 # Storage Status Monitoring
 # ============================================================================
+
 
 def get_storage_status() -> dict:
     """
@@ -226,14 +229,11 @@ def get_storage_status() -> dict:
     available = minio_is_available()
     db_stats = db_pdf.get_pdf_storage_stats()
 
-    result = {
-        'minio_available': available,
-        'database_stats': db_stats
-    }
+    result = {"minio_available": available, "database_stats": db_stats}
 
     if available:
         minio_stats = minio_get_storage_stats()
-        result['minio_stats'] = minio_stats
+        result["minio_stats"] = minio_stats
 
     return result
 
@@ -241,6 +241,7 @@ def get_storage_status() -> dict:
 # ============================================================================
 # Enrichment Source Details
 # ============================================================================
+
 
 def get_enrichment_source_details(source_id: int) -> dict:
     """
@@ -262,15 +263,15 @@ def get_enrichment_source_details(source_id: int) -> dict:
     result = db_enrichment.get_enrichment_source_full_details(source_id)
 
     if not result:
-        raise ValueError('Enrichment source not found')
+        raise ValueError("Enrichment source not found")
 
     # Format dates for JSON serialization
     def format_dates(obj):
         if isinstance(obj, dict):
             return {k: format_dates(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
+        if isinstance(obj, list):
             return [format_dates(item) for item in obj]
-        elif hasattr(obj, 'isoformat'):
+        if hasattr(obj, "isoformat"):
             return obj.isoformat()
         return obj
 

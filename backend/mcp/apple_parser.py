@@ -3,10 +3,11 @@ Apple Transactions Parser MCP Component
 Parses Apple "Report a Problem" HTML files to extract transaction data.
 """
 
-from bs4 import BeautifulSoup
-from datetime import datetime
-import re
 import os
+import re
+from datetime import datetime
+
+from bs4 import BeautifulSoup
 
 
 def parse_apple_html(file_path):
@@ -26,7 +27,7 @@ def parse_apple_html(file_path):
         List of transaction dictionaries
     """
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             html_content = f.read()
 
         return parse_apple_html_content(html_content)
@@ -49,11 +50,11 @@ def parse_apple_html_content(html_content):
         List of transaction dictionaries
     """
     try:
-        soup = BeautifulSoup(html_content, 'html.parser')
+        soup = BeautifulSoup(html_content, "html.parser")
 
         # Get all text with newline separators to preserve HTML structure
         # This ensures div/span elements are separated by newlines
-        text = soup.get_text(separator='\n')
+        text = soup.get_text(separator="\n")
 
         # Pattern: Date + OrderID + "Total" + Price + App Name
         # With newline separators, structure is:
@@ -61,7 +62,7 @@ def parse_apple_html_content(html_content):
         # Captures: date, order_id, amount, app_name_section
         # Only match valid days (01-31), handle whitespace/newlines between elements
         # Month can be 3 or 4 letters (Sep or Sept)
-        pattern = r'((?:[0-2]?\d|3[01])\s+\w{3,4}\s+\d{4})\s+([A-Z0-9]{10,15})\s+Total\s+[£$](\d+\.\d{2})\s+Loading\.\.\.\s+(.+?)(?=\s*(?:[0-2]?\d|3[01])\s+\w{3,4}\s+\d{4}\s+[A-Z0-9]|$)'
+        pattern = r"((?:[0-2]?\d|3[01])\s+\w{3,4}\s+\d{4})\s+([A-Z0-9]{10,15})\s+Total\s+[£$](\d+\.\d{2})\s+Loading\.\.\.\s+(.+?)(?=\s*(?:[0-2]?\d|3[01])\s+\w{3,4}\s+\d{4}\s+[A-Z0-9]|$)"
 
         matches = re.findall(pattern, text, re.DOTALL)
 
@@ -80,26 +81,30 @@ def parse_apple_html_content(html_content):
             app_info = app_info.strip()
 
             # Remove common trailing text
-            app_info = re.sub(r'Renews\s+\d+\s+\w+\s+\d{4}.*$', '', app_info, flags=re.IGNORECASE)
-            app_info = re.sub(r'\s*Renews\s*$', '', app_info, flags=re.IGNORECASE)
+            app_info = re.sub(
+                r"Renews\s+\d+\s+\w+\s+\d{4}.*$", "", app_info, flags=re.IGNORECASE
+            )
+            app_info = re.sub(r"\s*Renews\s*$", "", app_info, flags=re.IGNORECASE)
 
             # Often the pattern is "App NamePublisher Name" - try to split intelligently
-            lines = [line.strip() for line in app_info.split('\n') if line.strip()]
+            lines = [line.strip() for line in app_info.split("\n") if line.strip()]
 
             if len(lines) >= 2:
                 app_name = lines[0]
-                publisher = lines[1] if len(lines[1]) > 2 else ''  # Skip very short publishers
+                publisher = (
+                    lines[1] if len(lines[1]) > 2 else ""
+                )  # Skip very short publishers
             elif len(lines) == 1:
                 # Single line: often "AppNamePublisher" concatenated
                 # Example: "Apple TV+Apple TV", "BFI PlayerApple TV"
                 text = lines[0]
 
                 app_name = text  # Default to full text
-                publisher = ''
+                publisher = ""
 
                 # Strategy 1: Look for lowercase-to-uppercase transition (concatenation point)
                 # This catches "PlayerApple" where there's no space
-                concat_match = re.search(r'[a-z]([A-Z][a-z])', text)
+                concat_match = re.search(r"[a-z]([A-Z][a-z])", text)
                 if concat_match:
                     # Found concatenation point - split here
                     split_point = concat_match.start(1)  # Start of the capital letter
@@ -110,7 +115,7 @@ def parse_apple_html_content(html_content):
                     # Find all capitalized words (with word boundaries or after special chars)
                     seen = set()
                     split_point = -1
-                    for match in re.finditer(r'(?:^|[\s+&-])([A-Z][A-Za-z]+)', text):
+                    for match in re.finditer(r"(?:^|[\s+&-])([A-Z][A-Za-z]+)", text):
                         word = match.group(1)
                         if word in seen:
                             # Found repetition - split here
@@ -125,19 +130,19 @@ def parse_apple_html_content(html_content):
                 # Fallback: if app name is too short or empty, use full text
                 if len(app_name) < 3:
                     app_name = text[:80].strip()
-                    publisher = ''
+                    publisher = ""
             else:
                 app_name = app_info[:80].strip()  # Fallback with length limit
-                publisher = ''
+                publisher = ""
 
             transaction = {
-                'order_id': order_id,
-                'order_date': clean_date(date_str),
-                'total_amount': float(amount),
-                'currency': 'GBP',
-                'app_names': app_name,
-                'publishers': publisher,
-                'item_count': 1
+                "order_id": order_id,
+                "order_date": clean_date(date_str),
+                "total_amount": float(amount),
+                "currency": "GBP",
+                "app_names": app_name,
+                "publishers": publisher,
+                "item_count": 1,
             }
             transactions.append(transaction)
 
@@ -158,6 +163,7 @@ def parse_json_from_script(script_content):
         List of transactions
     """
     import json
+
     transactions = []
 
     try:
@@ -170,13 +176,13 @@ def parse_json_from_script(script_content):
             try:
                 data = json.loads(match)
                 transaction = {
-                    'order_id': data.get('orderId', data.get('WebOrder', '')),
-                    'order_date': clean_date(data.get('orderDate', '')),
-                    'total_amount': clean_currency(data.get('totalPrice', '0')),
-                    'currency': 'GBP',
-                    'app_names': data.get('title', ''),
-                    'publishers': data.get('artistName', ''),
-                    'item_count': 1
+                    "order_id": data.get("orderId", data.get("WebOrder", "")),
+                    "order_date": clean_date(data.get("orderDate", "")),
+                    "total_amount": clean_currency(data.get("totalPrice", "0")),
+                    "currency": "GBP",
+                    "app_names": data.get("title", ""),
+                    "publishers": data.get("artistName", ""),
+                    "item_count": 1,
                 }
                 transactions.append(transaction)
             except json.JSONDecodeError:
@@ -211,49 +217,58 @@ def parse_html_structure(soup):
 
     # Group by order ID
     from collections import defaultdict
+
     orders = defaultdict(list)
 
     # Find all purchase items
-    items = soup.find_all('li', class_='pli')
+    items = soup.find_all("li", class_="pli")
 
     for item in items:
         # Extract app name from aria-label
-        app_name = item.get('aria-label', '')
+        app_name = item.get("aria-label", "")
 
         # Find associated order info (may be in parent or sibling elements)
         # This is a simplified approach - actual structure may vary
-        order_container = item.find_parent('div', class_='order') or item.find_parent('section')
+        order_container = item.find_parent("div", class_="order") or item.find_parent(
+            "section"
+        )
 
         if order_container:
-            date_elem = order_container.find(class_='invoice-date') or order_container.find(string=re.compile(r'\d{1,2}\s+\w{3}\s+\d{4}'))
-            order_id_elem = order_container.find(class_='WebOrder') or order_container.find(string=re.compile(r'[A-Z0-9]{11}'))
-            price_elem = item.find(class_='price')
+            date_elem = order_container.find(
+                class_="invoice-date"
+            ) or order_container.find(string=re.compile(r"\d{1,2}\s+\w{3}\s+\d{4}"))
+            order_id_elem = order_container.find(
+                class_="WebOrder"
+            ) or order_container.find(string=re.compile(r"[A-Z0-9]{11}"))
+            price_elem = item.find(class_="price")
 
             order_data = {
-                'date': date_elem.get_text() if date_elem else '',
-                'order_id': order_id_elem.get_text() if order_id_elem else '',
-                'app_name': app_name,
-                'price': price_elem.get_text() if price_elem else 'Free'
+                "date": date_elem.get_text() if date_elem else "",
+                "order_id": order_id_elem.get_text() if order_id_elem else "",
+                "app_name": app_name,
+                "price": price_elem.get_text() if price_elem else "Free",
             }
 
-            if order_data['order_id']:
-                orders[order_data['order_id']].append(order_data)
+            if order_data["order_id"]:
+                orders[order_data["order_id"]].append(order_data)
 
     # Convert grouped orders to transactions
     for order_id, items in orders.items():
         if items:
             first_item = items[0]
-            app_names = ' | '.join([item['app_name'] for item in items if item['app_name']])
-            total = sum([clean_currency(item['price']) for item in items])
+            app_names = " | ".join(
+                [item["app_name"] for item in items if item["app_name"]]
+            )
+            total = sum([clean_currency(item["price"]) for item in items])
 
             transaction = {
-                'order_id': order_id,
-                'order_date': clean_date(first_item['date']),
-                'total_amount': total,
-                'currency': 'GBP',
-                'app_names': app_names or 'Unknown',
-                'publishers': '',
-                'item_count': len(items)
+                "order_id": order_id,
+                "order_date": clean_date(first_item["date"]),
+                "total_amount": total,
+                "currency": "GBP",
+                "app_names": app_names or "Unknown",
+                "publishers": "",
+                "item_count": len(items),
             }
             transactions.append(transaction)
 
@@ -279,13 +294,13 @@ def clean_date(date_str):
 
         # Handle 4-letter month abbreviations (Sept, June, July, etc.)
         # Convert to 3-letter format for Python's datetime parser
-        date_str = date_str.replace('Sept', 'Sep')
-        date_str = date_str.replace('June', 'Jun')
-        date_str = date_str.replace('July', 'Jul')
+        date_str = date_str.replace("Sept", "Sep")
+        date_str = date_str.replace("June", "Jun")
+        date_str = date_str.replace("July", "Jul")
 
         # Handle format: "10 Oct 2019"
-        date_obj = datetime.strptime(date_str, '%d %b %Y')
-        return date_obj.strftime('%Y-%m-%d')
+        date_obj = datetime.strptime(date_str, "%d %b %Y")
+        return date_obj.strftime("%Y-%m-%d")
 
     except Exception as e:
         print(f"Warning: Could not parse date '{date_str}': {e}")
@@ -307,7 +322,7 @@ def clean_currency(value):
         return 0.0
 
     # Handle "Free" apps
-    if isinstance(value, str) and value.strip().upper() == 'FREE':
+    if isinstance(value, str) and value.strip().upper() == "FREE":
         return 0.0
 
     # If already a number, return it
@@ -318,7 +333,9 @@ def clean_currency(value):
     value_str = str(value).strip()
 
     # Remove currency symbols and commas
-    cleaned = value_str.replace('£', '').replace('$', '').replace(',', '').replace(' ', '')
+    cleaned = (
+        value_str.replace("£", "").replace("$", "").replace(",", "").replace(" ", "")
+    )
 
     try:
         return float(cleaned)
@@ -343,8 +360,16 @@ def export_to_csv(transactions, output_path):
     if not transactions:
         raise ValueError("No transactions to export")
 
-    with open(output_path, 'w', newline='', encoding='utf-8') as f:
-        fieldnames = ['order_id', 'order_date', 'total_amount', 'currency', 'app_names', 'publishers', 'item_count']
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        fieldnames = [
+            "order_id",
+            "order_date",
+            "total_amount",
+            "currency",
+            "app_names",
+            "publishers",
+            "item_count",
+        ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
 
         writer.writeheader()
@@ -354,7 +379,7 @@ def export_to_csv(transactions, output_path):
     return output_path
 
 
-def get_apple_html_files(data_folder='../sample'):
+def get_apple_html_files(data_folder="../sample"):
     """
     List available Apple HTML files in the data folder.
 
@@ -368,7 +393,10 @@ def get_apple_html_files(data_folder='../sample'):
         files = []
         for filename in os.listdir(data_folder):
             # Look for HTML files with "report", "problem", or "apple" in name
-            if filename.endswith('.html') and any(keyword in filename.lower() for keyword in ['report', 'problem', 'apple', 'purchase']):
+            if filename.endswith(".html") and any(
+                keyword in filename.lower()
+                for keyword in ["report", "problem", "apple", "purchase"]
+            ):
                 files.append(os.path.join(data_folder, filename))
         return files
     except Exception as e:

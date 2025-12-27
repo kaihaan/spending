@@ -34,13 +34,13 @@ interface TrueLayerConnection {
 
 interface CardsConnection {
   user_id: number;
-  connections: Array<{
+  connections: {
     connection_id: number;
     provider_id: string;
     connection_status: string;
     last_synced_at?: string | null;
     cards: TrueLayerCard[];
-  }>;
+  }[];
 }
 
 interface BankData {

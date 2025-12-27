@@ -67,24 +67,10 @@ export default function GmailIntegration() {
     }
   };
 
-  const handleConnect = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const response = await axios.get(`${API_URL}/gmail/authorize`);
-      const { auth_url, state, code_verifier } = response.data;
-
-      // Store PKCE values for callback
-      sessionStorage.setItem('gmail_state', state);
-      sessionStorage.setItem('gmail_code_verifier', code_verifier);
-
-      // Redirect to Google OAuth
-      window.location.href = auth_url;
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to initiate Gmail authorization');
-      setLoading(false);
-    }
+  const handleConnect = () => {
+    // Direct navigation to OAuth authorize endpoint
+    // Backend will redirect to Google's consent screen
+    window.location.href = `${API_URL}/gmail/authorize`;
   };
 
   const handleSync = async () => {
@@ -317,7 +303,7 @@ export default function GmailIntegration() {
             )}
 
             {/* Completed sync summary */}
-            {syncProgress && syncProgress.status === 'completed' && (
+            {syncProgress?.status === 'completed' && (
               <div className="alert alert-success mt-4">
                 <span>
                   Sync complete: {syncProgress.parsed} receipts stored,

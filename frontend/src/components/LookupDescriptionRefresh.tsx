@@ -83,7 +83,7 @@ export default function LookupDescriptionRefresh() {
         </div>
       )}
 
-      {showResult && result && result.total === 0 && (
+      {showResult && result?.total === 0 && (
         <div className="alert alert-info">
           <span>All lookup descriptions are already synchronized.</span>
         </div>

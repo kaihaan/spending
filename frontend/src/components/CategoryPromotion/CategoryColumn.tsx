@@ -1,4 +1,4 @@
-import { Category, HiddenCategory } from './types';
+import type { Category, HiddenCategory } from './types';
 
 interface CategoryColumnProps {
   categories: Category[];

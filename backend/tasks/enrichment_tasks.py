@@ -1,13 +1,17 @@
 """Celery tasks for transaction enrichment."""
 
-from mcp.llm_enricher import get_enricher
-import database_postgres as db
 from datetime import datetime
+
+import database_postgres as db
 from celery_app import celery_app
+
+from mcp.llm_enricher import get_enricher
 
 
 @celery_app.task(bind=True, time_limit=900, soft_time_limit=800)
-def enrich_transactions_task(self, transaction_ids=None, force_refresh=False, direction='out'):
+def enrich_transactions_task(
+    self, transaction_ids=None, force_refresh=False, direction="out"
+):
     """
     Celery task to enrich transactions sequentially in batches.
 
@@ -21,7 +25,7 @@ def enrich_transactions_task(self, transaction_ids=None, force_refresh=False, di
     """
     try:
         # Update task state to "STARTED"
-        self.update_state(state='STARTED', meta={'status': 'initializing'})
+        self.update_state(state="STARTED", meta={"status": "initializing"})
 
         # Get enricher to calculate batch size
         enricher = get_enricher()
@@ -35,26 +39,26 @@ def enrich_transactions_task(self, transaction_ids=None, force_refresh=False, di
                 t = db.get_truelayer_transaction_by_pk(tid)
                 if t:
                     transactions.append(t)
-            txn_ids_to_enrich = [t['id'] for t in transactions]
+            txn_ids_to_enrich = [t["id"] for t in transactions]
         else:
             transactions = db.get_unenriched_truelayer_transactions() or []
-            txn_ids_to_enrich = [t['id'] for t in transactions]
+            txn_ids_to_enrich = [t["id"] for t in transactions]
 
         total = len(txn_ids_to_enrich)
 
         if total == 0:
             return {
-                'status': 'completed',
-                'stats': {
-                    'total_transactions': 0,
-                    'successful_enrichments': 0,
-                    'failed_enrichments': 0,
-                    'cached_hits': 0,
-                    'api_calls_made': 0,
-                    'total_tokens_used': 0,
-                    'total_cost': 0.0
+                "status": "completed",
+                "stats": {
+                    "total_transactions": 0,
+                    "successful_enrichments": 0,
+                    "failed_enrichments": 0,
+                    "cached_hits": 0,
+                    "api_calls_made": 0,
+                    "total_tokens_used": 0,
+                    "total_cost": 0.0,
                 },
-                'completed_at': datetime.now().isoformat()
+                "completed_at": datetime.now().isoformat(),
             }
 
         # Calculate batch size dynamically
@@ -75,18 +79,18 @@ def enrich_transactions_task(self, transaction_ids=None, force_refresh=False, di
 
             # Update progress
             self.update_state(
-                state='PROGRESS',
+                state="PROGRESS",
                 meta={
-                    'current': processed,
-                    'total': total,
-                    'status': 'enriching',
-                    'completed_batches': batch_num,
-                    'total_batches': num_batches,
-                    'successful': total_successful,
-                    'failed': total_failed,
-                    'tokens_used': total_tokens,
-                    'cost': total_cost
-                }
+                    "current": processed,
+                    "total": total,
+                    "status": "enriching",
+                    "completed_batches": batch_num,
+                    "total_batches": num_batches,
+                    "successful": total_successful,
+                    "failed": total_failed,
+                    "tokens_used": total_tokens,
+                    "cost": total_cost,
+                },
             )
 
             try:
@@ -94,14 +98,14 @@ def enrich_transactions_task(self, transaction_ids=None, force_refresh=False, di
                 stats = enricher.enrich_transactions(
                     transaction_ids=batch_ids,
                     direction=direction,
-                    force_refresh=force_refresh
+                    force_refresh=force_refresh,
                 )
 
-                batch_successful = getattr(stats, 'successful_enrichments', 0)
-                batch_failed = getattr(stats, 'failed_enrichments', 0)
-                batch_tokens = getattr(stats, 'total_tokens_used', 0)
-                batch_cost = getattr(stats, 'total_cost', 0.0)
-                batch_api_calls = getattr(stats, 'api_calls_made', 0)
+                batch_successful = getattr(stats, "successful_enrichments", 0)
+                batch_failed = getattr(stats, "failed_enrichments", 0)
+                batch_tokens = getattr(stats, "total_tokens_used", 0)
+                batch_cost = getattr(stats, "total_cost", 0.0)
+                batch_api_calls = getattr(stats, "api_calls_made", 0)
 
                 total_successful += batch_successful
                 total_failed += batch_failed
@@ -120,22 +124,19 @@ def enrich_transactions_task(self, transaction_ids=None, force_refresh=False, di
             processed += len(batch_ids)
 
         return {
-            'status': 'completed',
-            'stats': {
-                'total_transactions': total,
-                'successful_enrichments': total_successful,
-                'failed_enrichments': total_failed,
-                'cached_hits': 0,
-                'api_calls_made': total_api_calls,
-                'total_tokens_used': total_tokens,
-                'total_cost': total_cost,
-                'batches_processed': num_batches
+            "status": "completed",
+            "stats": {
+                "total_transactions": total,
+                "successful_enrichments": total_successful,
+                "failed_enrichments": total_failed,
+                "cached_hits": 0,
+                "api_calls_made": total_api_calls,
+                "total_tokens_used": total_tokens,
+                "total_cost": total_cost,
+                "batches_processed": num_batches,
             },
-            'completed_at': datetime.now().isoformat()
+            "completed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
-        return {
-            'status': 'failed',
-            'error': str(e)
-        }
+        return {"status": "failed", "error": str(e)}
