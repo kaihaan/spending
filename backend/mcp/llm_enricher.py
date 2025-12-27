@@ -7,8 +7,7 @@ Handles batching, caching, error handling, and cost tracking
 import logging
 from dataclasses import dataclass
 
-import database_postgres as database
-
+import database
 from config.llm_config import LLMConfig, LLMProvider, load_llm_config
 from mcp.consistency_engine import (
     apply_rules_to_transaction,

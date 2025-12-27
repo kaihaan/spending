@@ -10,10 +10,11 @@ import os
 import secrets
 from datetime import datetime, timedelta
 
-import database_postgres as database
 import requests
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
+
+import database
 
 # Load environment variables (override=True to prefer .env file over shell env)
 load_dotenv(override=False)  # Docker env vars take precedence

@@ -8,8 +8,7 @@ Orchestrates the parsing flow: pre-filter → vendor → schema → pattern → 
 import json
 from datetime import datetime
 
-import database_postgres as database
-
+import database
 from mcp.gmail_parsers.base import get_vendor_parser
 from mcp.logging_config import get_logger
 

@@ -280,7 +280,7 @@ def _infer_essential_discretionary(category: str) -> str:
     """Infer essential/discretionary based on category.
     Uses is_essential flag from normalized_categories table."""
     try:
-        import database_postgres as database
+        import database
 
         essential_names = database.get_essential_category_names()
         if category in essential_names:

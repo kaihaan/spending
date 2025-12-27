@@ -32,8 +32,7 @@ import traceback
 from enum import Enum
 from typing import Any
 
-import database_postgres as db
-
+import database as db
 from mcp.logging_config import get_logger
 
 logger = get_logger(__name__)

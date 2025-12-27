@@ -8,7 +8,7 @@ Supports both sequential and parallel import strategies.
 import logging
 from datetime import UTC, datetime
 
-import database_postgres as database
+import database
 
 from .truelayer_auth import decrypt_token
 from .truelayer_sync import sync_account_transactions

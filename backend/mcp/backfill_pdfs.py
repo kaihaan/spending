@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import json
 import time
 
-import database_postgres as database
+import database
 
 from .gmail_auth import get_gmail_credentials
 from .gmail_client import build_gmail_service, get_message_content

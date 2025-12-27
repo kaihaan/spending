@@ -6,11 +6,12 @@ Implements secure authentication with rate limiting and audit logging.
 
 from datetime import timedelta
 
-import database_postgres as database
 from flask import Blueprint, jsonify, request
 from flask_login import current_user, login_required, login_user, logout_user
 from middleware.rate_limiter import clear_rate_limit, is_ip_blocked, rate_limit_login
 from models.user import User
+
+import database
 
 # Create authentication blueprint
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")

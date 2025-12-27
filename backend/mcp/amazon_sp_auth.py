@@ -256,7 +256,7 @@ def get_valid_access_token(connection: dict) -> str:
     Raises:
         Exception: If token refresh fails
     """
-    import database_postgres as database
+    import database
 
     # Decrypt stored token
     access_token = decrypt_token(connection["access_token"])

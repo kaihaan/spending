@@ -13,8 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-import database_postgres as database
-
+import database
 from mcp.truelayer_auth import decrypt_token
 from mcp.truelayer_sync import sync_account_transactions
 

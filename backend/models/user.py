@@ -100,7 +100,7 @@ class User(UserMixin):
         Raises:
             Exception: If username or email already exists
         """
-        import database_postgres as database
+        import database
 
         # Hash password using PBKDF2 with 600,000 iterations (NIST recommendation)
         password_hash = generate_password_hash(password, method="pbkdf2:sha256:600000")
@@ -132,7 +132,7 @@ class User(UserMixin):
         Returns:
             User instance or None if not found
         """
-        import database_postgres as database
+        import database
 
         user_data = database.get_user_by_id(user_id)
         if user_data:
@@ -149,7 +149,7 @@ class User(UserMixin):
         Returns:
             User instance or None if not found
         """
-        import database_postgres as database
+        import database
 
         user_data = database.get_user_by_username(username)
         if user_data:
@@ -166,7 +166,7 @@ class User(UserMixin):
         Returns:
             User instance or None if not found
         """
-        import database_postgres as database
+        import database
 
         user_data = database.get_user_by_email(email)
         if user_data:
@@ -175,7 +175,7 @@ class User(UserMixin):
 
     def update_last_login(self) -> None:
         """Update last_login_at timestamp to now."""
-        import database_postgres as database
+        import database
 
         self.last_login_at = datetime.now()
         database.update_user_last_login(self.id, self.last_login_at)

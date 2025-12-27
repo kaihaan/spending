@@ -109,7 +109,7 @@ def callback():
         print(f"   Provider: {provider_name} (id: {provider_id})")
 
         # Check if connection already exists for this provider
-        import database_postgres as database
+        import database
 
         existing_connections = database.get_user_connections(user_id)
         existing_connection = next(

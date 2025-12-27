@@ -24,17 +24,17 @@ def init_worker_db_pool(**kwargs):
     PostgreSQL connections cannot be shared across forked processes.
     Each worker process needs its own fresh connection pool.
     """
-    import database_postgres
+    import database
 
     # Close existing pool if any
-    if database_postgres.connection_pool is not None:
+    if database.connection_pool is not None:
         try:
-            database_postgres.connection_pool.closeall()
+            database.connection_pool.closeall()
         except Exception:
             pass
-        database_postgres.connection_pool = None
+        database.connection_pool = None
     # Initialize fresh pool for this worker
-    database_postgres.init_pool()
+    database.init_pool()
     print(f"✓ Worker {os.getpid()} initialized fresh DB connection pool")
 
 

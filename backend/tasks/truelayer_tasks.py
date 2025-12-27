@@ -2,8 +2,9 @@
 
 from datetime import datetime
 
-import database_postgres as db
 from celery_app import celery_app
+
+import database as db
 
 
 @celery_app.task(bind=True, time_limit=1800, soft_time_limit=1700)

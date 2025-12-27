@@ -189,7 +189,7 @@ class BaseLLMProvider(ABC):
             sys.path.insert(
                 0, os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
             )
-            import database_postgres as database
+            import database
 
             # Get active categories from normalized table
             categories_data = database.get_normalized_categories(active_only=True)
@@ -216,7 +216,7 @@ class BaseLLMProvider(ABC):
             sys.path.insert(
                 0, os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
             )
-            import database_postgres as database
+            import database
 
             # Get active categories with descriptions
             categories_data = database.get_normalized_categories(active_only=True)

@@ -10,8 +10,7 @@ Key features:
 
 from collections.abc import Generator
 
-import database_postgres as database
-
+import database
 from config.llm_config import LLMProvider, load_llm_config
 from mcp.gmail_auth import get_gmail_credentials
 from mcp.gmail_client import (

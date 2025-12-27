@@ -14,8 +14,7 @@ Confidence scoring:
 
 from datetime import UTC, datetime, timedelta
 
-import database_postgres as database
-
+import database
 from mcp.logging_config import get_logger
 
 # Initialize logger

@@ -9,8 +9,7 @@ sys.path.insert(0, "/app")
 
 import re
 
-import database_postgres as db
-
+import database as db
 from mcp.gmail_client import build_gmail_service, get_attachment_content
 from mcp.gmail_pdf_parser import extract_text_from_pdf
 

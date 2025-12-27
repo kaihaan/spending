@@ -7,7 +7,7 @@ Follows the same patterns as apple_matcher_truelayer.py and amazon_matcher.py.
 
 from datetime import UTC, datetime
 
-import database_postgres as database
+import database
 
 
 def match_all_amazon_business_transactions() -> dict:

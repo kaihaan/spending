@@ -17,6 +17,7 @@ from contextlib import contextmanager
 
 import psycopg2
 from dotenv import load_dotenv
+from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 
 # Load environment variables (don't override existing for Docker compatibility)
@@ -48,7 +49,7 @@ def init_pool():
     """
     global connection_pool
     try:
-        connection_pool = psycopg2.pool.ThreadedConnectionPool(
+        connection_pool = pool.ThreadedConnectionPool(
             1,  # Minimum connections
             10,  # Maximum connections
             **DB_CONFIG,

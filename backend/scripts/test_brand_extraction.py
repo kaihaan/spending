@@ -17,8 +17,7 @@ os.environ["POSTGRES_HOST"] = "localhost"
 os.environ["POSTGRES_PORT"] = "5433"
 os.environ["POSTGRES_PASSWORD"] = "aC0_Xbvulrw8ldPgU6sa"
 
-import database_postgres as database
-
+import database
 from mcp.gmail_parsing.orchestrator import parse_receipt_content
 
 

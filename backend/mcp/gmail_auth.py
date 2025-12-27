@@ -12,11 +12,12 @@ import os
 import secrets
 from datetime import UTC, datetime, timedelta
 
-import database_postgres as database
 import redis
 import requests
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
+
+import database
 
 # Load environment variables (Docker env vars take precedence)
 load_dotenv(override=False)

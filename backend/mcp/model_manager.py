@@ -6,8 +6,9 @@ Supports runtime model switching and custom model addition.
 
 import logging
 
-import database_postgres as database
 import requests
+
+import database
 
 logger = logging.getLogger(__name__)
 

@@ -21,9 +21,9 @@ import os
 import time
 from datetime import datetime
 
-import database_postgres as database
 import requests
 
+import database
 from mcp.amazon_sp_auth import get_valid_access_token
 
 # Regional API base URLs for Amazon Business

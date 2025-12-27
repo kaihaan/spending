@@ -7,7 +7,7 @@ CRITICAL: Excludes Apple Pay payment method transactions.
 import re
 from datetime import datetime
 
-import database_postgres as database
+import database
 
 
 def is_apple_transaction(description, merchant):

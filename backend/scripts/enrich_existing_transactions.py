@@ -35,7 +35,7 @@ os.chdir(os.path.dirname(__file__))
 # Load environment
 load_dotenv(override=True)
 
-import database_postgres as database
+import database
 
 
 def enrich_transactions(category="Other", limit=50, force_refresh=False, verbose=True):

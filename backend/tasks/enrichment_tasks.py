@@ -2,9 +2,9 @@
 
 from datetime import datetime
 
-import database_postgres as db
 from celery_app import celery_app
 
+import database as db
 from mcp.llm_enricher import get_enricher
 
 

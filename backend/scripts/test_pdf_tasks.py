@@ -11,8 +11,7 @@ import sys
 # Add backend to path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from database_postgres import get_db
-
+from database import get_db
 from tasks.gmail_tasks import process_pdf_receipt_task
 
 

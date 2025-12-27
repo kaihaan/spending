@@ -16,8 +16,7 @@ from datetime import datetime, timedelta
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import database_postgres as database
-
+import database
 from mcp.gmail_sync import sync_receipts_full
 
 

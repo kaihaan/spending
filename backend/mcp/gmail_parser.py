@@ -21,8 +21,7 @@ try:
 except ImportError:
     EXTRUCT_AVAILABLE = False
 
-import database_postgres as database
-
+import database
 from mcp.gmail_parsers.base import get_vendor_parser
 from mcp.logging_config import get_logger
 

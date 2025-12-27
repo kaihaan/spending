@@ -69,10 +69,10 @@ export function FilterProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    fetchTransactions();
+    void fetchTransactions();
 
     // Listen for transaction updates
-    const handleUpdate = () => fetchTransactions();
+    const handleUpdate = () => void fetchTransactions();
     window.addEventListener('transactions-updated', handleUpdate);
     return () => window.removeEventListener('transactions-updated', handleUpdate);
   }, [fetchTransactions]);

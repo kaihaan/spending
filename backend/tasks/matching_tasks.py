@@ -10,9 +10,10 @@ These tasks handle async matching of:
 
 from datetime import datetime
 
-import database_postgres as db
 from celery import group
 from celery_app import celery_app
+
+import database as db
 
 
 @celery_app.task(bind=True, time_limit=600, soft_time_limit=550)

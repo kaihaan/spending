@@ -68,7 +68,7 @@ export default function DirectDebitMigration() {
         </div>
         <button
           className="btn btn-primary"
-          onClick={handlePreviewChanges}
+          onClick={() => void handlePreviewChanges()}
           disabled={previewing || applying}
         >
           {previewing ? (
@@ -131,7 +131,7 @@ export default function DirectDebitMigration() {
             <div className="flex gap-2">
               <button
                 className="btn btn-success flex-1"
-                onClick={handleApplyChanges}
+                onClick={() => void handleApplyChanges()}
                 disabled={applying}
               >
                 {applying ? (

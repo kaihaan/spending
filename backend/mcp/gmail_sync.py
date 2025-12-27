@@ -20,8 +20,7 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-import database_postgres as database
-
+import database
 from mcp.gmail_auth import get_gmail_credentials
 from mcp.gmail_client import (
     build_gmail_service,

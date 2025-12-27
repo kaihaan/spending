@@ -8,7 +8,7 @@ deduplication, and integration with the app's transaction database.
 import time
 from datetime import UTC, datetime
 
-import database_postgres as database
+import database
 
 from .truelayer_auth import decrypt_token, encrypt_token, refresh_access_token
 from .truelayer_client import TrueLayerClient

@@ -7,7 +7,7 @@ based on historical user classification patterns.
 
 from collections import Counter, defaultdict
 
-import database_postgres as database
+import database
 
 
 def get_suggestion_for_transaction(transaction_id):

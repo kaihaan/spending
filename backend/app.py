@@ -2,10 +2,11 @@ import logging
 import os
 from pathlib import Path
 
-import database_postgres as database
 from dotenv import load_dotenv
 from flask import Flask
 from flask_cors import CORS
+
+import database
 
 # Load .env from project root (parent directory)
 env_path = Path(__file__).parent.parent / ".env"

@@ -6,7 +6,7 @@ Updates transaction descriptions and marks items as returned.
 
 from datetime import UTC, datetime, timedelta
 
-import database_postgres as database
+import database
 
 
 def match_all_returns():

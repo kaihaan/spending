@@ -5,7 +5,7 @@ Matches TrueLayer bank transactions with Apple Store purchases.
 
 from datetime import UTC, datetime
 
-import database_postgres as database
+import database
 
 
 def match_all_apple_transactions():

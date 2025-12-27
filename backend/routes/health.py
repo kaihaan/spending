@@ -7,9 +7,10 @@ Different responses for Cloud Run health probes vs authenticated admin users.
 
 from datetime import datetime
 
-import database_postgres as database
 from flask import Blueprint, jsonify, request
 from flask_login import current_user
+
+import database
 
 # Create health blueprint
 health_bp = Blueprint("health", __name__, url_prefix="/api")

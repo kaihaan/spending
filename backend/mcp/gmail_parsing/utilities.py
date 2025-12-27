@@ -15,8 +15,9 @@ import hashlib
 import re
 from datetime import datetime
 
-import database_postgres as database
 from bs4 import BeautifulSoup
+
+import database
 
 # Domain to merchant name mappings for known senders
 # Maps email domains to canonical merchant names

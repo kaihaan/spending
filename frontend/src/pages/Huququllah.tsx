@@ -50,13 +50,13 @@ export default function Huququllah() {
       setLoadingSuggestions(false);
     };
 
-    fetchSuggestions();
+    void fetchSuggestions();
   }, [unclassified.map(t => t.id).join(',')]); // Re-fetch when unclassified IDs change
 
   const handleClassify = async (transactionId: number, classification: 'essential' | 'discretionary') => {
     try {
       await axios.put(`${API_URL}/transactions/${transactionId}/huququllah`, { classification });
-      refreshTransactions(); // Refresh from context
+      void refreshTransactions(); // Refresh from context
     } catch (err) {
       console.error('Failed to classify transaction:', err);
       alert('Failed to classify transaction');
@@ -133,14 +133,14 @@ export default function Huququllah() {
                             <div className="flex gap-2">
                               <button
                                 className="btn btn-xs btn-success"
-                                onClick={() => handleClassify(txn.id, 'essential')}
+                                onClick={() => void handleClassify(txn.id, 'essential')}
                                 title="Mark as essential"
                               >
                                 Essential
                               </button>
                               <button
                                 className="btn btn-xs btn-secondary"
-                                onClick={() => handleClassify(txn.id, 'discretionary')}
+                                onClick={() => void handleClassify(txn.id, 'discretionary')}
                                 title="Mark as discretionary"
                               >
                                 Discretionary
