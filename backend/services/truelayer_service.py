@@ -7,7 +7,7 @@ transaction sync, and import job management.
 
 import cache_manager
 
-from backend.database import truelayer
+from database import truelayer
 from mcp import truelayer_sync
 
 

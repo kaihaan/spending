@@ -14,7 +14,7 @@ This package contains vendor-specific email parsers organized by domain:
 - specialty.py: All other specialty vendors
 
 Usage:
-    from backend.mcp.gmail_parsers import VENDOR_PARSERS, get_vendor_parser
+    from mcp.gmail_parsers import VENDOR_PARSERS, get_vendor_parser
 
     # Get parser for a specific domain
     parser = get_vendor_parser('amazon.co.uk')
@@ -25,7 +25,7 @@ Usage:
 # Import registry and utilities from base
 # Import all domain modules to trigger @register_vendor decorators
 # This registers all parsers into the VENDOR_PARSERS dict
-from . import (
+from . import (  # noqa: F401
     amazon,
     apple,
     digital_services,

@@ -78,8 +78,8 @@ def callback():
         # Retrieve code_verifier and user_id from database using state
         from datetime import datetime, timedelta
 
-        from backend.database.base import get_session
-        from backend.database.models.truelayer import OAuthState
+        from database.base import get_session
+        from database.models.truelayer import OAuthState
 
         with get_session() as session:
             # Query OAuth state created within last 10 minutes
@@ -113,7 +113,7 @@ def callback():
         print(f"   Provider: {provider_name} (id: {provider_id})")
 
         # Check if connection already exists for this provider
-        from backend.database import truelayer
+        from database import truelayer
 
         existing_connections = truelayer.get_user_connections(user_id)
         existing_connection = next(

@@ -14,7 +14,7 @@ import requests
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
-from backend.database import truelayer
+from database import truelayer
 
 # Load environment variables (override=True to prefer .env file over shell env)
 load_dotenv(override=False)  # Docker env vars take precedence
@@ -80,8 +80,8 @@ def get_authorization_url(user_id: int) -> dict:
 
     from sqlalchemy.dialects.postgresql import insert
 
-    from backend.database.base import get_session
-    from backend.database.models.truelayer import OAuthState
+    from database.base import get_session
+    from database.models.truelayer import OAuthState
 
     with get_session() as session:
         # Upsert OAuth state (on conflict update)

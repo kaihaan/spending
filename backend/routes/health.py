@@ -23,7 +23,7 @@ def check_db_connection() -> bool:
     try:
         from sqlalchemy import text
 
-        from backend.database.base import get_session
+        from database.base import get_session
 
         with get_session() as session:
             result = session.execute(text("SELECT 1")).scalar()
@@ -39,7 +39,7 @@ def check_redis_connection() -> bool:
         True if Redis is accessible
     """
     try:
-        from backend.middleware.rate_limiter import redis_client
+        from middleware.rate_limiter import redis_client
 
         return redis_client.ping()
     except Exception:
