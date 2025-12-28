@@ -4,19 +4,31 @@ Categories & Rules - Database Operations
 Handles all database operations for transaction categorization, category rules,
 and category management.
 
+Migrated to SQLAlchemy from psycopg2.
+
 Modules:
 - Category promotion (promote_category, demote_category, etc.)
 - Normalized categories & subcategories (get_all_categories, get_subcategories, etc.)
 - Category rules testing and statistics (test_category_rule, get_rule_statistics, etc.)
 """
 
+import contextlib
 import json
 
 import cache_manager
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from sqlalchemy import func, text
 
-from .base_psycopg2 import get_db
+from .base import get_session
+from .models.category import (
+    Category,
+    CategoryRule,
+    CustomCategory,
+    MerchantNormalization,
+    NormalizedCategory,
+    NormalizedSubcategory,
+    SubcategoryMapping,
+)
+from .models.truelayer import TrueLayerTransaction
 
 # ============================================================================
 # CATEGORY PROMOTION FUNCTIONS
@@ -25,68 +37,71 @@ from .base_psycopg2 import get_db
 
 def get_custom_categories(category_type=None, user_id=1):
     """Get custom categories, optionally filtered by type ('promoted' or 'hidden')."""
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            if category_type:
-                cursor.execute(
-                    """
-                    SELECT id, name, category_type, display_order, created_at, updated_at
-                    FROM custom_categories
-                    WHERE user_id = %s AND category_type = %s
-                    ORDER BY display_order ASC, name ASC
-                """,
-                    (user_id, category_type),
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT id, name, category_type, display_order, created_at, updated_at
-                    FROM custom_categories
-                    WHERE user_id = %s
-                    ORDER BY category_type ASC, display_order ASC, name ASC
-                """,
-                    (user_id,),
-                )
-            return cursor.fetchall()
+    with get_session() as session:
+        query = session.query(CustomCategory).filter(CustomCategory.user_id == user_id)
+
+        if category_type:
+            query = query.filter(CustomCategory.category_type == category_type)
+            query = query.order_by(
+                CustomCategory.display_order.asc(), CustomCategory.name.asc()
+            )
+        else:
+            query = query.order_by(
+                CustomCategory.category_type.asc(),
+                CustomCategory.display_order.asc(),
+                CustomCategory.name.asc(),
+            )
+
+        categories = query.all()
+        return [
+            {
+                "id": c.id,
+                "name": c.name,
+                "category_type": c.category_type,
+                "display_order": c.display_order,
+                "created_at": c.created_at,
+                "updated_at": c.updated_at,
+            }
+            for c in categories
+        ]
 
 
 def get_category_spending_summary(date_from=None, date_to=None):
     """Get all categories with spending totals from transactions."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        # Build the query with optional date filters
-        query = """
-                SELECT
-                    COALESCE(transaction_category, 'Uncategorized') as name,
-                    SUM(amount) as total_spend,
-                    COUNT(*) as transaction_count
-                FROM truelayer_transactions
-                WHERE transaction_type = 'DEBIT'
-            """
-        params = []
+    with get_session() as session:
+        # Build query with optional date filters
+        query = session.query(
+            func.coalesce(
+                TrueLayerTransaction.transaction_category, "Uncategorized"
+            ).label("name"),
+            func.sum(TrueLayerTransaction.amount).label("total_spend"),
+            func.count().label("transaction_count"),
+        ).filter(TrueLayerTransaction.transaction_type == "DEBIT")
 
         if date_from:
-            query += " AND timestamp >= %s"
-            params.append(date_from)
+            query = query.filter(TrueLayerTransaction.timestamp >= date_from)
         if date_to:
-            query += " AND timestamp <= %s"
-            params.append(date_to)
+            query = query.filter(TrueLayerTransaction.timestamp <= date_to)
 
-        query += """
-                GROUP BY transaction_category
-                ORDER BY total_spend DESC
-            """
+        query = query.group_by(TrueLayerTransaction.transaction_category).order_by(
+            text("total_spend DESC")
+        )
 
-        cursor.execute(query, params)
-        categories = cursor.fetchall()
+        results = query.all()
 
         # Check which are custom categories
         custom_cats = get_custom_categories(category_type="promoted")
         custom_names = {c["name"] for c in custom_cats}
 
-        for cat in categories:
-            cat["is_custom"] = cat["name"] in custom_names
-            cat["total_spend"] = (
-                float(cat["total_spend"]) if cat["total_spend"] else 0.0
+        categories = []
+        for row in results:
+            categories.append(
+                {
+                    "name": row.name,
+                    "total_spend": float(row.total_spend) if row.total_spend else 0.0,
+                    "transaction_count": row.transaction_count,
+                    "is_custom": row.name in custom_names,
+                }
             )
 
         return categories
@@ -94,44 +109,46 @@ def get_category_spending_summary(date_from=None, date_to=None):
 
 def get_subcategory_spending(category_name, date_from=None, date_to=None):
     """Get subcategories within a category with spending totals."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        query = """
-                SELECT
-                    COALESCE(metadata->'enrichment'->>'subcategory', 'Unknown') as name,
-                    SUM(amount) as total_spend,
-                    COUNT(*) as transaction_count
-                FROM truelayer_transactions
-                WHERE transaction_type = 'DEBIT'
-                  AND transaction_category = %s
-            """
-        params = [category_name]
+    with get_session() as session:
+        # Build query with JSONB extraction for subcategory
+        subcategory_expr = func.coalesce(
+            TrueLayerTransaction.metadata["enrichment"]["subcategory"].astext,
+            "Unknown",
+        ).label("name")
+
+        query = session.query(
+            subcategory_expr,
+            func.sum(TrueLayerTransaction.amount).label("total_spend"),
+            func.count().label("transaction_count"),
+        ).filter(
+            TrueLayerTransaction.transaction_type == "DEBIT",
+            TrueLayerTransaction.transaction_category == category_name,
+        )
 
         if date_from:
-            query += " AND timestamp >= %s"
-            params.append(date_from)
+            query = query.filter(TrueLayerTransaction.timestamp >= date_from)
         if date_to:
-            query += " AND timestamp <= %s"
-            params.append(date_to)
+            query = query.filter(TrueLayerTransaction.timestamp <= date_to)
 
-        query += """
-                GROUP BY metadata->'enrichment'->>'subcategory'
-                ORDER BY total_spend DESC
-            """
+        query = query.group_by(
+            TrueLayerTransaction.metadata["enrichment"]["subcategory"].astext
+        ).order_by(text("total_spend DESC"))
 
-        cursor.execute(query, params)
-        subcategories = cursor.fetchall()
+        results = query.all()
 
-        # Check which subcategories are already mapped
-        cursor.execute("""
-                SELECT subcategory_name
-                FROM subcategory_mappings
-            """)
-        mapped = {row["subcategory_name"] for row in cursor.fetchall()}
+        # Get mapped subcategories
+        mapped_subcats = session.query(SubcategoryMapping.subcategory_name).all()
+        mapped = {row[0] for row in mapped_subcats}
 
-        for sub in subcategories:
-            sub["already_mapped"] = sub["name"] in mapped
-            sub["total_spend"] = (
-                float(sub["total_spend"]) if sub["total_spend"] else 0.0
+        subcategories = []
+        for row in results:
+            subcategories.append(
+                {
+                    "name": row.name,
+                    "total_spend": float(row.total_spend) if row.total_spend else 0.0,
+                    "transaction_count": row.transaction_count,
+                    "already_mapped": row.name in mapped,
+                }
             )
 
         return subcategories
@@ -149,69 +166,71 @@ def create_promoted_category(name, subcategories, user_id=1):
     Returns:
         Dict with category_id and transactions_updated count
     """
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            try:
-                # Insert the custom category
-                cursor.execute(
-                    """
-                    INSERT INTO custom_categories (user_id, name, category_type)
-                    VALUES (%s, %s, 'promoted')
-                    RETURNING id
-                """,
-                    (user_id, name),
+    from sqlalchemy.dialects.postgresql import insert
+    from sqlalchemy.exc import IntegrityError
+
+    with get_session() as session:
+        try:
+            # Insert the custom category
+            stmt = (
+                insert(CustomCategory)
+                .values(user_id=user_id, name=name, category_type="promoted")
+                .returning(CustomCategory.id)
+            )
+            result = session.execute(stmt)
+            category_id = result.scalar_one()
+
+            # Insert subcategory mappings
+            subcategory_names = []
+            for sub in subcategories:
+                mapping = SubcategoryMapping(
+                    custom_category_id=category_id,
+                    subcategory_name=sub["name"],
+                    original_category=sub.get("original_category"),
                 )
-                category_id = cursor.fetchone()["id"]
+                session.add(mapping)
+                subcategory_names.append(sub["name"])
 
-                # Insert subcategory mappings
-                subcategory_names = []
-                for sub in subcategories:
-                    cursor.execute(
-                        """
-                        INSERT INTO subcategory_mappings (custom_category_id, subcategory_name, original_category)
-                        VALUES (%s, %s, %s)
-                    """,
-                        (category_id, sub["name"], sub.get("original_category")),
-                    )
-                    subcategory_names.append(sub["name"])
-
-                # Update all transactions with matching subcategories
-                if subcategory_names:
-                    cursor.execute(
+            # Update all transactions with matching subcategories
+            if subcategory_names:
+                # Use raw SQL for JSONB_SET operation
+                result = session.execute(
+                    text(
                         """
                         UPDATE truelayer_transactions
                         SET
-                            transaction_category = %s,
+                            transaction_category = :name,
                             metadata = jsonb_set(
                                 COALESCE(metadata, '{}'::jsonb),
                                 '{enrichment,primary_category}',
-                                %s::jsonb
+                                :name_json::jsonb
                             )
-                        WHERE metadata->'enrichment'->>'subcategory' = ANY(%s)
-                        RETURNING id
-                    """,
-                        (name, json.dumps(name), subcategory_names),
-                    )
-                    transactions_updated = cursor.rowcount
-                else:
-                    transactions_updated = 0
+                        WHERE metadata->'enrichment'->>'subcategory' = ANY(:subcategories)
+                    """
+                    ),
+                    {
+                        "name": name,
+                        "name_json": json.dumps(name),
+                        "subcategories": subcategory_names,
+                    },
+                )
+                transactions_updated = result.rowcount
+            else:
+                transactions_updated = 0
 
-                conn.commit()
+            session.commit()
 
-                # Invalidate transaction cache
-                cache_manager.cache_invalidate_transactions()
+            # Invalidate transaction cache
+            cache_manager.cache_invalidate_transactions()
 
-                return {
-                    "category_id": category_id,
-                    "transactions_updated": transactions_updated,
-                }
+            return {
+                "category_id": category_id,
+                "transactions_updated": transactions_updated,
+            }
 
-            except psycopg2.errors.UniqueViolation:
-                conn.rollback()
-                raise ValueError(f"Category '{name}' already exists")
-            except Exception as e:
-                conn.rollback()
-                raise e
+        except IntegrityError as e:
+            session.rollback()
+            raise ValueError(f"Category '{name}' already exists") from e
 
 
 def hide_category(name, user_id=1):
@@ -225,49 +244,47 @@ def hide_category(name, user_id=1):
     Returns:
         Dict with category_id and transactions_reset count
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        try:
-            # Insert/update the hidden category
-            cursor.execute(
-                """
-                    INSERT INTO custom_categories (user_id, name, category_type)
-                    VALUES (%s, %s, 'hidden')
-                    ON CONFLICT (user_id, name) DO UPDATE SET
-                        category_type = 'hidden',
-                        updated_at = NOW()
-                    RETURNING id
-                """,
-                (user_id, name),
+    from sqlalchemy.dialects.postgresql import insert
+
+    with get_session() as session:
+        # Insert/update the hidden category
+        stmt = (
+            insert(CustomCategory)
+            .values(user_id=user_id, name=name, category_type="hidden")
+            .on_conflict_do_update(
+                index_elements=["user_id", "name"],
+                set_={"category_type": "hidden", "updated_at": func.now()},
             )
-            category_id = cursor.fetchone()["id"]
+            .returning(CustomCategory.id)
+        )
+        result = session.execute(stmt)
+        category_id = result.scalar_one()
 
-            # Reset all transactions with this category for re-enrichment
-            cursor.execute(
+        # Reset all transactions with this category for re-enrichment
+        # Use text() for JSONB deletion operator
+        result = session.execute(
+            text(
                 """
-                    UPDATE truelayer_transactions
-                    SET
-                        transaction_category = NULL,
-                        metadata = metadata - 'enrichment'
-                    WHERE transaction_category = %s
-                    RETURNING id
-                """,
-                (name,),
-            )
-            transactions_reset = cursor.rowcount
+                UPDATE truelayer_transactions
+                SET
+                    transaction_category = NULL,
+                    metadata = metadata - 'enrichment'
+                WHERE transaction_category = :name
+            """
+            ),
+            {"name": name},
+        )
+        transactions_reset = result.rowcount
 
-            conn.commit()
+        session.commit()
 
-            # Invalidate transaction cache
-            cache_manager.cache_invalidate_transactions()
+        # Invalidate transaction cache
+        cache_manager.cache_invalidate_transactions()
 
-            return {
-                "category_id": category_id,
-                "transactions_reset": transactions_reset,
-            }
-
-        except Exception as e:
-            conn.rollback()
-            raise e
+        return {
+            "category_id": category_id,
+            "transactions_reset": transactions_reset,
+        }
 
 
 def unhide_category(name, user_id=1):
@@ -281,40 +298,47 @@ def unhide_category(name, user_id=1):
     Returns:
         True if successfully unhidden, False if not found
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                DELETE FROM custom_categories
-                WHERE user_id = %s AND name = %s AND category_type = 'hidden'
-            """,
-            (user_id, name),
+    with get_session() as session:
+        result = (
+            session.query(CustomCategory)
+            .filter(
+                CustomCategory.user_id == user_id,
+                CustomCategory.name == name,
+                CustomCategory.category_type == "hidden",
+            )
+            .delete()
         )
-        conn.commit()
-        return cursor.rowcount > 0
+        session.commit()
+        return result > 0
 
 
 def get_mapped_subcategories(category_name=None):
     """Get all subcategory mappings, optionally filtered by promoted category name."""
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            if category_name:
-                cursor.execute(
-                    """
-                    SELECT sm.id, sm.subcategory_name, sm.original_category, cc.name as promoted_category
-                    FROM subcategory_mappings sm
-                    JOIN custom_categories cc ON sm.custom_category_id = cc.id
-                    WHERE cc.name = %s AND cc.category_type = 'promoted'
-                """,
-                    (category_name,),
-                )
-            else:
-                cursor.execute("""
-                    SELECT sm.id, sm.subcategory_name, sm.original_category, cc.name as promoted_category
-                    FROM subcategory_mappings sm
-                    JOIN custom_categories cc ON sm.custom_category_id = cc.id
-                    WHERE cc.category_type = 'promoted'
-                """)
-            return cursor.fetchall()
+    with get_session() as session:
+        query = (
+            session.query(
+                SubcategoryMapping.id,
+                SubcategoryMapping.subcategory_name,
+                SubcategoryMapping.original_category,
+                CustomCategory.name.label("promoted_category"),
+            )
+            .join(CustomCategory)
+            .filter(CustomCategory.category_type == "promoted")
+        )
+
+        if category_name:
+            query = query.filter(CustomCategory.name == category_name)
+
+        results = query.all()
+        return [
+            {
+                "id": r.id,
+                "subcategory_name": r.subcategory_name,
+                "original_category": r.original_category,
+                "promoted_category": r.promoted_category,
+            }
+            for r in results
+        ]
 
 
 # ============================================================================
@@ -339,20 +363,24 @@ def test_rule_pattern(pattern: str, pattern_type: str, limit: int = 10) -> dict:
     """
     import re
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Get all transactions
-        cursor.execute("""
-                SELECT id, description, amount, timestamp as date
-                FROM truelayer_transactions
-                ORDER BY timestamp DESC
-            """)
-        transactions = cursor.fetchall()
+        transactions = (
+            session.query(
+                TrueLayerTransaction.id,
+                TrueLayerTransaction.description,
+                TrueLayerTransaction.amount,
+                TrueLayerTransaction.timestamp.label("date"),
+            )
+            .order_by(TrueLayerTransaction.timestamp.desc())
+            .all()
+        )
 
         matches = []
         pattern_upper = pattern.upper()
 
         for txn in transactions:
-            description = txn["description"].upper() if txn["description"] else ""
+            description = txn.description.upper() if txn.description else ""
 
             matched = False
             if pattern_type == "contains":
@@ -364,7 +392,7 @@ def test_rule_pattern(pattern: str, pattern_type: str, limit: int = 10) -> dict:
             elif pattern_type == "regex":
                 try:
                     matched = bool(
-                        re.search(pattern, txn["description"] or "", re.IGNORECASE)
+                        re.search(pattern, txn.description or "", re.IGNORECASE)
                     )
                 except re.error:
                     matched = False
@@ -372,10 +400,10 @@ def test_rule_pattern(pattern: str, pattern_type: str, limit: int = 10) -> dict:
             if matched:
                 matches.append(
                     {
-                        "id": txn["id"],
-                        "description": txn["description"],
-                        "amount": float(txn["amount"]) if txn["amount"] else 0,
-                        "date": txn["date"].isoformat() if txn["date"] else None,
+                        "id": txn.id,
+                        "description": txn.description,
+                        "amount": float(txn.amount) if txn.amount else 0,
+                        "date": txn.date.isoformat() if txn.date else None,
                     }
                 )
 
@@ -397,39 +425,49 @@ def get_rules_statistics() -> dict:
             - top_used_rules: List of top 10 most used rules
             - unused_rules: List of rules with usage_count = 0
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    from sqlalchemy import literal, union_all
+
+    with get_session() as session:
         # Count category rules
-        cursor.execute(
-            "SELECT COUNT(*) as count FROM category_rules WHERE is_active = true"
+        category_rules_count = (
+            session.query(func.count())
+            .select_from(CategoryRule)
+            .filter(CategoryRule.is_active.is_(True))
+            .scalar()
         )
-        category_rules_count = cursor.fetchone()["count"]
 
         # Count merchant normalizations
-        cursor.execute("SELECT COUNT(*) as count FROM merchant_normalizations")
-        merchant_rules_count = cursor.fetchone()["count"]
+        merchant_rules_count = (
+            session.query(func.count()).select_from(MerchantNormalization).scalar()
+        )
 
         # Get total usage
-        cursor.execute(
-            "SELECT COALESCE(SUM(usage_count), 0) as total FROM category_rules"
+        category_usage = (
+            session.query(func.coalesce(func.sum(CategoryRule.usage_count), 0))
+            .select_from(CategoryRule)
+            .scalar()
         )
-        category_usage = cursor.fetchone()["total"]
-        cursor.execute(
-            "SELECT COALESCE(SUM(usage_count), 0) as total FROM merchant_normalizations"
+        merchant_usage = (
+            session.query(func.coalesce(func.sum(MerchantNormalization.usage_count), 0))
+            .select_from(MerchantNormalization)
+            .scalar()
         )
-        merchant_usage = cursor.fetchone()["total"]
         total_usage = category_usage + merchant_usage
 
         # Get coverage: count transactions with rule-based enrichment
-        cursor.execute("""
-                SELECT COUNT(*) as total FROM truelayer_transactions
-            """)
-        total_transactions = cursor.fetchone()["total"]
+        total_transactions = (
+            session.query(func.count()).select_from(TrueLayerTransaction).scalar()
+        )
 
-        cursor.execute("""
-                SELECT COUNT(*) as covered FROM truelayer_transactions
-                WHERE metadata->'enrichment'->>'enrichment_source' = 'rule'
-            """)
-        covered_transactions = cursor.fetchone()["covered"]
+        covered_transactions = (
+            session.query(func.count())
+            .select_from(TrueLayerTransaction)
+            .filter(
+                TrueLayerTransaction.metadata["enrichment"]["enrichment_source"].astext
+                == "rule"
+            )
+            .scalar()
+        )
 
         coverage_percentage = (
             (covered_transactions / total_transactions * 100)
@@ -438,60 +476,76 @@ def get_rules_statistics() -> dict:
         )
 
         # Rules by category
-        cursor.execute("""
-                SELECT category, COUNT(*) as count
-                FROM category_rules
-                WHERE is_active = true
-                GROUP BY category
-                ORDER BY count DESC
-            """)
-        rules_by_category = {row["category"]: row["count"] for row in cursor.fetchall()}
+        rules_by_category_query = (
+            session.query(CategoryRule.category, func.count().label("count"))
+            .filter(CategoryRule.is_active.is_(True))
+            .group_by(CategoryRule.category)
+            .order_by(func.count().desc())
+            .all()
+        )
+        rules_by_category = {row.category: row.count for row in rules_by_category_query}
 
         # Rules by source (combine both tables)
-        cursor.execute("""
-                SELECT source, COUNT(*) as count
-                FROM (
-                    SELECT source FROM category_rules WHERE is_active = true
-                    UNION ALL
-                    SELECT source FROM merchant_normalizations
-                ) combined
-                GROUP BY source
-                ORDER BY count DESC
-            """)
-        rules_by_source = {row["source"]: row["count"] for row in cursor.fetchall()}
+        category_sources = session.query(CategoryRule.source).filter(
+            CategoryRule.is_active.is_(True)
+        )
+        merchant_sources = session.query(MerchantNormalization.source)
+
+        combined_sources = union_all(category_sources, merchant_sources).subquery()
+
+        rules_by_source_query = (
+            session.query(combined_sources.c.source, func.count().label("count"))
+            .group_by(combined_sources.c.source)
+            .order_by(func.count().desc())
+            .all()
+        )
+        rules_by_source = {row.source: row.count for row in rules_by_source_query}
 
         # Top used rules (combine category rules and merchant normalizations)
-        cursor.execute("""
-                SELECT name, usage_count, type FROM (
-                    SELECT rule_name as name, usage_count, 'category' as type
-                    FROM category_rules
-                    WHERE is_active = true
-                    UNION ALL
-                    SELECT pattern as name, usage_count, 'merchant' as type
-                    FROM merchant_normalizations
-                ) combined
-                ORDER BY usage_count DESC
-                LIMIT 10
-            """)
+        category_rules_query = session.query(
+            CategoryRule.rule_name.label("name"),
+            CategoryRule.usage_count,
+            literal("category").label("type"),
+        ).filter(CategoryRule.is_active.is_(True))
+
+        merchant_rules_query = session.query(
+            MerchantNormalization.pattern.label("name"),
+            MerchantNormalization.usage_count,
+            literal("merchant").label("type"),
+        )
+
+        top_rules_combined = union_all(
+            category_rules_query, merchant_rules_query
+        ).subquery()
+
+        top_used_rules_query = (
+            session.query(top_rules_combined)
+            .order_by(top_rules_combined.c.usage_count.desc())
+            .limit(10)
+            .all()
+        )
         top_used_rules = [
-            {"name": row["name"], "count": row["usage_count"], "type": row["type"]}
-            for row in cursor.fetchall()
+            {"name": row.name, "count": row.usage_count, "type": row.type}
+            for row in top_used_rules_query
         ]
 
         # Unused rules
-        cursor.execute("""
-                SELECT name, type FROM (
-                    SELECT rule_name as name, 'category' as type
-                    FROM category_rules
-                    WHERE is_active = true AND usage_count = 0
-                    UNION ALL
-                    SELECT pattern as name, 'merchant' as type
-                    FROM merchant_normalizations
-                    WHERE usage_count = 0
-                ) combined
-            """)
+        unused_category_rules = session.query(
+            CategoryRule.rule_name.label("name"), literal("category").label("type")
+        ).filter(CategoryRule.is_active.is_(True), CategoryRule.usage_count == 0)
+
+        unused_merchant_rules = session.query(
+            MerchantNormalization.pattern.label("name"),
+            literal("merchant").label("type"),
+        ).filter(MerchantNormalization.usage_count == 0)
+
+        unused_rules_combined = union_all(
+            unused_category_rules, unused_merchant_rules
+        ).subquery()
+
+        unused_rules_query = session.query(unused_rules_combined).all()
         unused_rules = [
-            {"name": row["name"], "type": row["type"]} for row in cursor.fetchall()
+            {"name": row.name, "type": row.type} for row in unused_rules_query
         ]
 
         return {
@@ -518,153 +572,176 @@ def test_all_rules() -> dict:
     import re
     from collections import defaultdict
 
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            # Get all active category rules
-            cursor.execute("""
-                SELECT id, rule_name, description_pattern, pattern_type, category, subcategory
-                FROM category_rules
-                WHERE is_active = true
-                ORDER BY priority DESC
-            """)
-            category_rules = cursor.fetchall()
-
-            # Get all merchant normalizations
-            cursor.execute("""
-                SELECT id, pattern, pattern_type, normalized_name, default_category
-                FROM merchant_normalizations
-                ORDER BY priority DESC
-            """)
-            merchant_rules = cursor.fetchall()
-
-            # Get all transactions
-            cursor.execute("""
-                SELECT id, description
-                FROM truelayer_transactions
-            """)
-            transactions = cursor.fetchall()
-
-            # Track matches
-            rule_matches = defaultdict(list)  # rule_id -> [txn_ids]
-            txn_matches = defaultdict(list)  # txn_id -> [rule_ids]
-            category_coverage = defaultdict(int)  # category -> count
-
-            for txn in transactions:
-                desc = txn["description"].upper() if txn["description"] else ""
-                matched_any = False
-
-                # Check category rules
-                for rule in category_rules:
-                    pattern = rule["description_pattern"].upper()
-                    pattern_type = rule["pattern_type"]
-
-                    matched = False
-                    if pattern_type == "contains":
-                        matched = pattern in desc
-                    elif pattern_type == "starts_with":
-                        matched = desc.startswith(pattern)
-                    elif pattern_type == "exact":
-                        matched = desc == pattern
-                    elif pattern_type == "regex":
-                        try:
-                            matched = bool(
-                                re.search(
-                                    rule["description_pattern"],
-                                    txn["description"] or "",
-                                    re.IGNORECASE,
-                                )
-                            )
-                        except re.error:
-                            pass
-
-                    if matched:
-                        rule_key = f"cat_{rule['id']}"
-                        rule_matches[rule_key].append(txn["id"])
-                        txn_matches[txn["id"]].append(rule_key)
-                        category_coverage[rule["category"]] += 1
-                        matched_any = True
-
-                # Check merchant rules
-                for rule in merchant_rules:
-                    pattern = rule["pattern"].upper()
-                    pattern_type = rule["pattern_type"]
-
-                    matched = False
-                    if pattern_type == "contains":
-                        matched = pattern in desc
-                    elif pattern_type == "starts_with":
-                        matched = desc.startswith(pattern)
-                    elif pattern_type == "exact":
-                        matched = desc == pattern
-                    elif pattern_type == "regex":
-                        try:
-                            matched = bool(
-                                re.search(
-                                    rule["pattern"],
-                                    txn["description"] or "",
-                                    re.IGNORECASE,
-                                )
-                            )
-                        except re.error:
-                            pass
-
-                    if matched:
-                        rule_key = f"mer_{rule['id']}"
-                        rule_matches[rule_key].append(txn["id"])
-                        txn_matches[txn["id"]].append(rule_key)
-                        if rule["default_category"]:
-                            category_coverage[rule["default_category"]] += 1
-                        matched_any = True
-
-            # Calculate statistics
-            total_transactions = len(transactions)
-            covered_transactions = len([t for t in txn_matches if txn_matches[t]])
-            coverage_percentage = (
-                (covered_transactions / total_transactions * 100)
-                if total_transactions > 0
-                else 0
+    with get_session() as session:
+        # Get all active category rules
+        category_rules_orm = (
+            session.query(
+                CategoryRule.id,
+                CategoryRule.rule_name,
+                CategoryRule.description_pattern,
+                CategoryRule.pattern_type,
+                CategoryRule.category,
+                CategoryRule.subcategory,
             )
-
-            # Find unused rules
-            unused_category_rules = [
-                r for r in category_rules if f"cat_{r['id']}" not in rule_matches
-            ]
-            unused_merchant_rules = [
-                r for r in merchant_rules if f"mer_{r['id']}" not in rule_matches
-            ]
-
-            # Find potential conflicts (transactions matching multiple rules)
-            conflicts = []
-            for txn_id, rules in txn_matches.items():
-                if len(rules) > 1:
-                    conflicts.append(
-                        {"transaction_id": txn_id, "matching_rules": rules}
-                    )
-
-            return {
-                "total_transactions": total_transactions,
-                "covered_transactions": covered_transactions,
-                "coverage_percentage": round(coverage_percentage, 1),
-                "category_coverage": dict(category_coverage),
-                "unused_category_rules": [
-                    {
-                        "id": r["id"],
-                        "name": r["rule_name"],
-                        "pattern": r["description_pattern"],
-                    }
-                    for r in unused_category_rules
-                ],
-                "unused_merchant_rules": [
-                    {
-                        "id": r["id"],
-                        "pattern": r["pattern"],
-                        "name": r["normalized_name"],
-                    }
-                    for r in unused_merchant_rules
-                ],
-                "potential_conflicts_count": len(conflicts),
-                "sample_conflicts": conflicts[:10],  # Limit to 10 examples
+            .filter(CategoryRule.is_active.is_(True))
+            .order_by(CategoryRule.priority.desc())
+            .all()
+        )
+        category_rules = [
+            {
+                "id": r.id,
+                "rule_name": r.rule_name,
+                "description_pattern": r.description_pattern,
+                "pattern_type": r.pattern_type,
+                "category": r.category,
+                "subcategory": r.subcategory,
             }
+            for r in category_rules_orm
+        ]
+
+        # Get all merchant normalizations
+        merchant_rules_orm = (
+            session.query(
+                MerchantNormalization.id,
+                MerchantNormalization.pattern,
+                MerchantNormalization.pattern_type,
+                MerchantNormalization.normalized_name,
+                MerchantNormalization.default_category,
+            )
+            .order_by(MerchantNormalization.priority.desc())
+            .all()
+        )
+        merchant_rules = [
+            {
+                "id": r.id,
+                "pattern": r.pattern,
+                "pattern_type": r.pattern_type,
+                "normalized_name": r.normalized_name,
+                "default_category": r.default_category,
+            }
+            for r in merchant_rules_orm
+        ]
+
+        # Get all transactions
+        transactions_orm = session.query(
+            TrueLayerTransaction.id, TrueLayerTransaction.description
+        ).all()
+        transactions = [
+            {"id": t.id, "description": t.description} for t in transactions_orm
+        ]
+
+        # Track matches
+        rule_matches = defaultdict(list)  # rule_id -> [txn_ids]
+        txn_matches = defaultdict(list)  # txn_id -> [rule_ids]
+        category_coverage = defaultdict(int)  # category -> count
+
+        for txn in transactions:
+            desc = txn["description"].upper() if txn["description"] else ""
+
+            # Check category rules
+            for rule in category_rules:
+                pattern = rule["description_pattern"].upper()
+                pattern_type = rule["pattern_type"]
+
+                matched = False
+                if pattern_type == "contains":
+                    matched = pattern in desc
+                elif pattern_type == "starts_with":
+                    matched = desc.startswith(pattern)
+                elif pattern_type == "exact":
+                    matched = desc == pattern
+                elif pattern_type == "regex":
+                    with contextlib.suppress(re.error):
+                        matched = bool(
+                            re.search(
+                                rule["description_pattern"],
+                                txn["description"] or "",
+                                re.IGNORECASE,
+                            )
+                        )
+
+                if matched:
+                    rule_key = f"cat_{rule['id']}"
+                    rule_matches[rule_key].append(txn["id"])
+                    txn_matches[txn["id"]].append(rule_key)
+                    category_coverage[rule["category"]] += 1
+
+            # Check merchant rules
+            for rule in merchant_rules:
+                pattern = rule["pattern"].upper()
+                pattern_type = rule["pattern_type"]
+
+                matched = False
+                if pattern_type == "contains":
+                    matched = pattern in desc
+                elif pattern_type == "starts_with":
+                    matched = desc.startswith(pattern)
+                elif pattern_type == "exact":
+                    matched = desc == pattern
+                elif pattern_type == "regex":
+                    with contextlib.suppress(re.error):
+                        matched = bool(
+                            re.search(
+                                rule["pattern"],
+                                txn["description"] or "",
+                                re.IGNORECASE,
+                            )
+                        )
+
+                if matched:
+                    rule_key = f"mer_{rule['id']}"
+                    rule_matches[rule_key].append(txn["id"])
+                    txn_matches[txn["id"]].append(rule_key)
+                    if rule["default_category"]:
+                        category_coverage[rule["default_category"]] += 1
+
+        # Calculate statistics
+        total_transactions = len(transactions)
+        covered_transactions = len([t for t in txn_matches if txn_matches[t]])
+        coverage_percentage = (
+            (covered_transactions / total_transactions * 100)
+            if total_transactions > 0
+            else 0
+        )
+
+        # Find unused rules
+        unused_category_rules = [
+            r for r in category_rules if f"cat_{r['id']}" not in rule_matches
+        ]
+        unused_merchant_rules = [
+            r for r in merchant_rules if f"mer_{r['id']}" not in rule_matches
+        ]
+
+        # Find potential conflicts (transactions matching multiple rules)
+        conflicts = []
+        for txn_id, rules in txn_matches.items():
+            if len(rules) > 1:
+                conflicts.append({"transaction_id": txn_id, "matching_rules": rules})
+
+        return {
+            "total_transactions": total_transactions,
+            "covered_transactions": covered_transactions,
+            "coverage_percentage": round(coverage_percentage, 1),
+            "category_coverage": dict(category_coverage),
+            "unused_category_rules": [
+                {
+                    "id": r["id"],
+                    "name": r["rule_name"],
+                    "pattern": r["description_pattern"],
+                }
+                for r in unused_category_rules
+            ],
+            "unused_merchant_rules": [
+                {
+                    "id": r["id"],
+                    "pattern": r["pattern"],
+                    "name": r["normalized_name"],
+                }
+                for r in unused_merchant_rules
+            ],
+            "potential_conflicts_count": len(conflicts),
+            "sample_conflicts": conflicts[:10],  # Limit to 10 examples
+        }
 
 
 def apply_all_rules_to_transactions() -> dict:
@@ -679,49 +756,94 @@ def apply_all_rules_to_transactions() -> dict:
     """
     from mcp.consistency_engine import apply_rules_to_transaction
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Get all rules
-        cursor.execute("""
-                SELECT * FROM category_rules
-                WHERE is_active = true
-                ORDER BY priority DESC
-            """)
-        category_rules = cursor.fetchall()
+        category_rules_orm = (
+            session.query(CategoryRule)
+            .filter(CategoryRule.is_active.is_(True))
+            .order_by(CategoryRule.priority.desc())
+            .all()
+        )
+        category_rules = [
+            {
+                "id": r.id,
+                "rule_name": r.rule_name,
+                "transaction_type": r.transaction_type,
+                "description_pattern": r.description_pattern,
+                "pattern_type": r.pattern_type,
+                "category": r.category,
+                "subcategory": r.subcategory,
+                "priority": r.priority,
+                "is_active": r.is_active,
+                "source": r.source,
+                "usage_count": r.usage_count,
+                "created_at": r.created_at,
+            }
+            for r in category_rules_orm
+        ]
 
-        cursor.execute("""
-                SELECT * FROM merchant_normalizations
-                ORDER BY priority DESC
-            """)
-        merchant_normalizations = cursor.fetchall()
+        merchant_normalizations_orm = (
+            session.query(MerchantNormalization)
+            .order_by(MerchantNormalization.priority.desc())
+            .all()
+        )
+        merchant_normalizations = [
+            {
+                "id": r.id,
+                "pattern": r.pattern,
+                "pattern_type": r.pattern_type,
+                "normalized_name": r.normalized_name,
+                "merchant_type": r.merchant_type,
+                "default_category": r.default_category,
+                "priority": r.priority,
+                "source": r.source,
+                "usage_count": r.usage_count,
+                "created_at": r.created_at,
+                "updated_at": r.updated_at,
+            }
+            for r in merchant_normalizations_orm
+        ]
 
         # Get all transactions
-        cursor.execute("""
-                SELECT id, description, amount, transaction_type, timestamp, metadata
-                FROM truelayer_transactions
-            """)
-        transactions = cursor.fetchall()
+        transactions_orm = session.query(
+            TrueLayerTransaction.id,
+            TrueLayerTransaction.description,
+            TrueLayerTransaction.amount,
+            TrueLayerTransaction.transaction_type,
+            TrueLayerTransaction.timestamp,
+            TrueLayerTransaction.metadata,
+        ).all()
 
         updated_count = 0
         rule_hits = {}
 
-        for txn in transactions:
-            txn_dict = dict(txn)
+        for txn in transactions_orm:
+            txn_dict = {
+                "id": txn.id,
+                "description": txn.description,
+                "amount": txn.amount,
+                "transaction_type": txn.transaction_type,
+                "timestamp": txn.timestamp,
+                "metadata": txn.metadata,
+            }
             result = apply_rules_to_transaction(
                 txn_dict, category_rules, merchant_normalizations
             )
 
             if result and result.get("primary_category"):
                 # Update the transaction with rule-based enrichment
-                metadata = txn["metadata"] or {}
+                metadata = txn.metadata or {}
                 metadata["enrichment"] = result
 
-                cursor.execute(
-                    """
+                session.execute(
+                    text(
+                        """
                         UPDATE truelayer_transactions
-                        SET metadata = %s
-                        WHERE id = %s
-                    """,
-                    (json.dumps(metadata), txn["id"]),
+                        SET metadata = :metadata
+                        WHERE id = :txn_id
+                    """
+                    ),
+                    {"metadata": json.dumps(metadata), "txn_id": txn.id},
                 )
 
                 updated_count += 1
@@ -730,11 +852,11 @@ def apply_all_rules_to_transactions() -> dict:
                 matched_rule = result.get("matched_rule", "unknown")
                 rule_hits[matched_rule] = rule_hits.get(matched_rule, 0) + 1
 
-        conn.commit()
+        session.commit()
 
         return {
             "updated_count": updated_count,
-            "total_transactions": len(transactions),
+            "total_transactions": len(transactions_orm),
             "rule_hits": rule_hits,
         }
 
@@ -757,101 +879,214 @@ def get_normalized_categories(active_only: bool = False, include_counts: bool = 
     Returns:
         List of category dictionaries
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         if include_counts:
-            cursor.execute(
-                """
-                    SELECT
-                        nc.*,
-                        COALESCE(txn_counts.transaction_count, 0) as transaction_count,
-                        COALESCE(sub_counts.subcategory_count, 0) as subcategory_count
-                    FROM normalized_categories nc
-                    LEFT JOIN (
-                        SELECT category_id, COUNT(*) as transaction_count
-                        FROM truelayer_transactions
-                        WHERE category_id IS NOT NULL
-                        GROUP BY category_id
-                    ) txn_counts ON nc.id = txn_counts.category_id
-                    LEFT JOIN (
-                        SELECT category_id, COUNT(*) as subcategory_count
-                        FROM normalized_subcategories
-                        GROUP BY category_id
-                    ) sub_counts ON nc.id = sub_counts.category_id
-                    WHERE (%s = FALSE OR nc.is_active = TRUE)
-                    ORDER BY nc.display_order, nc.name
-                """,
-                (active_only,),
+            # Transaction counts subquery
+            txn_counts_sq = (
+                session.query(
+                    TrueLayerTransaction.category_id,
+                    func.count().label("transaction_count"),
+                )
+                .filter(TrueLayerTransaction.category_id.is_not(None))
+                .group_by(TrueLayerTransaction.category_id)
+                .subquery()
             )
-        else:
-            cursor.execute(
-                """
-                    SELECT * FROM normalized_categories
-                    WHERE (%s = FALSE OR is_active = TRUE)
-                    ORDER BY display_order, name
-                """,
-                (active_only,),
+
+            # Subcategory counts subquery
+            sub_counts_sq = (
+                session.query(
+                    NormalizedSubcategory.category_id,
+                    func.count().label("subcategory_count"),
+                )
+                .group_by(NormalizedSubcategory.category_id)
+                .subquery()
             )
-        return cursor.fetchall()
+
+            # Main query with LEFT JOINs
+            query = (
+                session.query(
+                    NormalizedCategory,
+                    func.coalesce(txn_counts_sq.c.transaction_count, 0).label(
+                        "transaction_count"
+                    ),
+                    func.coalesce(sub_counts_sq.c.subcategory_count, 0).label(
+                        "subcategory_count"
+                    ),
+                )
+                .outerjoin(
+                    txn_counts_sq, NormalizedCategory.id == txn_counts_sq.c.category_id
+                )
+                .outerjoin(
+                    sub_counts_sq, NormalizedCategory.id == sub_counts_sq.c.category_id
+                )
+            )
+
+            if active_only:
+                query = query.filter(NormalizedCategory.is_active.is_(True))
+
+            results = query.order_by(
+                NormalizedCategory.display_order, NormalizedCategory.name
+            ).all()
+
+            return [
+                {
+                    "id": r.NormalizedCategory.id,
+                    "name": r.NormalizedCategory.name,
+                    "description": r.NormalizedCategory.description,
+                    "is_system": r.NormalizedCategory.is_system,
+                    "is_active": r.NormalizedCategory.is_active,
+                    "is_essential": r.NormalizedCategory.is_essential,
+                    "display_order": r.NormalizedCategory.display_order,
+                    "color": r.NormalizedCategory.color,
+                    "created_at": r.NormalizedCategory.created_at,
+                    "updated_at": r.NormalizedCategory.updated_at,
+                    "transaction_count": r.transaction_count,
+                    "subcategory_count": r.subcategory_count,
+                }
+                for r in results
+            ]
+        query = session.query(NormalizedCategory)
+
+        if active_only:
+            query = query.filter(NormalizedCategory.is_active.is_(True))
+
+        categories = query.order_by(
+            NormalizedCategory.display_order, NormalizedCategory.name
+        ).all()
+
+        return [
+            {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "is_system": c.is_system,
+                "is_active": c.is_active,
+                "is_essential": c.is_essential,
+                "display_order": c.display_order,
+                "color": c.color,
+                "created_at": c.created_at,
+                "updated_at": c.updated_at,
+            }
+            for c in categories
+        ]
 
 
 def get_normalized_category_by_id(category_id: int):
     """Get a single normalized category by ID with subcategories."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        # Get category
-        cursor.execute(
-            """
-                SELECT
-                    nc.*,
-                    COALESCE(txn_counts.transaction_count, 0) as transaction_count
-                FROM normalized_categories nc
-                LEFT JOIN (
-                    SELECT category_id, COUNT(*) as transaction_count
-                    FROM truelayer_transactions
-                    WHERE category_id IS NOT NULL
-                    GROUP BY category_id
-                ) txn_counts ON nc.id = txn_counts.category_id
-                WHERE nc.id = %s
-            """,
-            (category_id,),
+    with get_session() as session:
+        # Transaction counts subquery for category
+        txn_counts_sq = (
+            session.query(
+                TrueLayerTransaction.category_id,
+                func.count().label("transaction_count"),
+            )
+            .filter(TrueLayerTransaction.category_id.is_not(None))
+            .group_by(TrueLayerTransaction.category_id)
+            .subquery()
         )
-        category = cursor.fetchone()
 
-        if not category:
+        # Get category with transaction count
+        result = (
+            session.query(
+                NormalizedCategory,
+                func.coalesce(txn_counts_sq.c.transaction_count, 0).label(
+                    "transaction_count"
+                ),
+            )
+            .outerjoin(
+                txn_counts_sq, NormalizedCategory.id == txn_counts_sq.c.category_id
+            )
+            .filter(NormalizedCategory.id == category_id)
+            .first()
+        )
+
+        if not result:
             return None
 
-        # Get subcategories
-        cursor.execute(
-            """
-                SELECT
-                    ns.*,
-                    COALESCE(txn_counts.transaction_count, 0) as transaction_count
-                FROM normalized_subcategories ns
-                LEFT JOIN (
-                    SELECT subcategory_id, COUNT(*) as transaction_count
-                    FROM truelayer_transactions
-                    WHERE subcategory_id IS NOT NULL
-                    GROUP BY subcategory_id
-                ) txn_counts ON ns.id = txn_counts.subcategory_id
-                WHERE ns.category_id = %s
-                ORDER BY ns.display_order, ns.name
-            """,
-            (category_id,),
+        category = {
+            "id": result.NormalizedCategory.id,
+            "name": result.NormalizedCategory.name,
+            "description": result.NormalizedCategory.description,
+            "is_system": result.NormalizedCategory.is_system,
+            "is_active": result.NormalizedCategory.is_active,
+            "is_essential": result.NormalizedCategory.is_essential,
+            "display_order": result.NormalizedCategory.display_order,
+            "color": result.NormalizedCategory.color,
+            "created_at": result.NormalizedCategory.created_at,
+            "updated_at": result.NormalizedCategory.updated_at,
+            "transaction_count": result.transaction_count,
+        }
+
+        # Transaction counts subquery for subcategories
+        sub_txn_counts_sq = (
+            session.query(
+                TrueLayerTransaction.subcategory_id,
+                func.count().label("transaction_count"),
+            )
+            .filter(TrueLayerTransaction.subcategory_id.is_not(None))
+            .group_by(TrueLayerTransaction.subcategory_id)
+            .subquery()
         )
-        category["subcategories"] = cursor.fetchall()
+
+        # Get subcategories with transaction counts
+        subcategory_results = (
+            session.query(
+                NormalizedSubcategory,
+                func.coalesce(sub_txn_counts_sq.c.transaction_count, 0).label(
+                    "transaction_count"
+                ),
+            )
+            .outerjoin(
+                sub_txn_counts_sq,
+                NormalizedSubcategory.id == sub_txn_counts_sq.c.subcategory_id,
+            )
+            .filter(NormalizedSubcategory.category_id == category_id)
+            .order_by(NormalizedSubcategory.display_order, NormalizedSubcategory.name)
+            .all()
+        )
+
+        category["subcategories"] = [
+            {
+                "id": r.NormalizedSubcategory.id,
+                "category_id": r.NormalizedSubcategory.category_id,
+                "name": r.NormalizedSubcategory.name,
+                "description": r.NormalizedSubcategory.description,
+                "is_active": r.NormalizedSubcategory.is_active,
+                "display_order": r.NormalizedSubcategory.display_order,
+                "created_at": r.NormalizedSubcategory.created_at,
+                "updated_at": r.NormalizedSubcategory.updated_at,
+                "transaction_count": r.transaction_count,
+            }
+            for r in subcategory_results
+        ]
 
         return category
 
 
 def get_normalized_category_by_name(name: str):
     """Get a normalized category by name."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT * FROM normalized_categories WHERE name = %s
-            """,
-            (name,),
+    with get_session() as session:
+        category = (
+            session.query(NormalizedCategory)
+            .filter(NormalizedCategory.name == name)
+            .first()
         )
-        return cursor.fetchone()
+
+        if not category:
+            return None
+
+        return {
+            "id": category.id,
+            "name": category.name,
+            "description": category.description,
+            "is_system": category.is_system,
+            "is_active": category.is_active,
+            "is_essential": category.is_essential,
+            "display_order": category.display_order,
+            "color": category.color,
+            "created_at": category.created_at,
+            "updated_at": category.updated_at,
+        }
 
 
 def create_normalized_category(
@@ -862,30 +1097,46 @@ def create_normalized_category(
     Returns:
         The created category dict, or None if name already exists
     """
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            try:
-                # Get next display order
-                cursor.execute(
-                    "SELECT COALESCE(MAX(display_order), 0) + 1 FROM normalized_categories"
-                )
-                next_order = cursor.fetchone()["coalesce"]
+    from sqlalchemy.exc import IntegrityError
 
-                cursor.execute(
-                    """
-                    INSERT INTO normalized_categories (name, description, is_system, is_essential, display_order, color)
-                    VALUES (%s, %s, FALSE, %s, %s, %s)
-                    RETURNING *
-                """,
-                    (name, description, is_essential, next_order, color),
+    with get_session() as session:
+        try:
+            # Get next display order
+            next_order = (
+                session.query(
+                    func.coalesce(func.max(NormalizedCategory.display_order), 0) + 1
                 )
-                conn.commit()
-                return cursor.fetchone()
-            except Exception as e:
-                conn.rollback()
-                if "unique constraint" in str(e).lower():
-                    return None
-                raise
+                .select_from(NormalizedCategory)
+                .scalar()
+            )
+
+            # Create new category
+            new_category = NormalizedCategory(
+                name=name,
+                description=description,
+                is_system=False,
+                is_essential=is_essential,
+                display_order=next_order,
+                color=color,
+            )
+            session.add(new_category)
+            session.commit()
+
+            return {
+                "id": new_category.id,
+                "name": new_category.name,
+                "description": new_category.description,
+                "is_system": new_category.is_system,
+                "is_active": new_category.is_active,
+                "is_essential": new_category.is_essential,
+                "display_order": new_category.display_order,
+                "color": new_category.color,
+                "created_at": new_category.created_at,
+                "updated_at": new_category.updated_at,
+            }
+        except IntegrityError:
+            session.rollback()
+            return None
 
 
 def update_normalized_category(
@@ -901,56 +1152,54 @@ def update_normalized_category(
     Returns:
         Dict with category and update counts, or None if not found
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Get current category
-        cursor.execute(
-            "SELECT * FROM normalized_categories WHERE id = %s", (category_id,)
-        )
-        current = cursor.fetchone()
+        current = session.get(NormalizedCategory, category_id)
         if not current:
             return None
 
-        old_name = current["name"]
+        old_name = current.name
         new_name = name if name is not None else old_name
 
-        # Build update query dynamically
-        updates = []
-        params = []
+        # Track if any updates were made
+        has_updates = False
 
+        # Update fields if provided
         if name is not None:
-            updates.append("name = %s")
-            params.append(name)
+            current.name = name
+            has_updates = True
         if description is not None:
-            updates.append("description = %s")
-            params.append(description)
+            current.description = description
+            has_updates = True
         if is_active is not None:
-            updates.append("is_active = %s")
-            params.append(is_active)
+            current.is_active = is_active
+            has_updates = True
         if is_essential is not None:
-            updates.append("is_essential = %s")
-            params.append(is_essential)
+            current.is_essential = is_essential
+            has_updates = True
         if color is not None:
-            updates.append("color = %s")
-            params.append(color)
+            current.color = color
+            has_updates = True
 
-        if not updates:
+        if not has_updates:
             return {
-                "category": current,
+                "category": {
+                    "id": current.id,
+                    "name": current.name,
+                    "description": current.description,
+                    "is_system": current.is_system,
+                    "is_active": current.is_active,
+                    "is_essential": current.is_essential,
+                    "display_order": current.display_order,
+                    "color": current.color,
+                    "created_at": current.created_at,
+                    "updated_at": current.updated_at,
+                },
                 "transactions_updated": 0,
                 "rules_updated": 0,
             }
 
-        params.append(category_id)
-        cursor.execute(
-            f"""
-                UPDATE normalized_categories
-                SET {", ".join(updates)}
-                WHERE id = %s
-                RETURNING *
-            """,
-            params,
-        )
-        updated_category = cursor.fetchone()
+        session.flush()  # Flush to get updated timestamp
 
         transactions_updated = 0
         rules_updated = 0
@@ -958,43 +1207,43 @@ def update_normalized_category(
         # If name changed, cascade updates
         if name is not None and name != old_name:
             # Update transaction_category VARCHAR (for backwards compatibility)
-            cursor.execute(
-                """
+            result = session.execute(
+                text("""
                     UPDATE truelayer_transactions
-                    SET transaction_category = %s
-                    WHERE category_id = %s
-                """,
-                (new_name, category_id),
+                    SET transaction_category = :new_name
+                    WHERE category_id = :category_id
+                """),
+                {"new_name": new_name, "category_id": category_id},
             )
-            transactions_updated = cursor.rowcount
+            transactions_updated = result.rowcount
 
             # Update JSONB metadata
-            cursor.execute(
-                """
+            session.execute(
+                text("""
                     UPDATE truelayer_transactions
                     SET metadata = jsonb_set(
                         metadata,
                         '{enrichment,primary_category}',
-                        %s::jsonb
+                        :new_name_json::jsonb
                     )
-                    WHERE category_id = %s
+                    WHERE category_id = :category_id
                       AND metadata->'enrichment' IS NOT NULL
-                """,
-                (json.dumps(new_name), category_id),
+                """),
+                {"new_name_json": json.dumps(new_name), "category_id": category_id},
             )
 
             # Update category_rules VARCHAR
-            cursor.execute(
-                """
+            result = session.execute(
+                text("""
                     UPDATE category_rules
-                    SET category = %s
-                    WHERE category_id = %s
-                """,
-                (new_name, category_id),
+                    SET category = :new_name
+                    WHERE category_id = :category_id
+                """),
+                {"new_name": new_name, "category_id": category_id},
             )
-            rules_updated = cursor.rowcount
+            rules_updated = result.rowcount
 
-        conn.commit()
+        session.commit()
 
         # Invalidate cache
         try:
@@ -1005,7 +1254,18 @@ def update_normalized_category(
             pass
 
         return {
-            "category": updated_category,
+            "category": {
+                "id": current.id,
+                "name": current.name,
+                "description": current.description,
+                "is_system": current.is_system,
+                "is_active": current.is_active,
+                "is_essential": current.is_essential,
+                "display_order": current.display_order,
+                "color": current.color,
+                "created_at": current.created_at,
+                "updated_at": current.updated_at,
+            },
             "transactions_updated": transactions_updated,
             "rules_updated": rules_updated,
             "old_name": old_name,
@@ -1021,48 +1281,47 @@ def delete_normalized_category(category_id: int, reassign_to_category_id: int = 
     Returns:
         Dict with deletion result, or None if not found or is system category
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Check if category exists and is not system
-        cursor.execute(
-            "SELECT * FROM normalized_categories WHERE id = %s", (category_id,)
-        )
-        category = cursor.fetchone()
+        category = session.get(NormalizedCategory, category_id)
 
         if not category:
             return None
-        if category["is_system"]:
+        if category.is_system:
             return {"error": "Cannot delete system category"}
+
+        category_name = category.name
 
         # Find reassignment target (default to 'Other')
         if reassign_to_category_id:
             target_id = reassign_to_category_id
         else:
-            cursor.execute("SELECT id FROM normalized_categories WHERE name = 'Other'")
-            other = cursor.fetchone()
-            target_id = other["id"] if other else None
+            other = (
+                session.query(NormalizedCategory)
+                .filter(NormalizedCategory.name == "Other")
+                .first()
+            )
+            target_id = other.id if other else None
 
         # Reassign transactions
         transactions_reassigned = 0
         if target_id:
-            cursor.execute(
-                """
+            result = session.execute(
+                text("""
                     UPDATE truelayer_transactions
-                    SET category_id = %s, subcategory_id = NULL
-                    WHERE category_id = %s
-                """,
-                (target_id, category_id),
+                    SET category_id = :target_id, subcategory_id = NULL
+                    WHERE category_id = :category_id
+                """),
+                {"target_id": target_id, "category_id": category_id},
             )
-            transactions_reassigned = cursor.rowcount
+            transactions_reassigned = result.rowcount
 
         # Delete the category (subcategories cascade)
-        cursor.execute(
-            "DELETE FROM normalized_categories WHERE id = %s", (category_id,)
-        )
-
-        conn.commit()
+        session.delete(category)
+        session.commit()
 
         return {
-            "deleted_category": category["name"],
+            "deleted_category": category_name,
             "transactions_reassigned": transactions_reassigned,
             "reassigned_to_category_id": target_id,
         }
@@ -1075,89 +1334,152 @@ def get_normalized_subcategories(category_id: int = None, include_counts: bool =
         category_id: If provided, only return subcategories for this category
         include_counts: If True, include transaction counts
     """
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            if include_counts:
-                if category_id:
-                    cursor.execute(
-                        """
-                        SELECT
-                            ns.*,
-                            nc.name as category_name,
-                            COALESCE(txn_counts.transaction_count, 0) as transaction_count
-                        FROM normalized_subcategories ns
-                        JOIN normalized_categories nc ON ns.category_id = nc.id
-                        LEFT JOIN (
-                            SELECT subcategory_id, COUNT(*) as transaction_count
-                            FROM truelayer_transactions
-                            WHERE subcategory_id IS NOT NULL
-                            GROUP BY subcategory_id
-                        ) txn_counts ON ns.id = txn_counts.subcategory_id
-                        WHERE ns.category_id = %s
-                        ORDER BY ns.display_order, ns.name
-                    """,
-                        (category_id,),
-                    )
-                else:
-                    cursor.execute("""
-                        SELECT
-                            ns.*,
-                            nc.name as category_name,
-                            COALESCE(txn_counts.transaction_count, 0) as transaction_count
-                        FROM normalized_subcategories ns
-                        JOIN normalized_categories nc ON ns.category_id = nc.id
-                        LEFT JOIN (
-                            SELECT subcategory_id, COUNT(*) as transaction_count
-                            FROM truelayer_transactions
-                            WHERE subcategory_id IS NOT NULL
-                            GROUP BY subcategory_id
-                        ) txn_counts ON ns.id = txn_counts.subcategory_id
-                        ORDER BY nc.name, ns.display_order, ns.name
-                    """)
+    with get_session() as session:
+        if include_counts:
+            # Transaction counts subquery
+            txn_counts_sq = (
+                session.query(
+                    TrueLayerTransaction.subcategory_id,
+                    func.count().label("transaction_count"),
+                )
+                .filter(TrueLayerTransaction.subcategory_id.is_not(None))
+                .group_by(TrueLayerTransaction.subcategory_id)
+                .subquery()
+            )
+
+            query = (
+                session.query(
+                    NormalizedSubcategory,
+                    NormalizedCategory.name.label("category_name"),
+                    func.coalesce(txn_counts_sq.c.transaction_count, 0).label(
+                        "transaction_count"
+                    ),
+                )
+                .join(
+                    NormalizedCategory,
+                    NormalizedSubcategory.category_id == NormalizedCategory.id,
+                )
+                .outerjoin(
+                    txn_counts_sq,
+                    NormalizedSubcategory.id == txn_counts_sq.c.subcategory_id,
+                )
+            )
+
+            if category_id:
+                query = query.filter(NormalizedSubcategory.category_id == category_id)
+                query = query.order_by(
+                    NormalizedSubcategory.display_order, NormalizedSubcategory.name
+                )
             else:
-                if category_id:
-                    cursor.execute(
-                        """
-                        SELECT ns.*, nc.name as category_name
-                        FROM normalized_subcategories ns
-                        JOIN normalized_categories nc ON ns.category_id = nc.id
-                        WHERE ns.category_id = %s
-                        ORDER BY ns.display_order, ns.name
-                    """,
-                        (category_id,),
-                    )
-                else:
-                    cursor.execute("""
-                        SELECT ns.*, nc.name as category_name
-                        FROM normalized_subcategories ns
-                        JOIN normalized_categories nc ON ns.category_id = nc.id
-                        ORDER BY nc.name, ns.display_order, ns.name
-                    """)
-            return cursor.fetchall()
+                query = query.order_by(
+                    NormalizedCategory.name,
+                    NormalizedSubcategory.display_order,
+                    NormalizedSubcategory.name,
+                )
+
+            results = query.all()
+
+            return [
+                {
+                    "id": r.NormalizedSubcategory.id,
+                    "category_id": r.NormalizedSubcategory.category_id,
+                    "name": r.NormalizedSubcategory.name,
+                    "description": r.NormalizedSubcategory.description,
+                    "is_active": r.NormalizedSubcategory.is_active,
+                    "display_order": r.NormalizedSubcategory.display_order,
+                    "created_at": r.NormalizedSubcategory.created_at,
+                    "updated_at": r.NormalizedSubcategory.updated_at,
+                    "category_name": r.category_name,
+                    "transaction_count": r.transaction_count,
+                }
+                for r in results
+            ]
+        query = session.query(
+            NormalizedSubcategory, NormalizedCategory.name.label("category_name")
+        ).join(
+            NormalizedCategory,
+            NormalizedSubcategory.category_id == NormalizedCategory.id,
+        )
+
+        if category_id:
+            query = query.filter(NormalizedSubcategory.category_id == category_id)
+            query = query.order_by(
+                NormalizedSubcategory.display_order, NormalizedSubcategory.name
+            )
+        else:
+            query = query.order_by(
+                NormalizedCategory.name,
+                NormalizedSubcategory.display_order,
+                NormalizedSubcategory.name,
+            )
+
+        results = query.all()
+
+        return [
+            {
+                "id": r.NormalizedSubcategory.id,
+                "category_id": r.NormalizedSubcategory.category_id,
+                "name": r.NormalizedSubcategory.name,
+                "description": r.NormalizedSubcategory.description,
+                "is_active": r.NormalizedSubcategory.is_active,
+                "display_order": r.NormalizedSubcategory.display_order,
+                "created_at": r.NormalizedSubcategory.created_at,
+                "updated_at": r.NormalizedSubcategory.updated_at,
+                "category_name": r.category_name,
+            }
+            for r in results
+        ]
 
 
 def get_normalized_subcategory_by_id(subcategory_id: int):
     """Get a single normalized subcategory by ID."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT
-                    ns.*,
-                    nc.name as category_name,
-                    COALESCE(txn_counts.transaction_count, 0) as transaction_count
-                FROM normalized_subcategories ns
-                JOIN normalized_categories nc ON ns.category_id = nc.id
-                LEFT JOIN (
-                    SELECT subcategory_id, COUNT(*) as transaction_count
-                    FROM truelayer_transactions
-                    WHERE subcategory_id IS NOT NULL
-                    GROUP BY subcategory_id
-                ) txn_counts ON ns.id = txn_counts.subcategory_id
-                WHERE ns.id = %s
-            """,
-            (subcategory_id,),
+    with get_session() as session:
+        # Transaction counts subquery
+        txn_counts_sq = (
+            session.query(
+                TrueLayerTransaction.subcategory_id,
+                func.count().label("transaction_count"),
+            )
+            .filter(TrueLayerTransaction.subcategory_id.is_not(None))
+            .group_by(TrueLayerTransaction.subcategory_id)
+            .subquery()
         )
-        return cursor.fetchone()
+
+        result = (
+            session.query(
+                NormalizedSubcategory,
+                NormalizedCategory.name.label("category_name"),
+                func.coalesce(txn_counts_sq.c.transaction_count, 0).label(
+                    "transaction_count"
+                ),
+            )
+            .join(
+                NormalizedCategory,
+                NormalizedSubcategory.category_id == NormalizedCategory.id,
+            )
+            .outerjoin(
+                txn_counts_sq,
+                NormalizedSubcategory.id == txn_counts_sq.c.subcategory_id,
+            )
+            .filter(NormalizedSubcategory.id == subcategory_id)
+            .first()
+        )
+
+        if not result:
+            return None
+
+        return {
+            "id": result.NormalizedSubcategory.id,
+            "category_id": result.NormalizedSubcategory.category_id,
+            "name": result.NormalizedSubcategory.name,
+            "description": result.NormalizedSubcategory.description,
+            "is_active": result.NormalizedSubcategory.is_active,
+            "display_order": result.NormalizedSubcategory.display_order,
+            "created_at": result.NormalizedSubcategory.created_at,
+            "updated_at": result.NormalizedSubcategory.updated_at,
+            "category_name": result.category_name,
+            "transaction_count": result.transaction_count,
+        }
 
 
 def create_normalized_subcategory(category_id: int, name: str, description: str = None):
@@ -1166,45 +1488,46 @@ def create_normalized_subcategory(category_id: int, name: str, description: str 
     Returns:
         The created subcategory dict, or None if already exists
     """
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            try:
-                # Get next display order for this category
-                cursor.execute(
-                    """
-                    SELECT COALESCE(MAX(display_order), 0) + 1
-                    FROM normalized_subcategories WHERE category_id = %s
-                """,
-                    (category_id,),
+    from sqlalchemy.exc import IntegrityError
+
+    with get_session() as session:
+        try:
+            # Get next display order for this category
+            next_order = (
+                session.query(
+                    func.coalesce(func.max(NormalizedSubcategory.display_order), 0) + 1
                 )
-                next_order = cursor.fetchone()["coalesce"]
+                .filter(NormalizedSubcategory.category_id == category_id)
+                .scalar()
+            )
 
-                cursor.execute(
-                    """
-                    INSERT INTO normalized_subcategories (category_id, name, description, display_order)
-                    VALUES (%s, %s, %s, %s)
-                    RETURNING *
-                """,
-                    (category_id, name, description, next_order),
-                )
-                conn.commit()
+            # Create new subcategory
+            new_subcategory = NormalizedSubcategory(
+                category_id=category_id,
+                name=name,
+                description=description,
+                display_order=next_order,
+            )
+            session.add(new_subcategory)
+            session.commit()
 
-                subcategory = cursor.fetchone()
+            # Get category name
+            category = session.get(NormalizedCategory, category_id)
 
-                # Get category name
-                cursor.execute(
-                    "SELECT name FROM normalized_categories WHERE id = %s",
-                    (category_id,),
-                )
-                cat = cursor.fetchone()
-                subcategory["category_name"] = cat["name"] if cat else None
-
-                return subcategory
-            except Exception as e:
-                conn.rollback()
-                if "unique constraint" in str(e).lower():
-                    return None
-                raise
+            return {
+                "id": new_subcategory.id,
+                "category_id": new_subcategory.category_id,
+                "name": new_subcategory.name,
+                "description": new_subcategory.description,
+                "is_active": new_subcategory.is_active,
+                "display_order": new_subcategory.display_order,
+                "created_at": new_subcategory.created_at,
+                "updated_at": new_subcategory.updated_at,
+                "category_name": category.name if category else None,
+            }
+        except IntegrityError:
+            session.rollback()
+            return None
 
 
 def update_normalized_subcategory(
@@ -1219,85 +1542,88 @@ def update_normalized_subcategory(
     Returns:
         Dict with subcategory and update counts, or None if not found
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        # Get current subcategory
-        cursor.execute(
-            """
-                SELECT ns.*, nc.name as category_name
-                FROM normalized_subcategories ns
-                JOIN normalized_categories nc ON ns.category_id = nc.id
-                WHERE ns.id = %s
-            """,
-            (subcategory_id,),
+    with get_session() as session:
+        # Get current subcategory with category name
+        result = (
+            session.query(
+                NormalizedSubcategory, NormalizedCategory.name.label("category_name")
+            )
+            .join(
+                NormalizedCategory,
+                NormalizedSubcategory.category_id == NormalizedCategory.id,
+            )
+            .filter(NormalizedSubcategory.id == subcategory_id)
+            .first()
         )
-        current = cursor.fetchone()
-        if not current:
+
+        if not result:
             return None
 
-        old_name = current["name"]
-        old_category_id = current["category_id"]
+        current_subcategory = result.NormalizedSubcategory
+        old_name = current_subcategory.name
         new_name = name if name is not None else old_name
 
-        # Build update query dynamically
-        updates = []
-        params = []
+        # Track if any updates were made
+        has_updates = False
 
+        # Update fields if provided
         if name is not None:
-            updates.append("name = %s")
-            params.append(name)
+            current_subcategory.name = name
+            has_updates = True
         if description is not None:
-            updates.append("description = %s")
-            params.append(description)
+            current_subcategory.description = description
+            has_updates = True
         if is_active is not None:
-            updates.append("is_active = %s")
-            params.append(is_active)
+            current_subcategory.is_active = is_active
+            has_updates = True
         if category_id is not None:
-            updates.append("category_id = %s")
-            params.append(category_id)
+            current_subcategory.category_id = category_id
+            has_updates = True
 
-        if not updates:
-            return {"subcategory": current, "transactions_updated": 0}
+        if not has_updates:
+            return {
+                "subcategory": {
+                    "id": current_subcategory.id,
+                    "category_id": current_subcategory.category_id,
+                    "name": current_subcategory.name,
+                    "description": current_subcategory.description,
+                    "is_active": current_subcategory.is_active,
+                    "display_order": current_subcategory.display_order,
+                    "created_at": current_subcategory.created_at,
+                    "updated_at": current_subcategory.updated_at,
+                    "category_name": result.category_name,
+                },
+                "transactions_updated": 0,
+            }
 
-        params.append(subcategory_id)
-        cursor.execute(
-            f"""
-                UPDATE normalized_subcategories
-                SET {", ".join(updates)}
-                WHERE id = %s
-                RETURNING *
-            """,
-            params,
-        )
-        updated_subcategory = cursor.fetchone()
+        session.flush()
 
         # Get new category name
-        cursor.execute(
-            "SELECT name FROM normalized_categories WHERE id = %s",
-            (updated_subcategory["category_id"],),
-        )
-        cat = cursor.fetchone()
-        updated_subcategory["category_name"] = cat["name"] if cat else None
+        new_category = session.get(NormalizedCategory, current_subcategory.category_id)
 
         transactions_updated = 0
 
         # If name changed, cascade updates to JSONB metadata
         if name is not None and name != old_name:
-            cursor.execute(
-                """
+            result = session.execute(
+                text("""
                     UPDATE truelayer_transactions
                     SET metadata = jsonb_set(
                         metadata,
                         '{enrichment,subcategory}',
-                        %s::jsonb
+                        :new_name_json::jsonb
                     )
-                    WHERE subcategory_id = %s
+                    WHERE subcategory_id = :subcategory_id
                       AND metadata->'enrichment' IS NOT NULL
-                """,
-                (json.dumps(new_name), subcategory_id),
+                """),
+                {
+                    "new_name_json": json.dumps(new_name),
+                    "subcategory_id": subcategory_id,
+                },
             )
-            transactions_updated = cursor.rowcount
+            transactions_updated = result.rowcount
 
-        conn.commit()
+        session.commit()
 
         # Invalidate cache
         try:
@@ -1308,7 +1634,17 @@ def update_normalized_subcategory(
             pass
 
         return {
-            "subcategory": updated_subcategory,
+            "subcategory": {
+                "id": current_subcategory.id,
+                "category_id": current_subcategory.category_id,
+                "name": current_subcategory.name,
+                "description": current_subcategory.description,
+                "is_active": current_subcategory.is_active,
+                "display_order": current_subcategory.display_order,
+                "created_at": current_subcategory.created_at,
+                "updated_at": current_subcategory.updated_at,
+                "category_name": new_category.name if new_category else None,
+            },
             "transactions_updated": transactions_updated,
             "old_name": old_name,
             "new_name": new_name,
@@ -1323,43 +1659,44 @@ def delete_normalized_subcategory(subcategory_id: int):
     Returns:
         Dict with deletion result, or None if not found
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        # Get subcategory
-        cursor.execute(
-            """
-                SELECT ns.*, nc.name as category_name
-                FROM normalized_subcategories ns
-                JOIN normalized_categories nc ON ns.category_id = nc.id
-                WHERE ns.id = %s
-            """,
-            (subcategory_id,),
+    with get_session() as session:
+        # Get subcategory with category name
+        result = (
+            session.query(
+                NormalizedSubcategory, NormalizedCategory.name.label("category_name")
+            )
+            .join(
+                NormalizedCategory,
+                NormalizedSubcategory.category_id == NormalizedCategory.id,
+            )
+            .filter(NormalizedSubcategory.id == subcategory_id)
+            .first()
         )
-        subcategory = cursor.fetchone()
 
-        if not subcategory:
+        if not result:
             return None
 
+        subcategory_name = result.NormalizedSubcategory.name
+        category_name = result.category_name
+
         # Clear subcategory_id from transactions
-        cursor.execute(
-            """
+        result = session.execute(
+            text("""
                 UPDATE truelayer_transactions
                 SET subcategory_id = NULL
-                WHERE subcategory_id = %s
-            """,
-            (subcategory_id,),
+                WHERE subcategory_id = :subcategory_id
+            """),
+            {"subcategory_id": subcategory_id},
         )
-        transactions_cleared = cursor.rowcount
+        transactions_cleared = result.rowcount
 
         # Delete the subcategory
-        cursor.execute(
-            "DELETE FROM normalized_subcategories WHERE id = %s", (subcategory_id,)
-        )
-
-        conn.commit()
+        session.delete(result.NormalizedSubcategory)
+        session.commit()
 
         return {
-            "deleted_subcategory": subcategory["name"],
-            "category_name": subcategory["category_name"],
+            "deleted_subcategory": subcategory_name,
+            "category_name": category_name,
             "transactions_cleared": transactions_cleared,
         }
 
@@ -1369,12 +1706,16 @@ def get_essential_category_names():
 
     Used by consistency engine for Essential/Discretionary classification.
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("""
-                SELECT name FROM normalized_categories
-                WHERE is_essential = TRUE AND is_active = TRUE
-            """)
-        return {row["name"] for row in cursor.fetchall()}
+    with get_session() as session:
+        results = (
+            session.query(NormalizedCategory.name)
+            .filter(
+                NormalizedCategory.is_essential.is_(True),
+                NormalizedCategory.is_active.is_(True),
+            )
+            .all()
+        )
+        return {row.name for row in results}
 
 
 # =============================================================================
@@ -1382,6 +1723,16 @@ def get_essential_category_names():
 
 def get_all_categories():
     """Get all categories from database."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("SELECT id, name, rule_pattern, ai_suggested FROM categories")
-        return cursor.fetchall()
+    with get_session() as session:
+        categories = session.query(
+            Category.id, Category.name, Category.rule_pattern, Category.ai_suggested
+        ).all()
+        return [
+            {
+                "id": c.id,
+                "name": c.name,
+                "rule_pattern": c.rule_pattern,
+                "ai_suggested": c.ai_suggested,
+            }
+            for c in categories
+        ]
