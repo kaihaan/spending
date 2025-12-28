@@ -2,11 +2,15 @@
 Apple Transactions - Database Operations
 
 Handles all database operations for Apple transaction imports and matching.
+
+Migrated to SQLAlchemy from psycopg2.
 """
 
-from psycopg2.extras import RealDictCursor
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert
 
-from .base_psycopg2 import get_db
+from .base import get_session
+from .models.apple import AppleTransaction, TrueLayerAppleTransactionMatch
 
 # ============================================================================
 # APPLE TRANSACTIONS MANAGEMENT FUNCTIONS
@@ -15,39 +19,35 @@ from .base_psycopg2 import get_db
 
 def import_apple_transactions(transactions, source_file):
     """Bulk import Apple transactions from parsed HTML data."""
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
         imported = 0
         duplicates = 0
 
         for txn in transactions:
             # Use ON CONFLICT DO NOTHING to handle duplicates gracefully
-            # This avoids transaction aborts on duplicate keys in PostgreSQL
-            cursor.execute(
-                """
-                    INSERT INTO apple_transactions (
-                        order_id, order_date, total_amount, currency,
-                        app_names, publishers, item_count, source_file
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (order_id) DO NOTHING
-                """,
-                (
-                    txn["order_id"],
-                    txn["order_date"],
-                    txn["total_amount"],
-                    txn.get("currency", "GBP"),
-                    txn["app_names"],
-                    txn.get("publishers", ""),
-                    txn.get("item_count", 1),
-                    source_file,
-                ),
+            stmt = (
+                insert(AppleTransaction)
+                .values(
+                    order_id=txn["order_id"],
+                    order_date=txn["order_date"],
+                    total_amount=txn["total_amount"],
+                    currency=txn.get("currency", "GBP"),
+                    app_names=txn["app_names"],
+                    publishers=txn.get("publishers", ""),
+                    item_count=txn.get("item_count", 1),
+                    source_file=source_file,
+                )
+                .on_conflict_do_nothing(index_elements=["order_id"])
             )
+
+            result = session.execute(stmt)
             # rowcount is 1 if inserted, 0 if conflict (duplicate)
-            if cursor.rowcount > 0:
+            if result.rowcount > 0:
                 imported += 1
             else:
                 duplicates += 1
 
-        conn.commit()
+        session.commit()
     return imported, duplicates
 
 
@@ -56,51 +56,78 @@ def get_apple_order_ids():
 
     Used by browser import to determine when to stop scrolling.
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute("SELECT order_id FROM apple_transactions")
-        return {row[0] for row in cursor.fetchall()}
+    with get_session() as session:
+        order_ids = session.query(AppleTransaction.order_id).all()
+        return {order_id[0] for order_id in order_ids}
 
 
 def get_apple_transactions(date_from=None, date_to=None):
     """Get all Apple transactions, optionally filtered by date range."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        query = """
-            SELECT
-                a.*,
-                m.truelayer_transaction_id as matched_bank_transaction_id
-            FROM apple_transactions a
-            LEFT JOIN truelayer_apple_transaction_matches m ON a.id = m.apple_transaction_id
-            WHERE 1=1
-        """
-        params = []
+    with get_session() as session:
+        query = session.query(
+            AppleTransaction,
+            TrueLayerAppleTransactionMatch.truelayer_transaction_id.label(
+                "matched_bank_transaction_id"
+            ),
+        ).outerjoin(
+            TrueLayerAppleTransactionMatch,
+            AppleTransaction.id == TrueLayerAppleTransactionMatch.apple_transaction_id,
+        )
 
         if date_from:
-            query += " AND a.order_date >= %s"
-            params.append(date_from)
+            query = query.filter(AppleTransaction.order_date >= date_from)
 
         if date_to:
-            query += " AND a.order_date <= %s"
-            params.append(date_to)
+            query = query.filter(AppleTransaction.order_date <= date_to)
 
-        query += " ORDER BY a.order_date DESC"
+        query = query.order_by(AppleTransaction.order_date.desc())
 
-        cursor.execute(query, params)
-        return cursor.fetchall()
+        results = []
+        for apple_txn, matched_bank_id in query.all():
+            txn_dict = {
+                "id": apple_txn.id,
+                "order_id": apple_txn.order_id,
+                "order_date": apple_txn.order_date,
+                "total_amount": apple_txn.total_amount,
+                "currency": apple_txn.currency,
+                "app_names": apple_txn.app_names,
+                "publishers": apple_txn.publishers,
+                "item_count": apple_txn.item_count,
+                "source_file": apple_txn.source_file,
+                "created_at": apple_txn.created_at,
+                "matched_bank_transaction_id": matched_bank_id,
+            }
+            results.append(txn_dict)
+
+        return results
 
 
 def get_apple_transaction_by_id(order_id):
     """Get a specific Apple transaction by database ID."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("SELECT * FROM apple_transactions WHERE id = %s", (order_id,))
-        return cursor.fetchone()
+    with get_session() as session:
+        transaction = session.get(AppleTransaction, order_id)
+        if not transaction:
+            return None
+
+        return {
+            "id": transaction.id,
+            "order_id": transaction.order_id,
+            "order_date": transaction.order_date,
+            "total_amount": transaction.total_amount,
+            "currency": transaction.currency,
+            "app_names": transaction.app_names,
+            "publishers": transaction.publishers,
+            "item_count": transaction.item_count,
+            "source_file": transaction.source_file,
+            "created_at": transaction.created_at,
+        }
 
 
 def get_apple_statistics():
     """Get statistics about imported Apple transactions."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Total transactions
-        cursor.execute("SELECT COUNT(*) as count FROM apple_transactions")
-        total = cursor.fetchone()["count"]
+        total = session.query(func.count(AppleTransaction.id)).scalar()
 
         if total == 0:
             return {
@@ -113,22 +140,20 @@ def get_apple_statistics():
             }
 
         # Date range
-        cursor.execute(
-            "SELECT MIN(order_date) as min_date, MAX(order_date) as max_date FROM apple_transactions"
-        )
-        date_result = cursor.fetchone()
-        min_date = date_result["min_date"]
-        max_date = date_result["max_date"]
+        date_result = session.query(
+            func.min(AppleTransaction.order_date).label("min_date"),
+            func.max(AppleTransaction.order_date).label("max_date"),
+        ).first()
+        min_date = date_result.min_date
+        max_date = date_result.max_date
 
         # Total spent
-        cursor.execute("SELECT SUM(total_amount) as total FROM apple_transactions")
-        total_spent = cursor.fetchone()["total"] or 0
+        total_spent = (
+            session.query(func.sum(AppleTransaction.total_amount)).scalar() or 0
+        )
 
         # Matched count
-        cursor.execute(
-            "SELECT COUNT(*) as count FROM truelayer_apple_transaction_matches"
-        )
-        matched = cursor.fetchone()["count"]
+        matched = session.query(func.count(TrueLayerAppleTransactionMatch.id)).scalar()
 
         return {
             "total_transactions": total,
@@ -142,56 +167,47 @@ def get_apple_statistics():
 
 def match_apple_transaction(bank_transaction_id, apple_transaction_db_id, confidence):
     """Record a match between a bank transaction and an Apple purchase."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Check if transaction already matched
-        cursor.execute(
-            """
-            SELECT id FROM truelayer_apple_transaction_matches
-            WHERE truelayer_transaction_id = %s
-            """,
-            (bank_transaction_id,),
+        existing = (
+            session.query(TrueLayerAppleTransactionMatch)
+            .filter(
+                TrueLayerAppleTransactionMatch.truelayer_transaction_id
+                == bank_transaction_id
+            )
+            .first()
         )
 
-        existing = cursor.fetchone()
         if existing:
             # Update existing match
-            cursor.execute(
-                """
-                UPDATE truelayer_apple_transaction_matches
-                SET apple_transaction_id = %s, match_confidence = %s, matched_at = CURRENT_TIMESTAMP
-                WHERE truelayer_transaction_id = %s
-                """,
-                (apple_transaction_db_id, confidence, bank_transaction_id),
-            )
-            conn.commit()
-            return existing["id"]
+            existing.apple_transaction_id = apple_transaction_db_id
+            existing.match_confidence = confidence
+            existing.matched_at = func.current_timestamp()
+            session.commit()
+            return existing.id
+
         # Insert new match
-        cursor.execute(
-            """
-                INSERT INTO truelayer_apple_transaction_matches (
-                    truelayer_transaction_id, apple_transaction_id, match_confidence
-                ) VALUES (%s, %s, %s)
-                RETURNING id
-                """,
-            (bank_transaction_id, apple_transaction_db_id, confidence),
+        new_match = TrueLayerAppleTransactionMatch(
+            truelayer_transaction_id=bank_transaction_id,
+            apple_transaction_id=apple_transaction_db_id,
+            match_confidence=confidence,
         )
-        match_id = cursor.fetchone()["id"]
-        conn.commit()
-        return match_id
+        session.add(new_match)
+        session.commit()
+        return new_match.id
 
 
 def clear_apple_transactions():
     """Delete all Apple transactions from database."""
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
         # Count before deletion
-        cursor.execute("SELECT COUNT(*) FROM apple_transactions")
-        count = cursor.fetchone()[0]
+        count = session.query(func.count(AppleTransaction.id)).scalar()
 
         # Delete TrueLayer matches first (foreign key constraint)
-        cursor.execute("DELETE FROM truelayer_apple_transaction_matches")
+        session.query(TrueLayerAppleTransactionMatch).delete()
 
         # Delete transactions
-        cursor.execute("DELETE FROM apple_transactions")
+        session.query(AppleTransaction).delete()
 
-        conn.commit()
+        session.commit()
         return count
