@@ -11,6 +11,7 @@ See: .claude/docs/database/DATABASE_SCHEMA.md#23-gmail_connections
 """
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     Date,
@@ -218,3 +219,273 @@ class PDFAttachment(Base):
 
     def __repr__(self) -> str:
         return f"<PDFAttachment(id={self.id}, filename={self.filename}, size={self.size_bytes})>"
+
+
+# Alias for compatibility with imports
+PdfAttachment = PDFAttachment
+
+
+class GmailOAuthState(Base):
+    """OAuth state storage for Gmail authorization flow."""
+
+    __tablename__ = "gmail_oauth_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False)
+    state = Column(String(255), nullable=False, unique=True)
+    code_verifier = Column(String(255), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_gmail_oauth_state_state", "state"),
+        Index("idx_gmail_oauth_state_expires", "expires_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<GmailOAuthState(id={self.id}, user_id={self.user_id}, state={self.state})>"
+
+
+class GmailSyncJob(Base):
+    """Gmail sync job tracking."""
+
+    __tablename__ = "gmail_sync_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connection_id = Column(
+        Integer,
+        ForeignKey("gmail_connections.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status = Column(
+        String(20), nullable=True, default="queued", server_default="'queued'"
+    )
+    job_type = Column(
+        String(20), nullable=True, default="full", server_default="'full'"
+    )
+    total_messages = Column(Integer, nullable=True, default=0, server_default="0")
+    processed_messages = Column(Integer, nullable=True, default=0, server_default="0")
+    parsed_receipts = Column(Integer, nullable=True, default=0, server_default="0")
+    failed_messages = Column(Integer, nullable=True, default=0, server_default="0")
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    sync_from_date = Column(Date, nullable=True)
+    sync_to_date = Column(Date, nullable=True)
+    stats = Column(JSONB, nullable=True, server_default="{}")
+
+    __table_args__ = (
+        Index("idx_gmail_sync_jobs_connection", "connection_id"),
+        Index(
+            "idx_gmail_sync_jobs_status",
+            "status",
+            postgresql_where=Column("status").in_(["queued", "running"]),
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', 'cancelled')",
+            name="gmail_sync_jobs_status_check",
+        ),
+        CheckConstraint(
+            "job_type IN ('full', 'incremental')",
+            name="gmail_sync_jobs_job_type_check",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<GmailSyncJob(id={self.id}, connection_id={self.connection_id}, status={self.status})>"
+
+
+class GmailParseStatistic(Base):
+    """Parse statistics for tracking Gmail parsing performance."""
+
+    __tablename__ = "gmail_parse_statistics"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connection_id = Column(
+        Integer,
+        ForeignKey("gmail_connections.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sync_job_id = Column(
+        Integer,
+        ForeignKey("gmail_sync_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    message_id = Column(String(255), nullable=False)
+    sender_domain = Column(String(255), nullable=False)
+    merchant_normalized = Column(String(255), nullable=True)
+    parse_method = Column(String(30), nullable=True)
+    merchant_extracted = Column(Boolean, nullable=True)
+    brand_extracted = Column(Boolean, nullable=True)
+    amount_extracted = Column(Boolean, nullable=True)
+    date_extracted = Column(Boolean, nullable=True)
+    order_id_extracted = Column(Boolean, nullable=True)
+    line_items_extracted = Column(Boolean, nullable=True)
+    match_attempted = Column(Boolean, nullable=True, default=False)
+    match_success = Column(Boolean, nullable=True)
+    match_confidence = Column(Integer, nullable=True)
+    parse_duration_ms = Column(Integer, nullable=True)
+    llm_cost_cents = Column(Integer, nullable=True)
+    parsing_status = Column(String(20), nullable=False)
+    parsing_error = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_parse_stats_job", "sync_job_id"),
+        Index("idx_parse_stats_merchant", "merchant_normalized"),
+        Index("idx_parse_stats_merchant_method", "merchant_normalized", "parse_method"),
+        Index("idx_parse_stats_method", "parse_method"),
+        Index("idx_parse_stats_sender", "sender_domain"),
+        CheckConstraint(
+            "parse_method IN ('vendor_amazon', 'vendor_uber', 'vendor_apple', "
+            "'vendor_paypal', 'vendor_deliveroo', 'vendor_google', 'schema_org', "
+            "'pattern', 'llm', 'pdf_fallback', 'pre_filter', 'unknown') OR parse_method IS NULL",
+            name="gmail_parse_statistics_parse_method_check",
+        ),
+        CheckConstraint(
+            "parsing_status IN ('parsed', 'unparseable', 'filtered', 'failed')",
+            name="gmail_parse_statistics_parsing_status_check",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<GmailParseStatistic(id={self.id}, merchant={self.merchant_normalized}, method={self.parse_method})>"
+
+
+class GmailSenderPattern(Base):
+    """Sender patterns for merchant identification."""
+
+    __tablename__ = "gmail_sender_patterns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sender_domain = Column(String(255), nullable=False)
+    sender_pattern = Column(String(255), nullable=True)
+    merchant_name = Column(String(255), nullable=False)
+    normalized_name = Column(String(255), nullable=False)
+    parse_type = Column(String(20), nullable=False)
+    pattern_config = Column(JSONB, nullable=True)
+    date_tolerance_days = Column(Integer, nullable=True, default=7, server_default="7")
+    is_active = Column(Boolean, nullable=True, default=True, server_default="true")
+    usage_count = Column(Integer, nullable=True, default=0, server_default="0")
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_gmail_sender_patterns_domain", "sender_domain"),
+        Index(
+            "idx_gmail_sender_patterns_active",
+            "is_active",
+            postgresql_where=Column("is_active").is_(True),
+        ),
+        CheckConstraint(
+            "parse_type IN ('schema_org', 'pattern', 'llm')",
+            name="gmail_sender_patterns_parse_type_check",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<GmailSenderPattern(id={self.id}, domain={self.sender_domain}, merchant={self.merchant_name})>"
+
+
+class GmailMatch(Base):
+    """Gmail receipt to TrueLayer transaction matches."""
+
+    __tablename__ = "gmail_transaction_matches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    truelayer_transaction_id = Column(
+        Integer,
+        ForeignKey("truelayer_transactions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    gmail_receipt_id = Column(
+        Integer,
+        ForeignKey("gmail_receipts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    match_confidence = Column(Integer, nullable=False)
+    match_type = Column(
+        String(20),
+        nullable=True,
+        default="standard",
+        server_default="'standard'",
+    )
+    match_method = Column(String(100), nullable=True)
+    currency_converted = Column(
+        Boolean, nullable=True, default=False, server_default="false"
+    )
+    conversion_rate = Column(Numeric(10, 6), nullable=True)
+    user_confirmed = Column(
+        Boolean, nullable=True, default=False, server_default="false"
+    )
+    matched_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "truelayer_transaction_id",
+            "gmail_receipt_id",
+            name="gmail_match_unique",
+        ),
+        Index("idx_gmail_matches_transaction", "truelayer_transaction_id"),
+        Index("idx_gmail_matches_receipt", "gmail_receipt_id"),
+        Index(
+            "idx_gmail_matches_unconfirmed",
+            "match_confidence",
+            postgresql_where=(
+                (Column("match_confidence") < 80)
+                & (Column("user_confirmed").is_(False))
+            ),
+        ),
+        CheckConstraint(
+            "match_confidence >= 0 AND match_confidence <= 100",
+            name="gmail_transaction_matches_match_confidence_check",
+        ),
+        CheckConstraint(
+            "match_type IN ('standard', 'split_payment', 'bundled_order')",
+            name="gmail_transaction_matches_match_type_check",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<GmailMatch(id={self.id}, txn_id={self.truelayer_transaction_id}, receipt_id={self.gmail_receipt_id}, confidence={self.match_confidence})>"
+
+
+class MatchingJob(Base):
+    """Generic matching job tracking."""
+
+    __tablename__ = "matching_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, default=1, server_default="1")
+    job_type = Column(String(50), nullable=False)
+    celery_task_id = Column(String(255), nullable=True)
+    status = Column(
+        String(20),
+        nullable=True,
+        default="queued",
+        server_default="'queued'",
+    )
+    total_items = Column(Integer, nullable=True, default=0, server_default="0")
+    processed_items = Column(Integer, nullable=True, default=0, server_default="0")
+    matched_items = Column(Integer, nullable=True, default=0, server_default="0")
+    failed_items = Column(Integer, nullable=True, default=0, server_default="0")
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=False), nullable=True)
+    completed_at = Column(DateTime(timezone=False), nullable=True)
+    created_at = Column(
+        DateTime(timezone=False),
+        server_default=func.current_timestamp(),
+    )
+
+    __table_args__ = (
+        Index("idx_matching_jobs_user_status", "user_id", "status"),
+        Index("idx_matching_jobs_celery_task", "celery_task_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<MatchingJob(id={self.id}, type={self.job_type}, status={self.status})>"
+        )
