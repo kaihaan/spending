@@ -35,11 +35,16 @@ if config.config_file_name is not None:
 # Import Base and all models for autogenerate support
 from database.base import Base  # noqa: E402
 
-# Models will be imported here as we create them in Phase 1:
-# from database.models.user import User
-# from database.models.category import Category, CategoryKeyword
-# from database.models.truelayer import BankConnection, TrueLayerAccount, TrueLayerTransaction
-# etc.
+# Import all models for Alembic autogenerate
+from database.models import (  # noqa: E402, F401
+    BankConnection,
+    Category,
+    CategoryKeyword,
+    TrueLayerAccount,
+    TrueLayerBalance,
+    TrueLayerTransaction,
+    User,
+)
 
 # Set target metadata for autogenerate
 target_metadata = Base.metadata
