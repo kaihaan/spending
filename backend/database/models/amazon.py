@@ -63,12 +63,9 @@ class AmazonReturn(Base):
     status = Column(String(50), nullable=True)
     disbursement_type = Column(String(50), nullable=True)
     source_file = Column(String(255), nullable=True)
-    original_transaction_id = Column(
-        Integer, ForeignKey("transactions.id"), nullable=True
-    )
-    refund_transaction_id = Column(
-        Integer, ForeignKey("transactions.id"), nullable=True
-    )
+    # Legacy columns - no foreign key since transactions table not in SQLAlchemy
+    original_transaction_id = Column(Integer, nullable=True)
+    refund_transaction_id = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
