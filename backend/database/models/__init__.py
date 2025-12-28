@@ -1,6 +1,14 @@
 # backend/database/models/__init__.py
 """SQLAlchemy models for all database tables."""
 
+from .amazon import (
+    AmazonBusinessConnection,
+    AmazonBusinessLineItem,
+    AmazonBusinessOrder,
+    AmazonOrder,
+    AmazonReturn,
+    TrueLayerAmazonTransactionMatch,
+)
 from .category import Category, CategoryKeyword
 from .truelayer import (
     BankConnection,
@@ -18,4 +26,10 @@ __all__ = [
     "TrueLayerAccount",
     "TrueLayerTransaction",
     "TrueLayerBalance",
+    "AmazonOrder",
+    "AmazonReturn",
+    "AmazonBusinessConnection",
+    "AmazonBusinessOrder",
+    "AmazonBusinessLineItem",
+    "TrueLayerAmazonTransactionMatch",
 ]

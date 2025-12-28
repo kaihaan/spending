@@ -37,10 +37,16 @@ from database.base import Base  # noqa: E402
 
 # Import all models for Alembic autogenerate
 from database.models import (  # noqa: E402, F401
+    AmazonBusinessConnection,
+    AmazonBusinessLineItem,
+    AmazonBusinessOrder,
+    AmazonOrder,
+    AmazonReturn,
     BankConnection,
     Category,
     CategoryKeyword,
     TrueLayerAccount,
+    TrueLayerAmazonTransactionMatch,
     TrueLayerBalance,
     TrueLayerTransaction,
     User,
