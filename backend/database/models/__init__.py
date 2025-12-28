@@ -11,6 +11,12 @@ from .amazon import (
 )
 from .apple import AppleTransaction, TrueLayerAppleTransactionMatch
 from .category import Category, CategoryKeyword
+from .gmail import (
+    GmailConnection,
+    GmailEmailContent,
+    GmailReceipt,
+    PDFAttachment,
+)
 from .truelayer import (
     BankConnection,
     TrueLayerAccount,
@@ -35,4 +41,8 @@ __all__ = [
     "TrueLayerAmazonTransactionMatch",
     "AppleTransaction",
     "TrueLayerAppleTransactionMatch",
+    "GmailConnection",
+    "GmailReceipt",
+    "GmailEmailContent",
+    "PDFAttachment",
 ]
