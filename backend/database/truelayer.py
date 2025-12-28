@@ -17,7 +17,7 @@ NOTE: Some functions reference tables without models (cards, webhooks, oauth_sta
 
 from datetime import UTC
 
-from sqlalchemy import and_, cast, func, text
+from sqlalchemy import and_, cast, func, literal_column
 from sqlalchemy.dialects.postgresql import TIMESTAMP, insert
 
 from .base import get_session
@@ -411,38 +411,40 @@ def get_all_truelayer_transactions_with_enrichment(account_id=None):
         query = session.query(
             TrueLayerTransaction,
             # Extract enrichment fields from JSONB using text()
-            text("metadata->'enrichment'->>'primary_category'").label(
+            literal_column("metadata->'enrichment'->>'primary_category'").label(
                 "enrichment_primary_category"
             ),
-            text("metadata->'enrichment'->>'subcategory'").label(
+            literal_column("metadata->'enrichment'->>'subcategory'").label(
                 "enrichment_subcategory"
             ),
-            text("metadata->'enrichment'->>'merchant_clean_name'").label(
+            literal_column("metadata->'enrichment'->>'merchant_clean_name'").label(
                 "enrichment_merchant_clean_name"
             ),
-            text("metadata->'enrichment'->>'merchant_type'").label(
+            literal_column("metadata->'enrichment'->>'merchant_type'").label(
                 "enrichment_merchant_type"
             ),
-            text("metadata->'enrichment'->>'essential_discretionary'").label(
+            literal_column("metadata->'enrichment'->>'essential_discretionary'").label(
                 "enrichment_essential_discretionary"
             ),
-            text("metadata->'enrichment'->>'payment_method'").label(
+            literal_column("metadata->'enrichment'->>'payment_method'").label(
                 "enrichment_payment_method"
             ),
-            text("metadata->'enrichment'->>'payment_method_subtype'").label(
+            literal_column("metadata->'enrichment'->>'payment_method_subtype'").label(
                 "enrichment_payment_method_subtype"
             ),
-            text("metadata->'enrichment'->>'confidence_score'").label(
+            literal_column("metadata->'enrichment'->>'confidence_score'").label(
                 "enrichment_confidence_score"
             ),
-            text("metadata->'enrichment'->>'llm_provider'").label(
+            literal_column("metadata->'enrichment'->>'llm_provider'").label(
                 "enrichment_llm_provider"
             ),
-            text("metadata->'enrichment'->>'llm_model'").label("enrichment_llm_model"),
-            cast(text("metadata->'enrichment'->>'enriched_at'"), TIMESTAMP).label(
-                "enrichment_enriched_at"
+            literal_column("metadata->'enrichment'->>'llm_model'").label(
+                "enrichment_llm_model"
             ),
-            text("metadata->>'huququllah_classification'").label(
+            cast(
+                literal_column("metadata->'enrichment'->>'enriched_at'"), TIMESTAMP
+            ).label("enrichment_enriched_at"),
+            literal_column("metadata->>'huququllah_classification'").label(
                 "manual_huququllah_classification"
             ),
         )
@@ -1491,7 +1493,7 @@ def get_unenriched_truelayer_transactions():
     with get_session() as session:
         transactions = (
             session.query(TrueLayerTransaction)
-            .filter(text("metadata->'enrichment' IS NULL"))
+            .filter(literal_column("metadata->'enrichment' IS NULL"))
             .order_by(TrueLayerTransaction.timestamp.desc())
             .all()
         )
@@ -1523,37 +1525,45 @@ def get_transaction_enrichment(transaction_id):
         # Query with JSONB field extraction
         result = (
             session.query(
-                text("metadata->'enrichment'->>'primary_category'").label(
+                literal_column("metadata->'enrichment'->>'primary_category'").label(
                     "primary_category"
                 ),
-                text("metadata->'enrichment'->>'subcategory'").label("subcategory"),
-                text("metadata->'enrichment'->>'merchant_clean_name'").label(
+                literal_column("metadata->'enrichment'->>'subcategory'").label(
+                    "subcategory"
+                ),
+                literal_column("metadata->'enrichment'->>'merchant_clean_name'").label(
                     "merchant_clean_name"
                 ),
-                text("metadata->'enrichment'->>'merchant_type'").label("merchant_type"),
-                text("metadata->'enrichment'->>'essential_discretionary'").label(
-                    "essential_discretionary"
+                literal_column("metadata->'enrichment'->>'merchant_type'").label(
+                    "merchant_type"
                 ),
-                text("metadata->'enrichment'->>'payment_method'").label(
+                literal_column(
+                    "metadata->'enrichment'->>'essential_discretionary'"
+                ).label("essential_discretionary"),
+                literal_column("metadata->'enrichment'->>'payment_method'").label(
                     "payment_method"
                 ),
-                text("metadata->'enrichment'->>'payment_method_subtype'").label(
-                    "payment_method_subtype"
-                ),
-                text("metadata->'enrichment'->>'confidence_score'").label(
+                literal_column(
+                    "metadata->'enrichment'->>'payment_method_subtype'"
+                ).label("payment_method_subtype"),
+                literal_column("metadata->'enrichment'->>'confidence_score'").label(
                     "confidence_score"
                 ),
-                text("metadata->'enrichment'->>'llm_provider'").label("llm_provider"),
-                text("metadata->'enrichment'->>'llm_model'").label("llm_model"),
-                cast(text("metadata->'enrichment'->>'enriched_at'"), TIMESTAMP).label(
-                    "enriched_at"
+                literal_column("metadata->'enrichment'->>'llm_provider'").label(
+                    "llm_provider"
                 ),
+                literal_column("metadata->'enrichment'->>'llm_model'").label(
+                    "llm_model"
+                ),
+                cast(
+                    literal_column("metadata->'enrichment'->>'enriched_at'"), TIMESTAMP
+                ).label("enriched_at"),
             )
             .select_from(TrueLayerTransaction)
             .filter(
                 and_(
                     TrueLayerTransaction.id == transaction_id,
-                    text("metadata->>'enrichment' IS NOT NULL"),
+                    literal_column("metadata->>'enrichment' IS NOT NULL"),
                 )
             )
             .first()
@@ -1593,7 +1603,7 @@ def count_enriched_truelayer_transactions():
     with get_session() as session:
         count = (
             session.query(func.count(TrueLayerTransaction.id))
-            .filter(text("metadata->'enrichment' IS NOT NULL"))
+            .filter(literal_column("metadata->'enrichment' IS NOT NULL"))
             .scalar()
         )
         return count if count is not None else 0
