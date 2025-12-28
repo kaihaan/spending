@@ -1,44 +1,48 @@
-# Load environment variables
+# backend/alembic/env.py
 import os
-from logging.config import fileConfig
+import sys
 
-from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config, pool
 
-# Load .env file
+# Add backend to Python path so we can import database package
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# Load environment
 load_dotenv(override=False)
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
+from logging.config import fileConfig  # noqa: E402
+
+from alembic import context  # noqa: E402
+from sqlalchemy import engine_from_config, pool  # noqa: E402
+
+# this is the Alembic Config object
 config = context.config
 
 # Update config with env vars
-config.set_main_option("POSTGRES_USER", os.getenv("POSTGRES_USER", "spending_user"))
 config.set_main_option(
-    "POSTGRES_PASSWORD", os.getenv("POSTGRES_PASSWORD", "spending_password")
+    "sqlalchemy.url",
+    f"postgresql://{os.getenv('POSTGRES_USER', 'spending_user')}:"
+    f"{os.getenv('POSTGRES_PASSWORD', 'spending_password')}@"
+    f"{os.getenv('POSTGRES_HOST', 'localhost')}:"
+    f"{os.getenv('POSTGRES_PORT', '5433')}/"
+    f"{os.getenv('POSTGRES_DB', 'spending_db')}",
 )
-config.set_main_option("POSTGRES_HOST", os.getenv("POSTGRES_HOST", "localhost"))
-config.set_main_option("POSTGRES_PORT", os.getenv("POSTGRES_PORT", "5433"))
-config.set_main_option("POSTGRES_DB", os.getenv("POSTGRES_DB", "spending_db"))
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# Interpret the config file for Python logging
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-# target_metadata set to None - using raw SQL with psycopg2
-# Set to Base.metadata when migrating to SQLAlchemy ORM
-target_metadata = None
+# Import Base and all models for autogenerate support
+from database.base import Base  # noqa: E402
 
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
+# Models will be imported here as we create them in Phase 1:
+# from database.models.user import User
+# from database.models.category import Category, CategoryKeyword
+# from database.models.truelayer import BankConnection, TrueLayerAccount, TrueLayerTransaction
+# etc.
+
+# Set target metadata for autogenerate
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
@@ -51,7 +55,6 @@ def run_migrations_offline() -> None:
 
     Calls to context.execute() here emit the given string to the
     script output.
-
     """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -59,6 +62,8 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+        compare_server_default=True,
     )
 
     with context.begin_transaction():
@@ -70,7 +75,6 @@ def run_migrations_online() -> None:
 
     In this scenario we need to create an Engine
     and associate a connection with the context.
-
     """
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
@@ -79,7 +83,12 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            compare_server_default=True,
+        )
 
         with context.begin_transaction():
             context.run_migrations()
