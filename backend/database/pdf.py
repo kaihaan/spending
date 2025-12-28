@@ -2,11 +2,15 @@
 PDF Attachments - Database Operations
 
 Handles PDF receipt attachment storage and retrieval using MinIO object storage.
+
+Migrated to SQLAlchemy from psycopg2.
 """
 
-from psycopg2.extras import RealDictCursor
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert
 
-from .base_psycopg2 import get_db
+from .base import get_session
+from .models.gmail import GmailReceipt, PDFAttachment
 
 # ============================================================================
 # PDF ATTACHMENT FUNCTIONS (MinIO storage)
@@ -24,104 +28,150 @@ def save_pdf_attachment(
     etag: str = None,
 ) -> int:
     """Save a PDF attachment record linked to a Gmail receipt."""
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                INSERT INTO pdf_attachments
-                (gmail_receipt_id, message_id, bucket_name, object_key, filename,
-                 content_hash, size_bytes, etag)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (message_id, filename) DO UPDATE
-                SET object_key = EXCLUDED.object_key,
-                    content_hash = EXCLUDED.content_hash,
-                    size_bytes = EXCLUDED.size_bytes,
-                    etag = EXCLUDED.etag
-                RETURNING id
-            """,
-            (
-                gmail_receipt_id,
-                message_id,
-                bucket_name,
-                object_key,
-                filename,
-                content_hash,
-                size_bytes,
-                etag,
-            ),
+    with get_session() as session:
+        # Upsert using PostgreSQL INSERT ... ON CONFLICT
+        stmt = (
+            insert(PDFAttachment)
+            .values(
+                gmail_receipt_id=gmail_receipt_id,
+                message_id=message_id,
+                bucket_name=bucket_name,
+                object_key=object_key,
+                filename=filename,
+                content_hash=content_hash,
+                size_bytes=size_bytes,
+                etag=etag,
+            )
+            .on_conflict_do_update(
+                index_elements=["message_id", "filename"],
+                set_={
+                    "object_key": object_key,
+                    "content_hash": content_hash,
+                    "size_bytes": size_bytes,
+                    "etag": etag,
+                },
+            )
+            .returning(PDFAttachment.id)
         )
-        result = cursor.fetchone()
-        conn.commit()
-        return result[0] if result else None
+        result = session.execute(stmt)
+        attachment_id = result.scalar_one()
+        session.commit()
+        return attachment_id
 
 
-def get_pdf_attachment_by_hash(content_hash: str) -> dict:
+def get_pdf_attachment_by_hash(content_hash: str) -> dict | None:
     """Check if a PDF with this content hash already exists (for deduplication)."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT id, object_key, bucket_name, filename, size_bytes
-                FROM pdf_attachments
-                WHERE content_hash = %s
-                LIMIT 1
-            """,
-            (content_hash,),
+    with get_session() as session:
+        attachment = (
+            session.query(PDFAttachment)
+            .filter(PDFAttachment.content_hash == content_hash)
+            .first()
         )
-        result = cursor.fetchone()
-        return dict(result) if result else None
+
+        if not attachment:
+            return None
+
+        return {
+            "id": attachment.id,
+            "object_key": attachment.object_key,
+            "bucket_name": attachment.bucket_name,
+            "filename": attachment.filename,
+            "size_bytes": attachment.size_bytes,
+        }
 
 
 def get_pdf_attachments_for_receipt(gmail_receipt_id: int) -> list:
     """Get all PDF attachments for a Gmail receipt."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT id, bucket_name, object_key, filename, content_hash,
-                       size_bytes, mime_type, created_at
-                FROM pdf_attachments
-                WHERE gmail_receipt_id = %s
-                ORDER BY created_at
-            """,
-            (gmail_receipt_id,),
+    with get_session() as session:
+        attachments = (
+            session.query(PDFAttachment)
+            .filter(PDFAttachment.gmail_receipt_id == gmail_receipt_id)
+            .order_by(PDFAttachment.created_at)
+            .all()
         )
-        return [dict(row) for row in cursor.fetchall()]
+
+        return [
+            {
+                "id": att.id,
+                "bucket_name": att.bucket_name,
+                "object_key": att.object_key,
+                "filename": att.filename,
+                "content_hash": att.content_hash,
+                "size_bytes": att.size_bytes,
+                "mime_type": att.mime_type,
+                "created_at": att.created_at,
+            }
+            for att in attachments
+        ]
 
 
-def get_pdf_attachment_by_id(attachment_id: int) -> dict:
+def get_pdf_attachment_by_id(attachment_id: int) -> dict | None:
     """Get a single PDF attachment by ID."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT pa.*, gr.merchant_name, gr.receipt_date
-                FROM pdf_attachments pa
-                LEFT JOIN gmail_receipts gr ON pa.gmail_receipt_id = gr.id
-                WHERE pa.id = %s
-            """,
-            (attachment_id,),
+    with get_session() as session:
+        result = (
+            session.query(
+                PDFAttachment,
+                GmailReceipt.merchant_name,
+                GmailReceipt.receipt_date,
+            )
+            .outerjoin(GmailReceipt, PDFAttachment.gmail_receipt_id == GmailReceipt.id)
+            .filter(PDFAttachment.id == attachment_id)
+            .first()
         )
-        result = cursor.fetchone()
-        return dict(result) if result else None
+
+        if not result:
+            return None
+
+        attachment, merchant_name, receipt_date = result
+
+        return {
+            "id": attachment.id,
+            "gmail_receipt_id": attachment.gmail_receipt_id,
+            "message_id": attachment.message_id,
+            "bucket_name": attachment.bucket_name,
+            "object_key": attachment.object_key,
+            "filename": attachment.filename,
+            "content_hash": attachment.content_hash,
+            "size_bytes": attachment.size_bytes,
+            "mime_type": attachment.mime_type,
+            "etag": attachment.etag,
+            "created_at": attachment.created_at,
+            "merchant_name": merchant_name,
+            "receipt_date": receipt_date,
+        }
 
 
 def get_pdf_storage_stats() -> dict:
     """Get statistics about stored PDF attachments."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("""
-                SELECT
-                    COUNT(*) as total_attachments,
-                    COALESCE(SUM(size_bytes), 0) as total_size_bytes,
-                    COUNT(DISTINCT content_hash) as unique_pdfs,
-                    COUNT(DISTINCT gmail_receipt_id) as receipts_with_pdfs
-                FROM pdf_attachments
-            """)
-        return dict(cursor.fetchone())
+    with get_session() as session:
+        result = session.query(
+            func.count(PDFAttachment.id).label("total_attachments"),
+            func.coalesce(func.sum(PDFAttachment.size_bytes), 0).label(
+                "total_size_bytes"
+            ),
+            func.count(func.distinct(PDFAttachment.content_hash)).label("unique_pdfs"),
+            func.count(func.distinct(PDFAttachment.gmail_receipt_id)).label(
+                "receipts_with_pdfs"
+            ),
+        ).first()
+
+        return {
+            "total_attachments": result.total_attachments,
+            "total_size_bytes": result.total_size_bytes,
+            "unique_pdfs": result.unique_pdfs,
+            "receipts_with_pdfs": result.receipts_with_pdfs,
+        }
 
 
 def delete_pdf_attachment(attachment_id: int) -> bool:
     """Delete a PDF attachment record (MinIO object should be deleted separately)."""
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute("DELETE FROM pdf_attachments WHERE id = %s", (attachment_id,))
-        conn.commit()
-        return cursor.rowcount > 0
+    with get_session() as session:
+        attachment = session.get(PDFAttachment, attachment_id)
+        if attachment:
+            session.delete(attachment)
+            session.commit()
+            return True
+        return False
 
 
 # ============================================================================
