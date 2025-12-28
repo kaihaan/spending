@@ -9,6 +9,7 @@ from .amazon import (
     AmazonReturn,
     TrueLayerAmazonTransactionMatch,
 )
+from .apple import AppleTransaction, TrueLayerAppleTransactionMatch
 from .category import Category, CategoryKeyword
 from .truelayer import (
     BankConnection,
@@ -32,4 +33,6 @@ __all__ = [
     "AmazonBusinessOrder",
     "AmazonBusinessLineItem",
     "TrueLayerAmazonTransactionMatch",
+    "AppleTransaction",
+    "TrueLayerAppleTransactionMatch",
 ]
