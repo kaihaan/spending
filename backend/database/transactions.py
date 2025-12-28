@@ -3,14 +3,20 @@ Core Transactions - Database Operations
 
 Handles core transaction operations, Huququllah classification, account mappings,
 and general transaction utilities.
+
+Migrated to SQLAlchemy from psycopg2.
 """
 
 import json
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 
-from .base_psycopg2 import get_db
+from .base import get_session
+from .models.category import Category, CategoryKeyword
+from .models.enrichment import EnrichmentCache
+from .models.truelayer import TrueLayerTransaction
+from .models.user import AccountMapping
 
 # ============================================================================
 # CORE TRANSACTION FUNCTIONS
@@ -19,9 +25,17 @@ from .base_psycopg2 import get_db
 
 def get_all_categories():
     """Get all categories from database."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("SELECT id, name, rule_pattern, ai_suggested FROM categories")
-        return cursor.fetchall()
+    with get_session() as session:
+        categories = session.query(Category).all()
+        return [
+            {
+                "id": cat.id,
+                "name": cat.name,
+                "rule_pattern": cat.rule_pattern,
+                "ai_suggested": cat.ai_suggested,
+            }
+            for cat in categories
+        ]
 
 
 def update_transaction_with_enrichment(
@@ -55,72 +69,46 @@ def update_transaction_with_enrichment(
             "llm_model": getattr(enrichment_data, "llm_model", "unknown"),
         }
 
-    with get_db() as conn:
-        with conn.cursor() as cursor:
-            # Extract category from enrichment
-            primary_category = enrichment_data.get("primary_category", "Other")
+    with get_session() as session:
+        # Extract category from enrichment
+        primary_category = enrichment_data.get("primary_category", "Other")
 
-            # Update TrueLayer transaction with enrichment in metadata
-            enrichment_metadata = {
-                "enrichment": {
-                    "primary_category": enrichment_data.get(
-                        "primary_category", "Other"
-                    ),
-                    "subcategory": enrichment_data.get("subcategory"),
-                    "merchant_clean_name": enrichment_data.get("merchant_clean_name"),
-                    "merchant_type": enrichment_data.get("merchant_type"),
-                    "essential_discretionary": enrichment_data.get(
-                        "essential_discretionary"
-                    ),
-                    "payment_method": enrichment_data.get("payment_method"),
-                    "payment_method_subtype": enrichment_data.get(
-                        "payment_method_subtype"
-                    ),
-                    "confidence_score": enrichment_data.get("confidence_score"),
-                    "llm_provider": enrichment_source,
-                    "llm_model": enrichment_data.get("llm_model", "unknown"),
-                    "enriched_at": "now()",
-                }
-            }
+        # Build enrichment metadata
+        enrichment_metadata = {
+            "primary_category": enrichment_data.get("primary_category", "Other"),
+            "subcategory": enrichment_data.get("subcategory"),
+            "merchant_clean_name": enrichment_data.get("merchant_clean_name"),
+            "merchant_type": enrichment_data.get("merchant_type"),
+            "essential_discretionary": enrichment_data.get("essential_discretionary"),
+            "payment_method": enrichment_data.get("payment_method"),
+            "payment_method_subtype": enrichment_data.get("payment_method_subtype"),
+            "confidence_score": enrichment_data.get("confidence_score"),
+            "llm_provider": enrichment_source,
+            "llm_model": enrichment_data.get("llm_model", "unknown"),
+            "enriched_at": "now()",
+        }
 
-            # Update merchant_name if enriched merchant_clean_name is available
-            merchant_clean_name = enrichment_data.get("merchant_clean_name")
+        # Get transaction
+        txn = session.get(TrueLayerTransaction, transaction_id)
+        if not txn:
+            return False
 
-            if merchant_clean_name:
-                cursor.execute(
-                    """
-                    UPDATE truelayer_transactions
-                    SET transaction_category = %s,
-                        merchant_name = %s,
-                        metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{enrichment}', %s::jsonb),
-                        enrichment_required = FALSE
-                    WHERE id = %s
-                """,
-                    (
-                        primary_category,
-                        merchant_clean_name,
-                        json.dumps(enrichment_metadata["enrichment"]),
-                        transaction_id,
-                    ),
-                )
-            else:
-                cursor.execute(
-                    """
-                    UPDATE truelayer_transactions
-                    SET transaction_category = %s,
-                        metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{enrichment}', %s::jsonb),
-                        enrichment_required = FALSE
-                    WHERE id = %s
-                """,
-                    (
-                        primary_category,
-                        json.dumps(enrichment_metadata["enrichment"]),
-                        transaction_id,
-                    ),
-                )
+        # Update transaction
+        txn.transaction_category = primary_category
+        txn.enrichment_required = False
 
-            conn.commit()
-            return cursor.rowcount > 0
+        # Update merchant_name if available
+        merchant_clean_name = enrichment_data.get("merchant_clean_name")
+        if merchant_clean_name:
+            txn.merchant_name = merchant_clean_name
+
+        # Update metadata
+        if not txn.metadata:
+            txn.metadata = {}
+        txn.metadata["enrichment"] = enrichment_metadata
+
+        session.commit()
+        return True
 
 
 def is_transaction_enriched(transaction_id):
@@ -134,20 +122,20 @@ def is_transaction_enriched(transaction_id):
     Returns:
         bool: True if transaction has enrichment data
     """
-    with get_db() as conn:
-        with conn.cursor() as cursor:
-            # Check if TrueLayer transaction with enrichment
-            # Must check for primary_category specifically, not just enrichment object existence
-            # (empty enrichment objects {} should not count as enriched)
-            cursor.execute(
-                """
-                SELECT id FROM truelayer_transactions
-                WHERE id = %s AND metadata->'enrichment'->>'primary_category' IS NOT NULL
-                LIMIT 1
-            """,
-                (transaction_id,),
+    with get_session() as session:
+        # Check if TrueLayer transaction with enrichment
+        # Must check for primary_category specifically, not just enrichment object existence
+        # (empty enrichment objects {} should not count as enriched)
+        txn = (
+            session.query(TrueLayerTransaction)
+            .filter(
+                TrueLayerTransaction.id == transaction_id,
+                TrueLayerTransaction.metadata["enrichment"]["primary_category"].astext
+                != None,  # noqa: E711
             )
-            return cursor.fetchone() is not None
+            .first()
+        )
+        return txn is not None
 
 
 def get_enrichment_from_cache(description, direction):
@@ -161,29 +149,25 @@ def get_enrichment_from_cache(description, direction):
     Returns:
         Enrichment object or None if not cached
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT enrichment_data
-                FROM llm_enrichment_cache
-                WHERE transaction_description = %s AND transaction_direction = %s
-                LIMIT 1
-            """,
-            (description, direction),
+    with get_session() as session:
+        cache_entry = (
+            session.query(EnrichmentCache)
+            .filter(
+                EnrichmentCache.transaction_description == description,
+                EnrichmentCache.transaction_direction == direction,
+            )
+            .first()
         )
 
-        row = cursor.fetchone()
-        if row and row["enrichment_data"]:
+        if cache_entry and cache_entry.enrichment_data:
             try:
-                import json
-
                 from mcp.llm_enricher import EnrichmentResult
 
-                data = json.loads(row["enrichment_data"])
+                data = json.loads(cache_entry.enrichment_data)
                 return EnrichmentResult(**data)
             except (json.JSONDecodeError, Exception):
                 return None
-    return None
+        return None
 
 
 def cache_enrichment(description, direction, enrichment, provider, model):
@@ -197,47 +181,56 @@ def cache_enrichment(description, direction, enrichment, provider, model):
         provider: LLM provider name
         model: LLM model name
     """
-    with get_db() as conn:
-        with conn.cursor() as cursor:
-            try:
-                import json
+    with get_session() as session:
+        try:
+            enrichment_json = json.dumps(
+                {
+                    "primary_category": enrichment.primary_category,
+                    "subcategory": enrichment.subcategory,
+                    "merchant_clean_name": enrichment.merchant_clean_name,
+                    "merchant_type": enrichment.merchant_type,
+                    "essential_discretionary": enrichment.essential_discretionary,
+                    "payment_method": enrichment.payment_method,
+                    "payment_method_subtype": enrichment.payment_method_subtype,
+                    "confidence_score": enrichment.confidence_score,
+                    "llm_provider": provider,
+                    "llm_model": model,
+                }
+            )
 
-                enrichment_json = json.dumps(
-                    {
-                        "primary_category": enrichment.primary_category,
-                        "subcategory": enrichment.subcategory,
-                        "merchant_clean_name": enrichment.merchant_clean_name,
-                        "merchant_type": enrichment.merchant_type,
-                        "essential_discretionary": enrichment.essential_discretionary,
-                        "payment_method": enrichment.payment_method,
-                        "payment_method_subtype": enrichment.payment_method_subtype,
-                        "confidence_score": enrichment.confidence_score,
-                        "llm_provider": provider,
-                        "llm_model": model,
-                    }
+            # Check if exists
+            existing = (
+                session.query(EnrichmentCache)
+                .filter(
+                    EnrichmentCache.transaction_description == description,
+                    EnrichmentCache.transaction_direction == direction,
                 )
+                .first()
+            )
 
-                cursor.execute(
-                    """
-                    INSERT INTO llm_enrichment_cache
-                    (transaction_description, transaction_direction, enrichment_data)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (transaction_description, transaction_direction) DO UPDATE SET
-                        enrichment_data = EXCLUDED.enrichment_data,
-                        cached_at = CURRENT_TIMESTAMP
-                """,
-                    (description, direction, enrichment_json),
+            if existing:
+                existing.enrichment_data = enrichment_json
+                existing.cached_at = func.current_timestamp()
+            else:
+                new_cache = EnrichmentCache(
+                    transaction_description=description,
+                    transaction_direction=direction,
+                    enrichment_data=enrichment_json,
                 )
+                session.add(new_cache)
 
-                conn.commit()
-            except Exception:
-                # Silently fail on cache errors
-                pass
+            session.commit()
+        except Exception:
+            # Silently fail on cache errors
+            session.rollback()
 
 
 def log_enrichment_failure(transaction_id, error_message, retry_count=0, **kwargs):
     """
     Log enrichment failure for a transaction.
+
+    NOTE: The llm_enrichment_failures table does not exist in the schema.
+    This function exists for API compatibility but will silently fail.
 
     Args:
         transaction_id: ID of transaction that failed
@@ -245,41 +238,20 @@ def log_enrichment_failure(transaction_id, error_message, retry_count=0, **kwarg
         retry_count: Number of retry attempts already made
         **kwargs: Additional optional parameters (description, error_type, provider) for compatibility
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        try:
-            cursor.execute(
-                """
-                    INSERT INTO llm_enrichment_failures
-                    (transaction_id, error_message, retry_count)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (transaction_id) DO UPDATE SET
-                        error_message = EXCLUDED.error_message,
-                        retry_count = EXCLUDED.retry_count,
-                        failed_at = CURRENT_TIMESTAMP
-                """,
-                (transaction_id, str(error_message)[:500], retry_count),
-            )
-
-            conn.commit()
-        except Exception:
-            # Silently fail on logging errors
-            pass
+    # Table doesn't exist - silent no-op for API compatibility
 
 
 def get_category_keywords():
     """Get all custom keywords from database grouped by category."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("""
-                SELECT category_name, keyword
-                FROM category_keywords
-                ORDER BY category_name, keyword
-            """)
-        rows = cursor.fetchall()
+    with get_session() as session:
+        keywords = session.query(CategoryKeyword).order_by(
+            CategoryKeyword.category_name, CategoryKeyword.keyword
+        )
 
         keywords_by_category = {}
-        for row in rows:
-            category = row["category_name"]
-            keyword = row["keyword"]
+        for kw in keywords:
+            category = kw.category_name
+            keyword = kw.keyword
             if category not in keywords_by_category:
                 keywords_by_category[category] = []
             keywords_by_category[category].append(keyword)
@@ -289,45 +261,44 @@ def get_category_keywords():
 
 def add_category_keyword(category_name, keyword):
     """Add a keyword to a category."""
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
         try:
-            cursor.execute(
-                """
-                    INSERT INTO category_keywords (category_name, keyword)
-                    VALUES (%s, %s)
-                """,
-                (category_name, keyword.lower()),
+            new_keyword = CategoryKeyword(
+                category_name=category_name, keyword=keyword.lower()
             )
-            conn.commit()
+            session.add(new_keyword)
+            session.commit()
             return True
-        except psycopg2.IntegrityError:
-            conn.rollback()
+        except IntegrityError:
+            session.rollback()
             return False
 
 
 def remove_category_keyword(category_name, keyword):
     """Remove a keyword from a category."""
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                DELETE FROM category_keywords
-                WHERE category_name = %s AND keyword = %s
-            """,
-            (category_name, keyword.lower()),
+    with get_session() as session:
+        deleted = (
+            session.query(CategoryKeyword)
+            .filter(
+                CategoryKeyword.category_name == category_name,
+                CategoryKeyword.keyword == keyword.lower(),
+            )
+            .delete()
         )
-        conn.commit()
-        return cursor.rowcount > 0
+        session.commit()
+        return deleted > 0
 
 
 def create_custom_category(name):
     """Create a new custom category."""
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
         try:
-            cursor.execute("INSERT INTO categories (name) VALUES (%s)", (name,))
-            conn.commit()
+            new_category = Category(name=name)
+            session.add(new_category)
+            session.commit()
             return True
-        except psycopg2.IntegrityError:
-            conn.rollback()
+        except IntegrityError:
+            session.rollback()
             return False
 
 
@@ -349,256 +320,278 @@ def delete_custom_category(name):
     if name in default_categories:
         return False
 
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
         # Delete keywords first
-        cursor.execute(
-            "DELETE FROM category_keywords WHERE category_name = %s", (name,)
-        )
+        session.query(CategoryKeyword).filter(
+            CategoryKeyword.category_name == name
+        ).delete()
+
         # Delete category
-        cursor.execute("DELETE FROM categories WHERE name = %s", (name,))
-        conn.commit()
-        return cursor.rowcount > 0
+        deleted = session.query(Category).filter(Category.name == name).delete()
+        session.commit()
+        return deleted > 0
 
 
 def get_all_account_mappings():
     """Get all account mappings from database."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("""
-                SELECT id, sort_code, account_number, friendly_name, created_at
-                FROM account_mappings
-                ORDER BY friendly_name
-            """)
-        return cursor.fetchall()
+    with get_session() as session:
+        mappings = session.query(AccountMapping).order_by(AccountMapping.friendly_name)
+        return [
+            {
+                "id": mapping.id,
+                "sort_code": mapping.sort_code,
+                "account_number": mapping.account_number,
+                "friendly_name": mapping.friendly_name,
+                "created_at": mapping.created_at,
+            }
+            for mapping in mappings
+        ]
 
 
 def add_account_mapping(sort_code, account_number, friendly_name):
     """Add a new account mapping."""
-    with get_db() as conn:
-        with conn.cursor() as cursor:
-            try:
-                cursor.execute(
-                    """
-                    INSERT INTO account_mappings (sort_code, account_number, friendly_name)
-                    VALUES (%s, %s, %s)
-                    RETURNING id
-                """,
-                    (sort_code, account_number, friendly_name),
-                )
-                mapping_id = cursor.fetchone()[0]
-                conn.commit()
-                return mapping_id
-            except psycopg2.IntegrityError:
-                conn.rollback()
-                return None
+    with get_session() as session:
+        try:
+            new_mapping = AccountMapping(
+                sort_code=sort_code,
+                account_number=account_number,
+                friendly_name=friendly_name,
+            )
+            session.add(new_mapping)
+            session.commit()
+            return new_mapping.id
+        except IntegrityError:
+            session.rollback()
+            return None
 
 
 def update_account_mapping(mapping_id, friendly_name):
     """Update the friendly name for an account mapping."""
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE account_mappings
-                SET friendly_name = %s
-                WHERE id = %s
-            """,
-            (friendly_name, mapping_id),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    with get_session() as session:
+        mapping = session.get(AccountMapping, mapping_id)
+        if mapping:
+            mapping.friendly_name = friendly_name
+            session.commit()
+            return True
+        return False
 
 
 def delete_account_mapping(mapping_id):
     """Delete an account mapping."""
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute("DELETE FROM account_mappings WHERE id = %s", (mapping_id,))
-        conn.commit()
-        return cursor.rowcount > 0
+    with get_session() as session:
+        mapping = session.get(AccountMapping, mapping_id)
+        if mapping:
+            session.delete(mapping)
+            session.commit()
+            return True
+        return False
 
 
 def get_account_mapping_by_details(sort_code, account_number):
     """Look up account mapping by sort code and account number."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT id, sort_code, account_number, friendly_name, created_at
-                FROM account_mappings
-                WHERE sort_code = %s AND account_number = %s
-            """,
-            (sort_code, account_number),
+    with get_session() as session:
+        mapping = (
+            session.query(AccountMapping)
+            .filter(
+                AccountMapping.sort_code == sort_code,
+                AccountMapping.account_number == account_number,
+            )
+            .first()
         )
-        return cursor.fetchone()
+
+        if mapping:
+            return {
+                "id": mapping.id,
+                "sort_code": mapping.sort_code,
+                "account_number": mapping.account_number,
+                "friendly_name": mapping.friendly_name,
+                "created_at": mapping.created_at,
+            }
+        return None
 
 
 def update_truelayer_transaction_merchant(transaction_id, merchant_name):
     """Update merchant_name for a TrueLayer transaction."""
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE truelayer_transactions
-                SET merchant_name = %s
-                WHERE id = %s
-            """,
-            (merchant_name, transaction_id),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    with get_session() as session:
+        txn = session.get(TrueLayerTransaction, transaction_id)
+        if txn:
+            txn.merchant_name = merchant_name
+            session.commit()
+            return True
+        return False
 
 
 def update_transaction_huququllah(transaction_id, classification):
     """Update Huququllah classification for TrueLayer transaction in metadata."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        # Get current metadata
-        cursor.execute(
-            "SELECT metadata FROM truelayer_transactions WHERE id = %s",
-            (transaction_id,),
-        )
-        row = cursor.fetchone()
-        if not row:
+    with get_session() as session:
+        # Get transaction
+        txn = session.get(TrueLayerTransaction, transaction_id)
+        if not txn:
             return False
 
         # Update metadata
-        metadata = row["metadata"] or {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-        metadata["huququllah_classification"] = classification
+        if not txn.metadata:
+            txn.metadata = {}
+        txn.metadata["huququllah_classification"] = classification
 
-        cursor.execute(
-            """
-                UPDATE truelayer_transactions
-                SET metadata = %s
-                WHERE id = %s
-            """,
-            (json.dumps(metadata), transaction_id),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+        session.commit()
+        return True
 
 
 def get_unclassified_transactions():
     """Get TrueLayer transactions without Huququllah classification."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("""
-                SELECT id, timestamp as date, description, amount, currency,
-                       merchant_name as merchant, metadata
-                FROM truelayer_transactions
-                WHERE transaction_type = 'DEBIT'
-                AND amount > 0
-                AND (metadata->>'huququllah_classification' IS NULL
-                     OR metadata->>'huququllah_classification' = '')
-                ORDER BY timestamp DESC
-            """)
-        return cursor.fetchall()
+    with get_session() as session:
+        txns = (
+            session.query(TrueLayerTransaction)
+            .filter(
+                TrueLayerTransaction.transaction_type == "DEBIT",
+                TrueLayerTransaction.amount > 0,
+            )
+            .order_by(TrueLayerTransaction.timestamp.desc())
+        )
+
+        results = []
+        for txn in txns:
+            # Check if has classification in metadata
+            classification = None
+            if txn.metadata:
+                classification = txn.metadata.get("huququllah_classification")
+
+            if not classification:
+                results.append(
+                    {
+                        "id": txn.id,
+                        "date": txn.timestamp,
+                        "description": txn.description,
+                        "amount": txn.amount,
+                        "currency": txn.currency,
+                        "merchant": txn.merchant_name,
+                        "metadata": txn.metadata,
+                    }
+                )
+
+        return results
 
 
 def get_huququllah_summary(date_from=None, date_to=None):
     """Calculate Huququllah obligations from TrueLayer transactions."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        query = """
-                SELECT
-                    SUM(CASE
-                        WHEN COALESCE(
-                            metadata->>'huququllah_classification',
-                            LOWER(metadata->'enrichment'->>'essential_discretionary')
-                        ) = 'essential'
-                        THEN amount ELSE 0 END) as essential_expenses,
-                    SUM(CASE
-                        WHEN COALESCE(
-                            metadata->>'huququllah_classification',
-                            LOWER(metadata->'enrichment'->>'essential_discretionary')
-                        ) = 'discretionary'
-                        THEN amount ELSE 0 END) as discretionary_expenses,
-                    COUNT(CASE
-                        WHEN COALESCE(
-                            metadata->>'huququllah_classification',
-                            LOWER(metadata->'enrichment'->>'essential_discretionary')
-                        ) IS NULL
-                        THEN 1 END) as unclassified_count
-                FROM truelayer_transactions
-                WHERE transaction_type = 'DEBIT' AND amount > 0
-            """
-        params = []
+    with get_session() as session:
+        # Build query
+        query = session.query(TrueLayerTransaction).filter(
+            TrueLayerTransaction.transaction_type == "DEBIT",
+            TrueLayerTransaction.amount > 0,
+        )
 
         if date_from:
-            query += " AND timestamp >= %s"
-            params.append(date_from)
+            query = query.filter(TrueLayerTransaction.timestamp >= date_from)
 
         if date_to:
-            query += " AND timestamp <= %s"
-            params.append(date_to)
+            query = query.filter(TrueLayerTransaction.timestamp <= date_to)
 
-        cursor.execute(query, params)
-        result = cursor.fetchone()
+        txns = query.all()
 
-        if result:
-            essential = float(result["essential_expenses"] or 0)
-            discretionary = float(result["discretionary_expenses"] or 0)
-            unclassified = result["unclassified_count"] or 0
-            huququllah = discretionary * 0.19
+        # Calculate sums
+        essential_expenses = 0
+        discretionary_expenses = 0
+        unclassified_count = 0
 
-            return {
-                "essential_expenses": round(essential, 2),
-                "discretionary_expenses": round(discretionary, 2),
-                "huququllah_due": round(huququllah, 2),
-                "unclassified_count": unclassified,
-            }
+        for txn in txns:
+            # Get classification from metadata or enrichment
+            classification = None
+            if txn.metadata:
+                classification = txn.metadata.get("huququllah_classification")
+                if not classification and "enrichment" in txn.metadata:
+                    essential_discretionary = txn.metadata["enrichment"].get(
+                        "essential_discretionary"
+                    )
+                    if essential_discretionary:
+                        classification = essential_discretionary.lower()
+
+            if classification == "essential":
+                essential_expenses += float(txn.amount)
+            elif classification == "discretionary":
+                discretionary_expenses += float(txn.amount)
+            else:
+                unclassified_count += 1
+
+        huququllah = discretionary_expenses * 0.19
 
         return {
-            "essential_expenses": 0,
-            "discretionary_expenses": 0,
-            "huququllah_due": 0,
-            "unclassified_count": 0,
+            "essential_expenses": round(essential_expenses, 2),
+            "discretionary_expenses": round(discretionary_expenses, 2),
+            "huququllah_due": round(huququllah, 2),
+            "unclassified_count": unclassified_count,
         }
 
 
 def get_transaction_by_id(transaction_id):
     """Get a single transaction by ID with computed huququllah_classification."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT
-                    id,
-                    timestamp,
-                    description,
-                    amount,
-                    currency,
-                    transaction_type,
-                    transaction_category as category,
-                    merchant_name as merchant,
-                    metadata,
-                    COALESCE(
-                        metadata->>'huququllah_classification',
-                        LOWER(metadata->'enrichment'->>'essential_discretionary')
-                    ) as huququllah_classification
-                FROM truelayer_transactions
-                WHERE id = %s
-            """,
-            (transaction_id,),
-        )
-        return cursor.fetchone()
+    with get_session() as session:
+        txn = session.get(TrueLayerTransaction, transaction_id)
+        if not txn:
+            return None
+
+        # Compute huququllah_classification
+        classification = None
+        if txn.metadata:
+            classification = txn.metadata.get("huququllah_classification")
+            if not classification and "enrichment" in txn.metadata:
+                essential_discretionary = txn.metadata["enrichment"].get(
+                    "essential_discretionary"
+                )
+                if essential_discretionary:
+                    classification = essential_discretionary.lower()
+
+        return {
+            "id": txn.id,
+            "timestamp": txn.timestamp,
+            "description": txn.description,
+            "amount": txn.amount,
+            "currency": txn.currency,
+            "transaction_type": txn.transaction_type,
+            "category": txn.transaction_category,
+            "merchant": txn.merchant_name,
+            "metadata": txn.metadata,
+            "huququllah_classification": classification,
+        }
 
 
 def get_all_transactions():
     """Get all transactions with computed huququllah_classification."""
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("""
-                SELECT
-                    id,
-                    timestamp,
-                    description,
-                    amount,
-                    currency,
-                    transaction_type,
-                    transaction_category as category,
-                    merchant_name as merchant,
-                    metadata,
-                    COALESCE(
-                        metadata->>'huququllah_classification',
-                        LOWER(metadata->'enrichment'->>'essential_discretionary')
-                    ) as huququllah_classification
-                FROM truelayer_transactions
-                ORDER BY timestamp DESC
-            """)
-        return cursor.fetchall()
+    with get_session() as session:
+        txns = session.query(TrueLayerTransaction).order_by(
+            TrueLayerTransaction.timestamp.desc()
+        )
+
+        results = []
+        for txn in txns:
+            # Compute huququllah_classification
+            classification = None
+            if txn.metadata:
+                classification = txn.metadata.get("huququllah_classification")
+                if not classification and "enrichment" in txn.metadata:
+                    essential_discretionary = txn.metadata["enrichment"].get(
+                        "essential_discretionary"
+                    )
+                    if essential_discretionary:
+                        classification = essential_discretionary.lower()
+
+            results.append(
+                {
+                    "id": txn.id,
+                    "timestamp": txn.timestamp,
+                    "description": txn.description,
+                    "amount": txn.amount,
+                    "currency": txn.currency,
+                    "transaction_type": txn.transaction_type,
+                    "category": txn.transaction_category,
+                    "merchant": txn.merchant_name,
+                    "metadata": txn.metadata,
+                    "huququllah_classification": classification,
+                }
+            )
+
+        return results
 
 
 # ============================================================================

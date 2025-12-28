@@ -24,10 +24,11 @@ from .truelayer import (
     TrueLayerBalance,
     TrueLayerTransaction,
 )
-from .user import User
+from .user import AccountMapping, User
 
 __all__ = [
     "User",
+    "AccountMapping",
     "Category",
     "CategoryKeyword",
     "BankConnection",

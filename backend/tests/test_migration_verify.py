@@ -49,9 +49,10 @@ def test_all_tables_exist():
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
 
-    # Expected tables from our SQLAlchemy models (21 tables)
+    # Expected tables from our SQLAlchemy models (22 tables)
     expected_tables = {
         "users",
+        "account_mappings",
         "categories",
         "category_keywords",
         "bank_connections",
