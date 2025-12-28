@@ -123,6 +123,8 @@ class EnrichmentCache(Base):
         String(10), nullable=True
     )  # 'DEBIT' or 'CREDIT' or NULL
     enrichment_data = Column(Text, nullable=True)  # JSON string (stored as TEXT)
+    provider = Column(String(50), nullable=True)  # LLM provider name
+    model = Column(String(100), nullable=True)  # LLM model name
     cached_at = Column(
         DateTime(timezone=False), server_default=func.current_timestamp()
     )
