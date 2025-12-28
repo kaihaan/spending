@@ -3,13 +3,15 @@ Direct Debit Mapping - Database Operations
 
 Handles mapping between merchant names in bank statements and normalized names
 for direct debit transactions.
+
+Migrated to SQLAlchemy from psycopg2.
 """
 
-import json
+from sqlalchemy import func
 
-from psycopg2.extras import RealDictCursor
-
-from .base_psycopg2 import get_db
+from .base import get_session
+from .models.category import MerchantNormalization
+from .models.truelayer import TrueLayerTransaction
 
 # ============================================================================
 # DIRECT DEBIT MAPPING FUNCTIONS
@@ -38,61 +40,75 @@ def get_direct_debit_payees() -> list:
         extract_variables,
     )
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Get all direct debit transactions
-        cursor.execute("""
-                SELECT id, description,
-                       metadata->'enrichment'->>'primary_category' as category,
-                       metadata->'enrichment'->>'subcategory' as subcategory,
-                       metadata->'enrichment'->>'merchant_clean_name' as merchant
-                FROM truelayer_transactions
-                WHERE description LIKE 'DIRECT DEBIT PAYMENT TO%'
-                ORDER BY timestamp DESC
-            """)
-        transactions = cursor.fetchall()
+        txns = (
+            session.query(TrueLayerTransaction)
+            .filter(TrueLayerTransaction.description.like("DIRECT DEBIT PAYMENT TO%"))
+            .order_by(TrueLayerTransaction.timestamp.desc())
+            .all()
+        )
 
         # Group by extracted payee
         payee_data = {}
-        for txn in transactions:
-            extracted = extract_variables(txn["description"])
+        for txn in txns:
+            extracted = extract_variables(txn.description)
             payee = extracted.get("payee")
 
             # Fallback extraction if strict pattern fails
             if not payee:
-                extracted = extract_direct_debit_payee_fallback(txn["description"])
+                extracted = extract_direct_debit_payee_fallback(txn.description)
                 payee = extracted.get("payee")
 
             if payee:
                 payee_upper = payee.upper().strip()
+
+                # Extract enrichment data from JSONB metadata
+                category = None
+                subcategory = None
+                if txn.metadata and "enrichment" in txn.metadata:
+                    category = txn.metadata["enrichment"].get("primary_category")
+                    subcategory = txn.metadata["enrichment"].get("subcategory")
+
                 if payee_upper not in payee_data:
                     payee_data[payee_upper] = {
                         "payee": payee.strip(),
                         "transaction_count": 0,
-                        "sample_description": txn["description"],
+                        "sample_description": txn.description,
                         "categories": {},
                         "subcategories": {},
                     }
                 payee_data[payee_upper]["transaction_count"] += 1
 
                 # Track category frequency
-                cat = txn["category"] or "Uncategorized"
+                cat = category or "Uncategorized"
                 payee_data[payee_upper]["categories"][cat] = (
                     payee_data[payee_upper]["categories"].get(cat, 0) + 1
                 )
 
-                subcat = txn["subcategory"] or "None"
+                subcat = subcategory or "None"
                 payee_data[payee_upper]["subcategories"][subcat] = (
                     payee_data[payee_upper]["subcategories"].get(subcat, 0) + 1
                 )
 
         # Find existing mappings for these payees
-        cursor.execute("""
-                SELECT id, pattern, normalized_name, default_category, merchant_type
-                FROM merchant_normalizations
-                WHERE source = 'direct_debit'
-                ORDER BY priority DESC
-            """)
-        mappings = {row["pattern"].upper(): dict(row) for row in cursor.fetchall()}
+        mappings_query = (
+            session.query(MerchantNormalization)
+            .filter(MerchantNormalization.source == "direct_debit")
+            .order_by(MerchantNormalization.priority.desc())
+            .all()
+        )
+
+        mappings = {
+            norm.pattern.upper(): {
+                "id": norm.id,
+                "pattern": norm.pattern,
+                "normalized_name": norm.normalized_name,
+                "default_category": norm.default_category,
+                "merchant_type": norm.merchant_type,
+            }
+            for norm in mappings_query
+        }
 
         # Build result list
         result = []
@@ -145,16 +161,33 @@ def get_direct_debit_mappings() -> list:
     Returns:
         List of mapping dictionaries
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("""
-                SELECT id, pattern, pattern_type, normalized_name, merchant_type,
-                       default_category, priority, source, usage_count,
-                       created_at, updated_at
-                FROM merchant_normalizations
-                WHERE source = 'direct_debit'
-                ORDER BY priority DESC, pattern ASC
-            """)
-        return [dict(row) for row in cursor.fetchall()]
+    with get_session() as session:
+        mappings = (
+            session.query(MerchantNormalization)
+            .filter(MerchantNormalization.source == "direct_debit")
+            .order_by(
+                MerchantNormalization.priority.desc(),
+                MerchantNormalization.pattern.asc(),
+            )
+            .all()
+        )
+
+        return [
+            {
+                "id": m.id,
+                "pattern": m.pattern,
+                "pattern_type": m.pattern_type,
+                "normalized_name": m.normalized_name,
+                "merchant_type": m.merchant_type,
+                "default_category": m.default_category,
+                "priority": m.priority,
+                "source": m.source,
+                "usage_count": m.usage_count,
+                "created_at": m.created_at,
+                "updated_at": m.updated_at,
+            }
+            for m in mappings
+        ]
 
 
 def save_direct_debit_mapping(
@@ -179,27 +212,38 @@ def save_direct_debit_mapping(
     Returns:
         ID of the created/updated mapping
     """
-    with get_db() as conn, conn.cursor() as cursor:
+    from sqlalchemy.dialects.postgresql import insert
+
+    with get_session() as session:
         # Use upsert to create or update
-        cursor.execute(
-            """
-                INSERT INTO merchant_normalizations
-                (pattern, pattern_type, normalized_name, merchant_type,
-                 default_category, priority, source)
-                VALUES (%s, 'exact', %s, %s, %s, 100, 'direct_debit')
-                ON CONFLICT (pattern, pattern_type) DO UPDATE SET
-                    normalized_name = EXCLUDED.normalized_name,
-                    merchant_type = EXCLUDED.merchant_type,
-                    default_category = EXCLUDED.default_category,
-                    priority = EXCLUDED.priority,
-                    source = 'direct_debit',
-                    updated_at = NOW()
-                RETURNING id
-            """,
-            (payee_pattern.upper(), normalized_name, merchant_type, category),
+        stmt = (
+            insert(MerchantNormalization)
+            .values(
+                pattern=payee_pattern.upper(),
+                pattern_type="exact",
+                normalized_name=normalized_name,
+                merchant_type=merchant_type,
+                default_category=category,
+                priority=100,
+                source="direct_debit",
+            )
+            .on_conflict_do_update(
+                index_elements=["pattern", "pattern_type"],
+                set_={
+                    "normalized_name": normalized_name,
+                    "merchant_type": merchant_type,
+                    "default_category": category,
+                    "priority": 100,
+                    "source": "direct_debit",
+                    "updated_at": func.now(),
+                },
+            )
+            .returning(MerchantNormalization.id)
         )
-        mapping_id = cursor.fetchone()[0]
-        conn.commit()
+
+        result = session.execute(stmt)
+        mapping_id = result.scalar_one()
+        session.commit()
         return mapping_id
 
 
@@ -213,16 +257,17 @@ def delete_direct_debit_mapping(mapping_id: int) -> bool:
     Returns:
         True if deleted successfully
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                DELETE FROM merchant_normalizations
-                WHERE id = %s AND source = 'direct_debit'
-            """,
-            (mapping_id,),
+    with get_session() as session:
+        deleted = (
+            session.query(MerchantNormalization)
+            .filter(
+                MerchantNormalization.id == mapping_id,
+                MerchantNormalization.source == "direct_debit",
+            )
+            .delete()
         )
-        conn.commit()
-        return cursor.rowcount > 0
+        session.commit()
+        return deleted > 0
 
 
 def apply_direct_debit_mappings() -> dict:
@@ -242,41 +287,50 @@ def apply_direct_debit_mappings() -> dict:
         extract_variables,
     )
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Get all direct debit mappings
-        cursor.execute("""
-                SELECT id, pattern, normalized_name, merchant_type, default_category
-                FROM merchant_normalizations
-                WHERE source = 'direct_debit'
-            """)
-        mappings = {row["pattern"].upper(): dict(row) for row in cursor.fetchall()}
+        mappings_query = (
+            session.query(MerchantNormalization)
+            .filter(MerchantNormalization.source == "direct_debit")
+            .all()
+        )
+
+        mappings = {
+            norm.pattern.upper(): {
+                "id": norm.id,
+                "pattern": norm.pattern,
+                "normalized_name": norm.normalized_name,
+                "merchant_type": norm.merchant_type,
+                "default_category": norm.default_category,
+            }
+            for norm in mappings_query
+        }
 
         if not mappings:
             return {"updated_count": 0, "transactions": []}
 
         # Get direct debit transactions
-        cursor.execute("""
-                SELECT id, description, metadata
-                FROM truelayer_transactions
-                WHERE description LIKE 'DIRECT DEBIT PAYMENT TO%'
-            """)
-        transactions = cursor.fetchall()
+        txns = (
+            session.query(TrueLayerTransaction)
+            .filter(TrueLayerTransaction.description.like("DIRECT DEBIT PAYMENT TO%"))
+            .all()
+        )
 
         updated_ids = []
-        for txn in transactions:
-            extracted = extract_variables(txn["description"])
+        for txn in txns:
+            extracted = extract_variables(txn.description)
             payee = extracted.get("payee")
 
             # Fallback extraction if strict pattern fails
             if not payee:
-                extracted = extract_direct_debit_payee_fallback(txn["description"])
+                extracted = extract_direct_debit_payee_fallback(txn.description)
                 payee = extracted.get("payee")
 
             if payee and payee.upper() in mappings:
                 mapping = mappings[payee.upper()]
 
                 # Build enrichment data
-                metadata = txn["metadata"] or {}
+                metadata = txn.metadata or {}
                 enrichment = metadata.get("enrichment", {})
                 enrichment.update(
                     {
@@ -293,18 +347,11 @@ def apply_direct_debit_mappings() -> dict:
                 )
                 metadata["enrichment"] = enrichment
 
-                # Update transaction
-                cursor.execute(
-                    """
-                        UPDATE truelayer_transactions
-                        SET metadata = %s
-                        WHERE id = %s
-                    """,
-                    (json.dumps(metadata), txn["id"]),
-                )
-                updated_ids.append(txn["id"])
+                # Update transaction metadata
+                txn.metadata = metadata
+                updated_ids.append(txn.id)
 
-        conn.commit()
+        session.commit()
         return {"updated_count": len(updated_ids), "transactions": updated_ids}
 
 
@@ -323,29 +370,32 @@ def detect_new_direct_debits() -> dict:
         extract_variables,
     )
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Get all mapped payees
-        cursor.execute("""
-                SELECT UPPER(pattern) as pattern FROM merchant_normalizations
-                WHERE source = 'direct_debit'
-            """)
-        mapped_payees = {row["pattern"] for row in cursor.fetchall()}
+        mapped_patterns = (
+            session.query(func.upper(MerchantNormalization.pattern))
+            .filter(MerchantNormalization.source == "direct_debit")
+            .all()
+        )
+        mapped_payees = {pattern[0] for pattern in mapped_patterns}
 
         # Get all direct debit transactions
-        cursor.execute("""
-                SELECT description, timestamp
-                FROM truelayer_transactions
-                WHERE description LIKE 'DIRECT DEBIT PAYMENT TO%'
-                ORDER BY timestamp ASC
-            """)
+        txns = (
+            session.query(
+                TrueLayerTransaction.description, TrueLayerTransaction.timestamp
+            )
+            .filter(TrueLayerTransaction.description.like("DIRECT DEBIT PAYMENT TO%"))
+            .order_by(TrueLayerTransaction.timestamp.asc())
+            .all()
+        )
 
         # Track payees and their mandates
         payee_info = {}  # payee -> {first_seen, mandates: set(), count}
 
-        for txn in cursor.fetchall():
-            extracted = extract_variables(txn["description"])
+        for txn in txns:
+            extracted = extract_variables(txn.description)
             if not extracted.get("payee"):
-                extracted = extract_direct_debit_payee_fallback(txn["description"])
+                extracted = extract_direct_debit_payee_fallback(txn.description)
 
             payee = extracted.get("payee")
             if not payee:
@@ -357,7 +407,7 @@ def detect_new_direct_debits() -> dict:
             if payee_upper not in payee_info:
                 payee_info[payee_upper] = {
                     "payee": payee.strip(),
-                    "first_seen": txn["timestamp"],
+                    "first_seen": txn.timestamp,
                     "mandates": set(),
                     "count": 0,
                 }
