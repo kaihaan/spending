@@ -10,7 +10,13 @@ from .amazon import (
     TrueLayerAmazonTransactionMatch,
 )
 from .apple import AppleTransaction, TrueLayerAppleTransactionMatch
-from .category import Category, CategoryKeyword
+from .category import (
+    Category,
+    CategoryKeyword,
+    CategoryRule,
+    MatchingJob,
+    MerchantNormalization,
+)
 from .enrichment import EnrichmentCache, TransactionEnrichmentSource
 from .gmail import (
     GmailConnection,
@@ -31,6 +37,9 @@ __all__ = [
     "AccountMapping",
     "Category",
     "CategoryKeyword",
+    "CategoryRule",
+    "MerchantNormalization",
+    "MatchingJob",
     "BankConnection",
     "TrueLayerAccount",
     "TrueLayerTransaction",
