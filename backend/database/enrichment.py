@@ -3,13 +3,34 @@ Transaction Enrichment - Database Operations
 
 Handles multi-source transaction enrichment, enrichment status tracking,
 and enrichment job management.
+
+Migrated to SQLAlchemy from psycopg2.
 """
 
 import json
 
-from psycopg2.extras import RealDictCursor
+from sqlalchemy import func, text
+from sqlalchemy.dialects.postgresql import insert
 
-from .base_psycopg2 import get_db
+from .base import get_session
+from .models.amazon import (
+    AmazonBusinessLineItem,
+    AmazonBusinessOrder,
+    AmazonOrder,
+    AmazonReturn,
+)
+from .models.amazon import (
+    TrueLayerAmazonTransactionMatch as AmazonTransactionMatch,
+)
+from .models.apple import (
+    AppleTransaction,
+)
+from .models.apple import (
+    TrueLayerAppleTransactionMatch as AppleTransactionMatch,
+)
+from .models.enrichment import EnrichmentCache, TransactionEnrichmentSource
+from .models.gmail import GmailReceipt, PDFAttachment
+from .models.truelayer import TrueLayerTransaction
 
 # ============================================================================
 # MULTI-SOURCE ENRICHMENT FUNCTIONS
@@ -45,51 +66,54 @@ def add_enrichment_source(
     Returns:
         ID of the created enrichment source, or existing ID if duplicate
     """
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
         # Determine if this should be primary
         if is_primary is None:
             # Check if any sources already exist for this transaction
-            cursor.execute(
-                """
-                    SELECT COUNT(*) FROM transaction_enrichment_sources
-                    WHERE truelayer_transaction_id = %s
-                """,
-                (transaction_id,),
+            existing_count = (
+                session.query(func.count(TransactionEnrichmentSource.id))
+                .filter(
+                    TransactionEnrichmentSource.truelayer_transaction_id
+                    == transaction_id
+                )
+                .scalar()
             )
-            existing_count = cursor.fetchone()[0]
             is_primary = existing_count == 0
 
-        cursor.execute(
-            """
-                INSERT INTO transaction_enrichment_sources
-                    (truelayer_transaction_id, source_type, source_id, description,
-                     order_id, line_items, match_confidence, match_method, is_primary)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (truelayer_transaction_id, source_type, source_id)
-                DO UPDATE SET
-                    description = EXCLUDED.description,
-                    order_id = EXCLUDED.order_id,
-                    line_items = EXCLUDED.line_items,
-                    match_confidence = EXCLUDED.match_confidence,
-                    match_method = EXCLUDED.match_method,
-                    updated_at = NOW()
-                RETURNING id
-            """,
-            (
-                transaction_id,
-                source_type,
-                source_id,
-                description,
-                order_id,
-                json.dumps(line_items) if line_items else None,
-                confidence,
-                match_method,
-                is_primary,
-            ),
+        # Convert line_items to JSON
+        line_items_json = line_items if line_items else None
+
+        stmt = (
+            insert(TransactionEnrichmentSource)
+            .values(
+                truelayer_transaction_id=transaction_id,
+                source_type=source_type,
+                source_id=source_id,
+                description=description,
+                order_id=order_id,
+                line_items=line_items_json,
+                match_confidence=confidence,
+                match_method=match_method,
+                is_primary=is_primary,
+            )
+            .on_conflict_do_update(
+                index_elements=["truelayer_transaction_id", "source_type", "source_id"],
+                set_={
+                    "description": description,
+                    "order_id": order_id,
+                    "line_items": line_items_json,
+                    "match_confidence": confidence,
+                    "match_method": match_method,
+                    "updated_at": func.now(),
+                },
+            )
+            .returning(TransactionEnrichmentSource.id)
         )
-        result = cursor.fetchone()
-        conn.commit()
-        return result[0] if result else None
+
+        result = session.execute(stmt)
+        source_id = result.scalar_one()
+        session.commit()
+        return source_id
 
 
 def get_transaction_enrichment_sources(transaction_id: int) -> list:
@@ -102,20 +126,36 @@ def get_transaction_enrichment_sources(transaction_id: int) -> list:
     Returns:
         List of enrichment source dicts
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT
-                    id, source_type, source_id, description, order_id,
-                    line_items, match_confidence, match_method,
-                    is_primary, user_verified, created_at
-                FROM transaction_enrichment_sources
-                WHERE truelayer_transaction_id = %s
-                ORDER BY is_primary DESC, match_confidence DESC, created_at ASC
-            """,
-            (transaction_id,),
+    with get_session() as session:
+        sources = (
+            session.query(TransactionEnrichmentSource)
+            .filter(
+                TransactionEnrichmentSource.truelayer_transaction_id == transaction_id
+            )
+            .order_by(
+                TransactionEnrichmentSource.is_primary.desc(),
+                TransactionEnrichmentSource.match_confidence.desc(),
+                TransactionEnrichmentSource.created_at.asc(),
+            )
+            .all()
         )
-        return [dict(row) for row in cursor.fetchall()]
+
+        return [
+            {
+                "id": s.id,
+                "source_type": s.source_type,
+                "source_id": s.source_id,
+                "description": s.description,
+                "order_id": s.order_id,
+                "line_items": s.line_items,
+                "match_confidence": s.match_confidence,
+                "match_method": s.match_method,
+                "is_primary": s.is_primary,
+                "user_verified": s.user_verified,
+                "created_at": s.created_at,
+            }
+            for s in sources
+        ]
 
 
 def get_all_enrichment_sources_for_transactions(transaction_ids: list) -> dict:
@@ -131,28 +171,43 @@ def get_all_enrichment_sources_for_transactions(transaction_ids: list) -> dict:
     if not transaction_ids:
         return {}
 
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute(
-                """
-                SELECT
-                    truelayer_transaction_id, id, source_type, source_id,
-                    description, order_id, line_items, match_confidence,
-                    match_method, is_primary, user_verified
-                FROM transaction_enrichment_sources
-                WHERE truelayer_transaction_id = ANY(%s)
-                ORDER BY truelayer_transaction_id, is_primary DESC, match_confidence DESC
-            """,
-                (transaction_ids,),
+    with get_session() as session:
+        sources = (
+            session.query(TransactionEnrichmentSource)
+            .filter(
+                TransactionEnrichmentSource.truelayer_transaction_id.in_(
+                    transaction_ids
+                )
             )
+            .order_by(
+                TransactionEnrichmentSource.truelayer_transaction_id,
+                TransactionEnrichmentSource.is_primary.desc(),
+                TransactionEnrichmentSource.match_confidence.desc(),
+            )
+            .all()
+        )
 
-            result = {}
-            for row in cursor.fetchall():
-                txn_id = row["truelayer_transaction_id"]
-                if txn_id not in result:
-                    result[txn_id] = []
-                result[txn_id].append(dict(row))
-            return result
+        result = {}
+        for s in sources:
+            txn_id = s.truelayer_transaction_id
+            if txn_id not in result:
+                result[txn_id] = []
+            result[txn_id].append(
+                {
+                    "truelayer_transaction_id": s.truelayer_transaction_id,
+                    "id": s.id,
+                    "source_type": s.source_type,
+                    "source_id": s.source_id,
+                    "description": s.description,
+                    "order_id": s.order_id,
+                    "line_items": s.line_items,
+                    "match_confidence": s.match_confidence,
+                    "match_method": s.match_method,
+                    "is_primary": s.is_primary,
+                    "user_verified": s.user_verified,
+                }
+            )
+        return result
 
 
 def set_primary_enrichment_source(transaction_id: int, source_id: int) -> bool:
@@ -167,18 +222,18 @@ def set_primary_enrichment_source(transaction_id: int, source_id: int) -> bool:
     Returns:
         True if successful, False if source not found
     """
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
         # The trigger will handle unsetting other primaries
-        cursor.execute(
-            """
-                UPDATE transaction_enrichment_sources
-                SET is_primary = TRUE
-                WHERE id = %s AND truelayer_transaction_id = %s
-            """,
-            (source_id, transaction_id),
+        updated = (
+            session.query(TransactionEnrichmentSource)
+            .filter(
+                TransactionEnrichmentSource.id == source_id,
+                TransactionEnrichmentSource.truelayer_transaction_id == transaction_id,
+            )
+            .update({"is_primary": True})
         )
-        conn.commit()
-        return cursor.rowcount > 0
+        session.commit()
+        return updated > 0
 
 
 def get_primary_enrichment_description(transaction_id: int) -> str:
@@ -191,19 +246,19 @@ def get_primary_enrichment_description(transaction_id: int) -> str:
     Returns:
         Primary description string, or None if no sources
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                SELECT description
-                FROM transaction_enrichment_sources
-                WHERE truelayer_transaction_id = %s
-                ORDER BY is_primary DESC, match_confidence DESC
-                LIMIT 1
-            """,
-            (transaction_id,),
+    with get_session() as session:
+        source = (
+            session.query(TransactionEnrichmentSource.description)
+            .filter(
+                TransactionEnrichmentSource.truelayer_transaction_id == transaction_id
+            )
+            .order_by(
+                TransactionEnrichmentSource.is_primary.desc(),
+                TransactionEnrichmentSource.match_confidence.desc(),
+            )
+            .first()
         )
-        row = cursor.fetchone()
-        return row[0] if row else None
+        return source[0] if source else None
 
 
 def get_llm_enrichment_context(transaction_id: int) -> str:
@@ -278,15 +333,14 @@ def delete_enrichment_source(source_id: int) -> bool:
     Returns:
         True if deleted, False if not found
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                DELETE FROM transaction_enrichment_sources WHERE id = %s
-            """,
-            (source_id,),
+    with get_session() as session:
+        deleted = (
+            session.query(TransactionEnrichmentSource)
+            .filter(TransactionEnrichmentSource.id == source_id)
+            .delete()
         )
-        conn.commit()
-        return cursor.rowcount > 0
+        session.commit()
+        return deleted > 0
 
 
 def get_enrichment_source_full_details(enrichment_source_id: int) -> dict | None:
@@ -303,159 +357,194 @@ def get_enrichment_source_full_details(enrichment_source_id: int) -> dict | None
         Dict with enrichment source metadata plus full details from source table,
         or None if not found
     """
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            # First, get the enrichment source record
-            cursor.execute(
-                """
-                SELECT id, truelayer_transaction_id, source_type, source_id,
-                       description, order_id, line_items, match_confidence,
-                       match_method, is_primary, user_verified, created_at
-                FROM transaction_enrichment_sources
-                WHERE id = %s
-            """,
-                (enrichment_source_id,),
-            )
-            enrichment_source = cursor.fetchone()
+    with get_session() as session:
+        # First, get the enrichment source record
+        enrichment_source = session.get(
+            TransactionEnrichmentSource, enrichment_source_id
+        )
 
-            if not enrichment_source:
-                return None
+        if not enrichment_source:
+            return None
 
-            result = dict(enrichment_source)
-            source_type = enrichment_source["source_type"]
-            source_id = enrichment_source["source_id"]
+        result = {
+            "id": enrichment_source.id,
+            "truelayer_transaction_id": enrichment_source.truelayer_transaction_id,
+            "source_type": enrichment_source.source_type,
+            "source_id": enrichment_source.source_id,
+            "description": enrichment_source.description,
+            "order_id": enrichment_source.order_id,
+            "line_items": enrichment_source.line_items,
+            "match_confidence": enrichment_source.match_confidence,
+            "match_method": enrichment_source.match_method,
+            "is_primary": enrichment_source.is_primary,
+            "user_verified": enrichment_source.user_verified,
+            "created_at": enrichment_source.created_at,
+        }
 
-            # If no source_id (manual entry), return just the enrichment data
-            if source_id is None:
-                result["source_details"] = None
-                return result
+        source_type = enrichment_source.source_type
+        source_id = enrichment_source.source_id
 
-            # Fetch full details from the appropriate source table
-            if source_type == "amazon":
-                cursor.execute(
-                    """
-                    SELECT id, order_id, order_date, website, currency, total_owed,
-                           product_names, order_status, shipment_status, source_file,
-                           created_at
-                    FROM amazon_orders
-                    WHERE id = %s
-                """,
-                    (source_id,),
-                )
-                source_details = cursor.fetchone()
-                if source_details:
-                    # Parse product_names into line items if not already in enrichment
-                    source_details = dict(source_details)
-                    if source_details.get("product_names"):
-                        items = [
-                            {"name": name.strip(), "quantity": 1}
-                            for name in source_details["product_names"].split(",")
-                        ]
-                        source_details["parsed_line_items"] = items
-
-            elif source_type == "amazon_business":
-                cursor.execute(
-                    """
-                    SELECT id, order_id, order_date, region, purchase_order_number,
-                           order_status, buyer_name, buyer_email, subtotal, tax,
-                           shipping, net_total, currency, item_count, product_summary,
-                           created_at
-                    FROM amazon_business_orders
-                    WHERE id = %s
-                """,
-                    (source_id,),
-                )
-                source_details = cursor.fetchone()
-                if source_details:
-                    source_details = dict(source_details)
-                    # Also fetch line items
-                    cursor.execute(
-                        """
-                        SELECT line_item_id, asin, title, brand, category,
-                               quantity, unit_price, total_price, seller_name
-                        FROM amazon_business_line_items
-                        WHERE order_id = %s
-                        ORDER BY id
-                    """,
-                        (source_details["order_id"],),
-                    )
-                    line_items = [dict(row) for row in cursor.fetchall()]
-                    source_details["line_items"] = line_items
-
-            elif source_type == "apple":
-                cursor.execute(
-                    """
-                    SELECT id, order_id, order_date, total_amount, currency,
-                           app_names, publishers, item_count, source_file, created_at
-                    FROM apple_transactions
-                    WHERE id = %s
-                """,
-                    (source_id,),
-                )
-                source_details = cursor.fetchone()
-                if source_details:
-                    source_details = dict(source_details)
-                    # Parse app_names into line items
-                    if source_details.get("app_names"):
-                        items = [
-                            {"name": name.strip(), "quantity": 1}
-                            for name in source_details["app_names"].split(",")
-                        ]
-                        source_details["parsed_line_items"] = items
-
-            elif source_type == "gmail":
-                cursor.execute(
-                    """
-                    SELECT id, connection_id, message_id, thread_id, sender_email,
-                           sender_name, subject, received_at, merchant_name,
-                           merchant_domain, order_id, total_amount, currency_code,
-                           receipt_date, line_items, parse_method, parse_confidence,
-                           parsing_status, created_at
-                    FROM gmail_receipts
-                    WHERE id = %s
-                """,
-                    (source_id,),
-                )
-                source_details = cursor.fetchone()
-                if source_details:
-                    source_details = dict(source_details)
-                    # Also fetch PDF attachments if any
-                    cursor.execute(
-                        """
-                        SELECT id, filename, size_bytes, mime_type, object_key, created_at
-                        FROM pdf_attachments
-                        WHERE gmail_receipt_id = %s
-                        ORDER BY created_at
-                    """,
-                        (source_id,),
-                    )
-                    pdf_attachments = [dict(row) for row in cursor.fetchall()]
-                    source_details["pdf_attachments"] = pdf_attachments
-
-            else:
-                source_details = None
-
-            result["source_details"] = source_details
+        # If no source_id (manual entry), return just the enrichment data
+        if source_id is None:
+            result["source_details"] = None
             return result
+
+        # Fetch full details from the appropriate source table
+        source_details = None
+
+        if source_type == "amazon":
+            amazon_order = session.get(AmazonOrder, source_id)
+            if amazon_order:
+                source_details = {
+                    "id": amazon_order.id,
+                    "order_id": amazon_order.order_id,
+                    "order_date": amazon_order.order_date,
+                    "website": amazon_order.website,
+                    "currency": amazon_order.currency,
+                    "total_owed": amazon_order.total_owed,
+                    "product_names": amazon_order.product_names,
+                    "order_status": amazon_order.order_status,
+                    "shipment_status": amazon_order.shipment_status,
+                    "source_file": amazon_order.source_file,
+                    "created_at": amazon_order.created_at,
+                }
+                # Parse product_names into line items
+                if source_details.get("product_names"):
+                    items = [
+                        {"name": name.strip(), "quantity": 1}
+                        for name in source_details["product_names"].split(",")
+                    ]
+                    source_details["parsed_line_items"] = items
+
+        elif source_type == "amazon_business":
+            business_order = session.get(AmazonBusinessOrder, source_id)
+            if business_order:
+                source_details = {
+                    "id": business_order.id,
+                    "order_id": business_order.order_id,
+                    "order_date": business_order.order_date,
+                    "region": business_order.region,
+                    "purchase_order_number": business_order.purchase_order_number,
+                    "order_status": business_order.order_status,
+                    "buyer_name": business_order.buyer_name,
+                    "buyer_email": business_order.buyer_email,
+                    "subtotal": business_order.subtotal,
+                    "tax": business_order.tax,
+                    "shipping": business_order.shipping,
+                    "net_total": business_order.net_total,
+                    "currency": business_order.currency,
+                    "item_count": business_order.item_count,
+                    "product_summary": business_order.product_summary,
+                    "created_at": business_order.created_at,
+                }
+                # Fetch line items
+                line_items_query = (
+                    session.query(AmazonBusinessLineItem)
+                    .filter(
+                        AmazonBusinessLineItem.order_id == source_details["order_id"]
+                    )
+                    .order_by(AmazonBusinessLineItem.id)
+                    .all()
+                )
+                source_details["line_items"] = [
+                    {
+                        "line_item_id": item.line_item_id,
+                        "asin": item.asin,
+                        "title": item.title,
+                        "brand": item.brand,
+                        "category": item.category,
+                        "quantity": item.quantity,
+                        "unit_price": item.unit_price,
+                        "total_price": item.total_price,
+                        "seller_name": item.seller_name,
+                    }
+                    for item in line_items_query
+                ]
+
+        elif source_type == "apple":
+            apple_txn = session.get(AppleTransaction, source_id)
+            if apple_txn:
+                source_details = {
+                    "id": apple_txn.id,
+                    "order_id": apple_txn.order_id,
+                    "order_date": apple_txn.order_date,
+                    "total_amount": apple_txn.total_amount,
+                    "currency": apple_txn.currency,
+                    "app_names": apple_txn.app_names,
+                    "publishers": apple_txn.publishers,
+                    "item_count": apple_txn.item_count,
+                    "source_file": apple_txn.source_file,
+                    "created_at": apple_txn.created_at,
+                }
+                # Parse app_names into line items
+                if source_details.get("app_names"):
+                    items = [
+                        {"name": name.strip(), "quantity": 1}
+                        for name in source_details["app_names"].split(",")
+                    ]
+                    source_details["parsed_line_items"] = items
+
+        elif source_type == "gmail":
+            gmail_receipt = session.get(GmailReceipt, source_id)
+            if gmail_receipt:
+                source_details = {
+                    "id": gmail_receipt.id,
+                    "connection_id": gmail_receipt.connection_id,
+                    "message_id": gmail_receipt.message_id,
+                    "thread_id": gmail_receipt.thread_id,
+                    "sender_email": gmail_receipt.sender_email,
+                    "sender_name": gmail_receipt.sender_name,
+                    "subject": gmail_receipt.subject,
+                    "received_at": gmail_receipt.received_at,
+                    "merchant_name": gmail_receipt.merchant_name,
+                    "merchant_domain": gmail_receipt.merchant_domain,
+                    "order_id": gmail_receipt.order_id,
+                    "total_amount": gmail_receipt.total_amount,
+                    "currency_code": gmail_receipt.currency_code,
+                    "receipt_date": gmail_receipt.receipt_date,
+                    "line_items": gmail_receipt.line_items,
+                    "parse_method": gmail_receipt.parse_method,
+                    "parse_confidence": gmail_receipt.parse_confidence,
+                    "parsing_status": gmail_receipt.parsing_status,
+                    "created_at": gmail_receipt.created_at,
+                }
+                # Fetch PDF attachments
+                pdf_attachments_query = (
+                    session.query(PDFAttachment)
+                    .filter(PDFAttachment.gmail_receipt_id == source_id)
+                    .order_by(PDFAttachment.created_at)
+                    .all()
+                )
+                source_details["pdf_attachments"] = [
+                    {
+                        "id": pdf.id,
+                        "filename": pdf.filename,
+                        "size_bytes": pdf.size_bytes,
+                        "mime_type": pdf.mime_type,
+                        "object_key": pdf.object_key,
+                        "created_at": pdf.created_at,
+                    }
+                    for pdf in pdf_attachments_query
+                ]
+
+        result["source_details"] = source_details
+        return result
 
 
 def clear_amazon_orders():
     """Delete all Amazon orders and matches from database."""
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
         # Count before deletion
-        cursor.execute("SELECT COUNT(*) FROM amazon_orders")
-        orders_count = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM amazon_transaction_matches")
-        matches_count = cursor.fetchone()[0]
+        orders_count = session.query(func.count(AmazonOrder.id)).scalar()
+        matches_count = session.query(func.count(AmazonTransactionMatch.id)).scalar()
 
         # Delete matches first (foreign key)
-        cursor.execute("DELETE FROM amazon_transaction_matches")
+        session.query(AmazonTransactionMatch).delete()
 
         # Delete orders
-        cursor.execute("DELETE FROM amazon_orders")
+        session.query(AmazonOrder).delete()
 
-        conn.commit()
+        session.commit()
         return (orders_count, matches_count)
 
 
@@ -481,24 +570,27 @@ def toggle_enrichment_required(transaction_id: int) -> dict:
     Returns:
         Dict with new state: {id, enrichment_required, enrichment_source}
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Toggle the flag and return new state
-        cursor.execute(
-            """
-                UPDATE truelayer_transactions
-                SET enrichment_required = NOT COALESCE(enrichment_required, FALSE)
-                WHERE id = %s
-                RETURNING id, enrichment_required,
-                    metadata->'enrichment'->>'llm_provider' as enrichment_source
-            """,
-            (transaction_id,),
-        )
-        result = cursor.fetchone()
-        conn.commit()
+        txn = session.get(TrueLayerTransaction, transaction_id)
+        if not txn:
+            return None
 
-        if result:
-            return dict(result)
-        return None
+        # Toggle using COALESCE logic
+        txn.enrichment_required = not (txn.enrichment_required or False)
+
+        # Extract enrichment source from metadata
+        enrichment_source = None
+        if txn.metadata and "enrichment" in txn.metadata:
+            enrichment_source = txn.metadata["enrichment"].get("llm_provider")
+
+        session.commit()
+
+        return {
+            "id": txn.id,
+            "enrichment_required": txn.enrichment_required,
+            "enrichment_source": enrichment_source,
+        }
 
 
 def set_enrichment_required(transaction_id: int, required: bool) -> bool:
@@ -511,17 +603,14 @@ def set_enrichment_required(transaction_id: int, required: bool) -> bool:
     Returns:
         True if updated successfully
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE truelayer_transactions
-                SET enrichment_required = %s
-                WHERE id = %s
-            """,
-            (required, transaction_id),
+    with get_session() as session:
+        updated = (
+            session.query(TrueLayerTransaction)
+            .filter(TrueLayerTransaction.id == transaction_id)
+            .update({"enrichment_required": required})
         )
-        conn.commit()
-        return cursor.rowcount > 0
+        session.commit()
+        return updated > 0
 
 
 def get_required_unenriched_transactions(limit: int = None) -> list:
@@ -533,20 +622,48 @@ def get_required_unenriched_transactions(limit: int = None) -> list:
     Returns:
         List of transaction dictionaries
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        query = """
-                SELECT t.*
-                FROM truelayer_transactions t
-                WHERE t.enrichment_required = TRUE
-                  AND (t.metadata->'enrichment' IS NULL
-                       OR t.metadata->'enrichment'->>'primary_category' IS NULL)
-                ORDER BY t.timestamp DESC
-            """
-        if limit:
-            query += f" LIMIT {int(limit)}"
+    with get_session() as session:
+        query = session.query(TrueLayerTransaction).filter(
+            TrueLayerTransaction.enrichment_required == True  # noqa: E712
+        )
 
-        cursor.execute(query)
-        return [dict(row) for row in cursor.fetchall()]
+        # Filter for unenriched: metadata.enrichment is NULL OR primary_category is NULL
+        # This requires raw SQL filter since SQLAlchemy doesn't handle nested JSONB well
+        query = query.filter(
+            text(
+                "(metadata->'enrichment' IS NULL OR metadata->'enrichment'->>'primary_category' IS NULL)"
+            )
+        )
+
+        query = query.order_by(TrueLayerTransaction.timestamp.desc())
+
+        if limit:
+            query = query.limit(limit)
+
+        txns = query.all()
+        return [
+            {
+                "id": t.id,
+                "transaction_id": t.transaction_id,
+                "timestamp": t.timestamp,
+                "description": t.description,
+                "transaction_type": t.transaction_type,
+                "transaction_category": t.transaction_category,
+                "transaction_classification": t.transaction_classification,
+                "amount": t.amount,
+                "currency": t.currency,
+                "running_balance_amount": t.running_balance_amount,
+                "running_balance_currency": t.running_balance_currency,
+                "merchant_name": t.merchant_name,
+                "normalised_provider_category": t.normalised_provider_category,
+                "provider_transaction_category": t.provider_transaction_category,
+                "metadata": t.metadata,
+                "account_id": t.account_id,
+                "enrichment_required": t.enrichment_required,
+                "pre_enrichment_status": t.pre_enrichment_status,
+            }
+            for t in txns
+        ]
 
 
 def clear_enrichment_required_after_success(transaction_id: int) -> bool:
@@ -560,17 +677,14 @@ def clear_enrichment_required_after_success(transaction_id: int) -> bool:
     Returns:
         True if updated successfully
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE truelayer_transactions
-                SET enrichment_required = FALSE
-                WHERE id = %s
-            """,
-            (transaction_id,),
+    with get_session() as session:
+        updated = (
+            session.query(TrueLayerTransaction)
+            .filter(TrueLayerTransaction.id == transaction_id)
+            .update({"enrichment_required": False})
         )
-        conn.commit()
-        return cursor.rowcount > 0
+        session.commit()
+        return updated > 0
 
 
 # ============================================================================
@@ -591,23 +705,21 @@ def get_enrichment_from_cache(description, direction):
     Returns:
         Enrichment object or None if not cached
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT enrichment_data
-                FROM llm_enrichment_cache
-                WHERE transaction_description = %s AND transaction_direction = %s
-                LIMIT 1
-            """,
-            (description, direction),
+    with get_session() as session:
+        cache_entry = (
+            session.query(EnrichmentCache)
+            .filter(
+                EnrichmentCache.transaction_description == description,
+                EnrichmentCache.transaction_direction == direction,
+            )
+            .first()
         )
 
-        row = cursor.fetchone()
-        if row and row["enrichment_data"]:
+        if cache_entry and cache_entry.enrichment_data:
             try:
                 from mcp.llm_enricher import EnrichmentResult
 
-                data = json.loads(row["enrichment_data"])
+                data = json.loads(cache_entry.enrichment_data)
                 return EnrichmentResult(**data)
             except (json.JSONDecodeError, Exception):
                 return None
@@ -628,29 +740,36 @@ def cache_enrichment(description, direction, enrichment, provider, model):
     Returns:
         Cache entry ID
     """
-    with get_db() as conn:
-        with conn.cursor() as cursor:
-            enrichment_json = json.dumps(enrichment.__dict__)
+    from sqlalchemy.dialects.postgresql import insert
 
-            cursor.execute(
-                """
-                INSERT INTO llm_enrichment_cache
-                (transaction_description, transaction_direction, enrichment_data, provider, model)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (transaction_description, transaction_direction)
-                DO UPDATE SET
-                    enrichment_data = EXCLUDED.enrichment_data,
-                    provider = EXCLUDED.provider,
-                    model = EXCLUDED.model,
-                    created_at = NOW()
-                RETURNING id
-            """,
-                (description, direction, enrichment_json, provider, model),
+    with get_session() as session:
+        enrichment_json = json.dumps(enrichment.__dict__)
+
+        stmt = (
+            insert(EnrichmentCache)
+            .values(
+                transaction_description=description,
+                transaction_direction=direction,
+                enrichment_data=enrichment_json,
+                provider=provider,
+                model=model,
             )
+            .on_conflict_do_update(
+                index_elements=["transaction_description", "transaction_direction"],
+                set_={
+                    "enrichment_data": enrichment_json,
+                    "provider": provider,
+                    "model": model,
+                    "cached_at": func.current_timestamp(),
+                },
+            )
+            .returning(EnrichmentCache.id)
+        )
 
-            cache_id = cursor.fetchone()[0]
-            conn.commit()
-            return cache_id
+        result = session.execute(stmt)
+        cache_id = result.scalar_one()
+        session.commit()
+        return cache_id
 
 
 def get_failed_enrichment_transaction_ids() -> list:
@@ -659,13 +778,13 @@ def get_failed_enrichment_transaction_ids() -> list:
     Returns:
         List of transaction IDs
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute("""
-                SELECT id
-                FROM truelayer_transactions
-                WHERE metadata->'enrichment'->>'status' = 'failed'
-            """)
-        return [row[0] for row in cursor.fetchall()]
+    with get_session() as session:
+        transactions = (
+            session.query(TrueLayerTransaction.id)
+            .filter(text("metadata->'enrichment'->>'status' = 'failed'"))
+            .all()
+        )
+        return [txn[0] for txn in transactions]
 
 
 # ============================================================================
@@ -683,17 +802,14 @@ def update_pre_enrichment_status(transaction_id: int, status: str) -> bool:
     Returns:
         True if update was successful, False otherwise
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE truelayer_transactions
-                SET pre_enrichment_status = %s
-                WHERE id = %s
-            """,
-            (status, transaction_id),
+    with get_session() as session:
+        result = (
+            session.query(TrueLayerTransaction)
+            .filter(TrueLayerTransaction.id == transaction_id)
+            .update({"pre_enrichment_status": status})
         )
-        conn.commit()
-        return cursor.rowcount > 0
+        session.commit()
+        return result > 0
 
 
 def get_identified_summary() -> dict:
@@ -705,41 +821,57 @@ def get_identified_summary() -> dict:
     Returns:
         Dictionary with counts: {'Apple': N, 'AMZN': N, 'AMZN RTN': N, 'total': N}
     """
-    with get_db() as conn:
-        with conn.cursor() as cursor:
-            # Amazon Purchases: status='AMZN' OR in truelayer_amazon_transaction_matches
-            cursor.execute("""
-                SELECT COUNT(DISTINCT t.id) FROM truelayer_transactions t
-                LEFT JOIN truelayer_amazon_transaction_matches m
-                    ON t.id = m.truelayer_transaction_id
-                WHERE t.pre_enrichment_status = 'AMZN' OR m.id IS NOT NULL
-            """)
-            amazon = cursor.fetchone()[0]
+    with get_session() as session:
+        # Amazon Purchases: status='AMZN' OR in truelayer_amazon_transaction_matches
+        amazon_count = (
+            session.query(func.count(func.distinct(TrueLayerTransaction.id)))
+            .outerjoin(
+                AmazonTransactionMatch,
+                TrueLayerTransaction.id
+                == AmazonTransactionMatch.truelayer_transaction_id,
+            )
+            .filter(
+                (TrueLayerTransaction.pre_enrichment_status == "AMZN")
+                | (AmazonTransactionMatch.id.is_not(None))
+            )
+            .scalar()
+        )
 
-            # Apple: status='Apple' OR in truelayer_apple_transaction_matches
-            cursor.execute("""
-                SELECT COUNT(DISTINCT t.id) FROM truelayer_transactions t
-                LEFT JOIN truelayer_apple_transaction_matches m
-                    ON t.id = m.truelayer_transaction_id
-                WHERE t.pre_enrichment_status = 'Apple' OR m.id IS NOT NULL
-            """)
-            apple = cursor.fetchone()[0]
+        # Apple: status='Apple' OR in truelayer_apple_transaction_matches
+        apple_count = (
+            session.query(func.count(func.distinct(TrueLayerTransaction.id)))
+            .outerjoin(
+                AppleTransactionMatch,
+                TrueLayerTransaction.id
+                == AppleTransactionMatch.truelayer_transaction_id,
+            )
+            .filter(
+                (TrueLayerTransaction.pre_enrichment_status == "Apple")
+                | (AppleTransactionMatch.id.is_not(None))
+            )
+            .scalar()
+        )
 
-            # Amazon Returns: status='AMZN RTN' OR referenced in amazon_returns.refund_transaction_id
-            cursor.execute("""
-                SELECT COUNT(DISTINCT t.id) FROM truelayer_transactions t
-                LEFT JOIN amazon_returns r
-                    ON t.id = r.refund_transaction_id
-                WHERE t.pre_enrichment_status = 'AMZN RTN' OR r.refund_transaction_id IS NOT NULL
-            """)
-            returns = cursor.fetchone()[0]
+        # Amazon Returns: status='AMZN RTN' OR referenced in amazon_returns.refund_transaction_id
+        returns_count = (
+            session.query(func.count(func.distinct(TrueLayerTransaction.id)))
+            .outerjoin(
+                AmazonReturn,
+                TrueLayerTransaction.id == AmazonReturn.refund_transaction_id,
+            )
+            .filter(
+                (TrueLayerTransaction.pre_enrichment_status == "AMZN RTN")
+                | (AmazonReturn.refund_transaction_id.is_not(None))
+            )
+            .scalar()
+        )
 
-            return {
-                "AMZN": amazon,
-                "Apple": apple,
-                "AMZN RTN": returns,
-                "total": amazon + apple + returns,
-            }
+        return {
+            "AMZN": amazon_count,
+            "Apple": apple_count,
+            "AMZN RTN": returns_count,
+            "total": amazon_count + apple_count + returns_count,
+        }
 
 
 def backfill_pre_enrichment_status() -> dict:
@@ -753,61 +885,51 @@ def backfill_pre_enrichment_status() -> dict:
     Returns:
         Dictionary with counts of each status assigned
     """
-    from psycopg2.extras import RealDictCursor
-
     from mcp.pre_enrichment_detector import detect_pre_enrichment_status
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Get all TrueLayer transactions
-        cursor.execute("""
-                SELECT id, description, merchant_name, transaction_type
-                FROM truelayer_transactions
-            """)
-        transactions = cursor.fetchall()
+        transactions = session.query(
+            TrueLayerTransaction.id,
+            TrueLayerTransaction.description,
+            TrueLayerTransaction.merchant_name,
+            TrueLayerTransaction.transaction_type,
+        ).all()
 
         counts = {"None": 0, "Apple": 0, "AMZN": 0, "AMZN RTN": 0, "Matched": 0}
 
         for txn in transactions:
             # Check if already matched in Amazon matches table
-            cursor.execute(
-                """
-                    SELECT 1 FROM truelayer_amazon_transaction_matches
-                    WHERE truelayer_transaction_id = %s
-                """,
-                (txn["id"],),
+            amazon_matched = (
+                session.query(AmazonTransactionMatch)
+                .filter(AmazonTransactionMatch.truelayer_transaction_id == txn.id)
+                .first()
+                is not None
             )
-            amazon_matched = cursor.fetchone() is not None
 
             # Check if already matched in Apple matches table
-            cursor.execute(
-                """
-                    SELECT 1 FROM truelayer_apple_transaction_matches
-                    WHERE truelayer_transaction_id = %s
-                """,
-                (txn["id"],),
+            apple_matched = (
+                session.query(AppleTransactionMatch)
+                .filter(AppleTransactionMatch.truelayer_transaction_id == txn.id)
+                .first()
+                is not None
             )
-            apple_matched = cursor.fetchone() is not None
 
             if amazon_matched or apple_matched:
                 status = "Matched"
             else:
                 status = detect_pre_enrichment_status(
-                    txn["description"],
-                    txn["merchant_name"],
-                    txn["transaction_type"],
+                    txn.description,
+                    txn.merchant_name,
+                    txn.transaction_type,
                 )
 
             # Update the transaction status
-            cursor.execute(
-                """
-                    UPDATE truelayer_transactions
-                    SET pre_enrichment_status = %s
-                    WHERE id = %s
-                """,
-                (status, txn["id"]),
-            )
+            session.query(TrueLayerTransaction).filter(
+                TrueLayerTransaction.id == txn.id
+            ).update({"pre_enrichment_status": status})
 
             counts[status] += 1
 
-        conn.commit()
+        session.commit()
         return counts
