@@ -46,6 +46,7 @@ playwright>=1.40.0
 prompt_toolkit==3.0.52
 psutil>=5.9.0
 psycopg2-binary==2.9.9
+SQLAlchemy>=2.0.25
 pycparser==2.23
 pydantic==2.12.4
 pydantic_core==2.41.5
