@@ -6,12 +6,12 @@ Updates transaction descriptions and marks items as returned.
 
 from datetime import UTC, datetime, timedelta
 
-from backend.database.amazon import (
+from database.amazon import (
     get_amazon_order_by_id,
     get_amazon_returns,
     link_return_to_transactions,
 )
-from backend.database.enrichment import (
+from database.enrichment import (
     add_enrichment_source,
     update_pre_enrichment_status,
 )
@@ -126,7 +126,7 @@ def find_transaction_for_order(order_db_id):
     """
     from sqlalchemy import text
 
-    from backend.database.base import get_session
+    from database.base import get_session
 
     with get_session() as session:
         # Check TrueLayer transactions with Amazon matches
@@ -157,7 +157,7 @@ def find_refund_transaction(ret):
     """
     from sqlalchemy import text
 
-    from backend.database.base import get_session
+    from database.base import get_session
 
     # Parse refund date
     try:
@@ -258,9 +258,9 @@ def mark_original_as_returned(transaction_id):
     """Mark the original transaction as returned by updating its enrichment source description."""
     from datetime import datetime
 
-    from backend.database.base import get_session
-    from backend.database.models.enrichment import TransactionEnrichmentSource
-    from backend.database.models.truelayer import TrueLayerTransaction
+    from database.base import get_session
+    from database.models.enrichment import TransactionEnrichmentSource
+    from database.models.truelayer import TrueLayerTransaction
 
     with get_session() as session:
         # Check if there's an existing enrichment source
