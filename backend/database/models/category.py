@@ -17,6 +17,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -135,19 +136,31 @@ class MatchingJob(Base):
     __tablename__ = "matching_jobs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, nullable=False)
-    job_type = Column(String(50), nullable=False)  # 'amazon', 'apple', 'gmail', etc.
+    user_id = Column(Integer, nullable=False, default=1, server_default="1")
+    job_type = Column(String(50), nullable=False)
     celery_task_id = Column(String(255), nullable=True)
     status = Column(
-        String(20), nullable=False, default="queued", server_default="queued"
+        String(20),
+        nullable=True,
+        default="queued",
+        server_default="'queued'",
     )
-    total_items = Column(Integer, nullable=True)
-    processed_items = Column(Integer, nullable=True)
-    matched_items = Column(Integer, nullable=True)
+    total_items = Column(Integer, nullable=True, default=0, server_default="0")
+    processed_items = Column(Integer, nullable=True, default=0, server_default="0")
+    matched_items = Column(Integer, nullable=True, default=0, server_default="0")
+    failed_items = Column(Integer, nullable=True, default=0, server_default="0")
     error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=False), server_default=func.now())
     started_at = Column(DateTime(timezone=False), nullable=True)
     completed_at = Column(DateTime(timezone=False), nullable=True)
+    created_at = Column(
+        DateTime(timezone=False),
+        server_default=func.current_timestamp(),
+    )
+
+    __table_args__ = (
+        Index("idx_matching_jobs_user_status", "user_id", "status"),
+        Index("idx_matching_jobs_celery_task", "celery_task_id"),
+    )
 
     def __repr__(self) -> str:
         return (

@@ -26,7 +26,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
 from .base import get_session
-from .models.category import NormalizedCategory, NormalizedSubcategory
+from .models.category import (
+    MatchingJob,
+    NormalizedCategory,
+    NormalizedSubcategory,
+)
 from .models.enrichment import TransactionEnrichmentSource
 from .models.gmail import (
     GmailConnection,
@@ -37,7 +41,6 @@ from .models.gmail import (
     GmailReceipt,
     GmailSenderPattern,
     GmailSyncJob,
-    MatchingJob,
     PdfAttachment,
 )
 from .models.truelayer import TrueLayerTransaction

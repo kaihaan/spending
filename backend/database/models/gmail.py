@@ -453,39 +453,4 @@ class GmailMatch(Base):
         return f"<GmailMatch(id={self.id}, txn_id={self.truelayer_transaction_id}, receipt_id={self.gmail_receipt_id}, confidence={self.match_confidence})>"
 
 
-class MatchingJob(Base):
-    """Generic matching job tracking."""
-
-    __tablename__ = "matching_jobs"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, nullable=False, default=1, server_default="1")
-    job_type = Column(String(50), nullable=False)
-    celery_task_id = Column(String(255), nullable=True)
-    status = Column(
-        String(20),
-        nullable=True,
-        default="queued",
-        server_default="'queued'",
-    )
-    total_items = Column(Integer, nullable=True, default=0, server_default="0")
-    processed_items = Column(Integer, nullable=True, default=0, server_default="0")
-    matched_items = Column(Integer, nullable=True, default=0, server_default="0")
-    failed_items = Column(Integer, nullable=True, default=0, server_default="0")
-    error_message = Column(Text, nullable=True)
-    started_at = Column(DateTime(timezone=False), nullable=True)
-    completed_at = Column(DateTime(timezone=False), nullable=True)
-    created_at = Column(
-        DateTime(timezone=False),
-        server_default=func.current_timestamp(),
-    )
-
-    __table_args__ = (
-        Index("idx_matching_jobs_user_status", "user_id", "status"),
-        Index("idx_matching_jobs_celery_task", "celery_task_id"),
-    )
-
-    def __repr__(self) -> str:
-        return (
-            f"<MatchingJob(id={self.id}, type={self.job_type}, status={self.status})>"
-        )
+# MatchingJob is imported from .category
