@@ -2,11 +2,21 @@
 Transaction Matching - Database Operations
 
 Handles consistency checking and matching logic across different transaction sources.
+
+Migrated to SQLAlchemy from psycopg2.
 """
 
-from psycopg2.extras import RealDictCursor
+from datetime import timedelta
 
-from .base_psycopg2 import get_db
+from sqlalchemy import func, text
+from sqlalchemy.dialects.postgresql import insert
+
+from .base import get_session
+from .models.amazon import AmazonOrder
+from .models.apple import AppleTransaction
+from .models.category import CategoryRule, MatchingJob, MerchantNormalization
+from .models.gmail import GmailConnection, GmailReceipt
+from .models.truelayer import TrueLayerTransaction
 
 # ============================================================================
 # SOURCE COVERAGE & STALENESS DETECTION
@@ -26,67 +36,68 @@ def get_source_coverage_dates(user_id: int = 1) -> dict:
     Returns:
         dict with date ranges and list of stale sources needing refresh
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
         # Get max bank transaction date
-        cursor.execute("""
-                SELECT MAX(timestamp::date) as max_date,
-                       MIN(timestamp::date) as min_date,
-                       COUNT(*) as count
-                FROM truelayer_transactions
-            """)
-        bank_result = cursor.fetchone()
-        bank_max = bank_result["max_date"] if bank_result else None
-        bank_min = bank_result["min_date"] if bank_result else None
-        bank_count = bank_result["count"] if bank_result else 0
+        bank_result = session.query(
+            func.max(func.cast(TrueLayerTransaction.timestamp, func.Date)).label(
+                "max_date"
+            ),
+            func.min(func.cast(TrueLayerTransaction.timestamp, func.Date)).label(
+                "min_date"
+            ),
+            func.count().label("count"),
+        ).first()
+
+        bank_max = bank_result.max_date if bank_result else None
+        bank_min = bank_result.min_date if bank_result else None
+        bank_count = bank_result.count if bank_result else 0
 
         # Get max Amazon order date
-        cursor.execute("""
-                SELECT MAX(order_date) as max_date,
-                       MIN(order_date) as min_date,
-                       COUNT(*) as count
-                FROM amazon_orders
-            """)
-        amazon_result = cursor.fetchone()
-        amazon_max = amazon_result["max_date"] if amazon_result else None
-        amazon_min = amazon_result["min_date"] if amazon_result else None
-        amazon_count = amazon_result["count"] if amazon_result else 0
+        amazon_result = session.query(
+            func.max(AmazonOrder.order_date).label("max_date"),
+            func.min(AmazonOrder.order_date).label("min_date"),
+            func.count().label("count"),
+        ).first()
+
+        amazon_max = amazon_result.max_date if amazon_result else None
+        amazon_min = amazon_result.min_date if amazon_result else None
+        amazon_count = amazon_result.count if amazon_result else 0
 
         # Get max Apple transaction date
-        cursor.execute("""
-                SELECT MAX(order_date) as max_date,
-                       MIN(order_date) as min_date,
-                       COUNT(*) as count
-                FROM apple_transactions
-            """)
-        apple_result = cursor.fetchone()
-        apple_max = apple_result["max_date"] if apple_result else None
-        apple_min = apple_result["min_date"] if apple_result else None
-        apple_count = apple_result["count"] if apple_result else 0
+        apple_result = session.query(
+            func.max(AppleTransaction.order_date).label("max_date"),
+            func.min(AppleTransaction.order_date).label("min_date"),
+            func.count().label("count"),
+        ).first()
+
+        apple_max = apple_result.max_date if apple_result else None
+        apple_min = apple_result.min_date if apple_result else None
+        apple_count = apple_result.count if apple_result else 0
 
         # Get max Gmail receipt date
-        cursor.execute(
-            """
-                SELECT MAX(receipt_date) as max_date,
-                       MIN(receipt_date) as min_date,
-                       COUNT(*) as count
-                FROM gmail_receipts r
-                JOIN gmail_connections c ON r.connection_id = c.id
-                WHERE c.user_id = %s AND r.deleted_at IS NULL
-            """,
-            (user_id,),
+        gmail_result = (
+            session.query(
+                func.max(GmailReceipt.receipt_date).label("max_date"),
+                func.min(GmailReceipt.receipt_date).label("min_date"),
+                func.count().label("count"),
+            )
+            .join(GmailConnection, GmailReceipt.connection_id == GmailConnection.id)
+            .filter(
+                GmailConnection.user_id == user_id,
+                GmailReceipt.deleted_at.is_(None),
+            )
+            .first()
         )
-        gmail_result = cursor.fetchone()
-        gmail_max = gmail_result["max_date"] if gmail_result else None
-        gmail_min = gmail_result["min_date"] if gmail_result else None
-        gmail_count = gmail_result["count"] if gmail_result else 0
+
+        gmail_max = gmail_result.max_date if gmail_result else None
+        gmail_min = gmail_result.min_date if gmail_result else None
+        gmail_count = gmail_result.count if gmail_result else 0
 
         # Determine which sources are stale (> 7 days behind bank data)
         stale_sources = []
         stale_threshold_days = 7
 
         if bank_max:
-            from datetime import timedelta
-
             threshold_date = bank_max - timedelta(days=stale_threshold_days)
 
             if amazon_count > 0 and amazon_max and amazon_max < threshold_date:
@@ -143,19 +154,31 @@ def get_category_rules(active_only: bool = True) -> list:
     Returns:
         List of rule dictionaries
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        query = """
-                SELECT id, rule_name, transaction_type, description_pattern,
-                       pattern_type, category, subcategory, priority, is_active,
-                       source, usage_count, created_at
-                FROM category_rules
-            """
-        if active_only:
-            query += " WHERE is_active = TRUE"
-        query += " ORDER BY priority DESC, id ASC"
+    with get_session() as session:
+        query = session.query(CategoryRule)
 
-        cursor.execute(query)
-        return [dict(row) for row in cursor.fetchall()]
+        if active_only:
+            query = query.filter(CategoryRule.is_active == True)  # noqa: E712
+
+        rules = query.order_by(CategoryRule.priority.desc(), CategoryRule.id).all()
+
+        return [
+            {
+                "id": rule.id,
+                "rule_name": rule.rule_name,
+                "transaction_type": rule.transaction_type,
+                "description_pattern": rule.description_pattern,
+                "pattern_type": rule.pattern_type,
+                "category": rule.category,
+                "subcategory": rule.subcategory,
+                "priority": rule.priority,
+                "is_active": rule.is_active,
+                "source": rule.source,
+                "usage_count": rule.usage_count,
+                "created_at": rule.created_at,
+            }
+            for rule in rules
+        ]
 
 
 def get_merchant_normalizations() -> list:
@@ -164,15 +187,27 @@ def get_merchant_normalizations() -> list:
     Returns:
         List of normalization dictionaries
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("""
-                SELECT id, pattern, pattern_type, normalized_name, merchant_type,
-                       default_category, priority, source, usage_count,
-                       created_at, updated_at
-                FROM merchant_normalizations
-                ORDER BY priority DESC, id ASC
-            """)
-        return [dict(row) for row in cursor.fetchall()]
+    with get_session() as session:
+        normalizations = session.query(MerchantNormalization).order_by(
+            MerchantNormalization.priority.desc(), MerchantNormalization.id
+        )
+
+        return [
+            {
+                "id": norm.id,
+                "pattern": norm.pattern,
+                "pattern_type": norm.pattern_type,
+                "normalized_name": norm.normalized_name,
+                "merchant_type": norm.merchant_type,
+                "default_category": norm.default_category,
+                "priority": norm.priority,
+                "source": norm.source,
+                "usage_count": norm.usage_count,
+                "created_at": norm.created_at,
+                "updated_at": norm.updated_at,
+            }
+            for norm in normalizations
+        ]
 
 
 def increment_rule_usage(rule_id: int) -> bool:
@@ -184,17 +219,13 @@ def increment_rule_usage(rule_id: int) -> bool:
     Returns:
         True if updated successfully
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE category_rules
-                SET usage_count = usage_count + 1
-                WHERE id = %s
-            """,
-            (rule_id,),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    with get_session() as session:
+        rule = session.get(CategoryRule, rule_id)
+        if rule:
+            rule.usage_count += 1
+            session.commit()
+            return True
+        return False
 
 
 def increment_merchant_normalization_usage(normalization_id: int) -> bool:
@@ -206,18 +237,14 @@ def increment_merchant_normalization_usage(normalization_id: int) -> bool:
     Returns:
         True if updated successfully
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE merchant_normalizations
-                SET usage_count = usage_count + 1,
-                    updated_at = NOW()
-                WHERE id = %s
-            """,
-            (normalization_id,),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    with get_session() as session:
+        norm = session.get(MerchantNormalization, normalization_id)
+        if norm:
+            norm.usage_count += 1
+            norm.updated_at = func.now()
+            session.commit()
+            return True
+        return False
 
 
 def add_category_rule(
@@ -245,29 +272,20 @@ def add_category_rule(
     Returns:
         ID of the created rule
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                INSERT INTO category_rules
-                (rule_name, transaction_type, description_pattern, pattern_type,
-                 category, subcategory, priority, source)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """,
-            (
-                rule_name,
-                transaction_type,
-                description_pattern,
-                pattern_type,
-                category,
-                subcategory,
-                priority,
-                source,
-            ),
+    with get_session() as session:
+        rule = CategoryRule(
+            rule_name=rule_name,
+            transaction_type=transaction_type,
+            description_pattern=description_pattern,
+            pattern_type=pattern_type,
+            category=category,
+            subcategory=subcategory,
+            priority=priority,
+            source=source,
         )
-        rule_id = cursor.fetchone()[0]
-        conn.commit()
-        return rule_id
+        session.add(rule)
+        session.commit()
+        return rule.id
 
 
 def add_merchant_normalization(
@@ -293,33 +311,34 @@ def add_merchant_normalization(
     Returns:
         ID of the created normalization
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                INSERT INTO merchant_normalizations
-                (pattern, pattern_type, normalized_name, merchant_type,
-                 default_category, priority, source)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (pattern, pattern_type) DO UPDATE SET
-                    normalized_name = EXCLUDED.normalized_name,
-                    merchant_type = EXCLUDED.merchant_type,
-                    default_category = EXCLUDED.default_category,
-                    priority = EXCLUDED.priority,
-                    updated_at = NOW()
-                RETURNING id
-            """,
-            (
-                pattern,
-                pattern_type,
-                normalized_name,
-                merchant_type,
-                default_category,
-                priority,
-                source,
-            ),
+    with get_session() as session:
+        stmt = (
+            insert(MerchantNormalization)
+            .values(
+                pattern=pattern,
+                pattern_type=pattern_type,
+                normalized_name=normalized_name,
+                merchant_type=merchant_type,
+                default_category=default_category,
+                priority=priority,
+                source=source,
+            )
+            .on_conflict_do_update(
+                index_elements=["pattern", "pattern_type"],
+                set_={
+                    "normalized_name": normalized_name,
+                    "merchant_type": merchant_type,
+                    "default_category": default_category,
+                    "priority": priority,
+                    "updated_at": func.now(),
+                },
+            )
+            .returning(MerchantNormalization.id)
         )
-        norm_id = cursor.fetchone()[0]
-        conn.commit()
+
+        result = session.execute(stmt)
+        norm_id = result.scalar_one()
+        session.commit()
         return norm_id
 
 
@@ -332,10 +351,13 @@ def delete_category_rule(rule_id: int) -> bool:
     Returns:
         True if deleted successfully
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute("DELETE FROM category_rules WHERE id = %s", (rule_id,))
-        conn.commit()
-        return cursor.rowcount > 0
+    with get_session() as session:
+        rule = session.get(CategoryRule, rule_id)
+        if rule:
+            session.delete(rule)
+            session.commit()
+            return True
+        return False
 
 
 def delete_merchant_normalization(normalization_id: int) -> bool:
@@ -347,12 +369,13 @@ def delete_merchant_normalization(normalization_id: int) -> bool:
     Returns:
         True if deleted successfully
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            "DELETE FROM merchant_normalizations WHERE id = %s", (normalization_id,)
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    with get_session() as session:
+        norm = session.get(MerchantNormalization, normalization_id)
+        if norm:
+            session.delete(norm)
+            session.commit()
+            return True
+        return False
 
 
 def update_category_rule(rule_id: int, **kwargs) -> bool:
@@ -381,19 +404,16 @@ def update_category_rule(rule_id: int, **kwargs) -> bool:
     if not updates:
         return False
 
-    with get_db() as conn, conn.cursor() as cursor:
-        set_clause = ", ".join(f"{k} = %s" for k in updates)
-        values = list(updates.values()) + [rule_id]
-        cursor.execute(
-            f"""
-                UPDATE category_rules
-                SET {set_clause}
-                WHERE id = %s
-            """,
-            values,
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    with get_session() as session:
+        rule = session.get(CategoryRule, rule_id)
+        if not rule:
+            return False
+
+        for key, value in updates.items():
+            setattr(rule, key, value)
+
+        session.commit()
+        return True
 
 
 def update_merchant_normalization(normalization_id: int, **kwargs) -> bool:
@@ -420,29 +440,17 @@ def update_merchant_normalization(normalization_id: int, **kwargs) -> bool:
     if not updates:
         return False
 
-    updates["updated_at"] = "NOW()"
+    with get_session() as session:
+        norm = session.get(MerchantNormalization, normalization_id)
+        if not norm:
+            return False
 
-    with get_db() as conn, conn.cursor() as cursor:
-        set_parts = []
-        values = []
-        for k, v in updates.items():
-            if v == "NOW()":
-                set_parts.append(f"{k} = NOW()")
-            else:
-                set_parts.append(f"{k} = %s")
-                values.append(v)
-        values.append(normalization_id)
+        for key, value in updates.items():
+            setattr(norm, key, value)
 
-        cursor.execute(
-            f"""
-                UPDATE merchant_normalizations
-                SET {", ".join(set_parts)}
-                WHERE id = %s
-            """,
-            values,
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+        norm.updated_at = func.now()
+        session.commit()
+        return True
 
 
 # ============================================================================
@@ -462,18 +470,13 @@ def create_matching_job(user_id: int, job_type: str, celery_task_id: str = None)
     Returns:
         Job ID
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                INSERT INTO matching_jobs (user_id, job_type, celery_task_id, status)
-                VALUES (%s, %s, %s, 'queued')
-                RETURNING id
-            """,
-            (user_id, job_type, celery_task_id),
+    with get_session() as session:
+        job = MatchingJob(
+            user_id=user_id, job_type=job_type, celery_task_id=celery_task_id
         )
-        job_id = cursor.fetchone()[0]
-        conn.commit()
-        return job_id
+        session.add(job)
+        session.commit()
+        return job.id
 
 
 def update_matching_job_status(
@@ -490,36 +493,22 @@ def update_matching_job_status(
     Returns:
         True if updated successfully
     """
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
+        job = session.get(MatchingJob, job_id)
+        if not job:
+            return False
+
+        job.status = status
+
         if status == "running":
-            cursor.execute(
-                """
-                    UPDATE matching_jobs
-                    SET status = %s, started_at = NOW()
-                    WHERE id = %s
-                """,
-                (status, job_id),
-            )
+            job.started_at = func.now()
         elif status in ("completed", "failed"):
-            cursor.execute(
-                """
-                    UPDATE matching_jobs
-                    SET status = %s, completed_at = NOW(), error_message = %s
-                    WHERE id = %s
-                """,
-                (status, error_message, job_id),
-            )
-        else:
-            cursor.execute(
-                """
-                    UPDATE matching_jobs
-                    SET status = %s
-                    WHERE id = %s
-                """,
-                (status, job_id),
-            )
-        conn.commit()
-        return cursor.rowcount > 0
+            job.completed_at = func.now()
+            if error_message:
+                job.error_message = error_message
+
+        session.commit()
+        return True
 
 
 def update_matching_job_progress(
@@ -542,37 +531,22 @@ def update_matching_job_progress(
     Returns:
         True if updated successfully
     """
-    with get_db() as conn, conn.cursor() as cursor:
-        updates = []
-        params = []
-
-        if total_items is not None:
-            updates.append("total_items = %s")
-            params.append(total_items)
-        if processed_items is not None:
-            updates.append("processed_items = %s")
-            params.append(processed_items)
-        if matched_items is not None:
-            updates.append("matched_items = %s")
-            params.append(matched_items)
-        if failed_items is not None:
-            updates.append("failed_items = %s")
-            params.append(failed_items)
-
-        if not updates:
+    with get_session() as session:
+        job = session.get(MatchingJob, job_id)
+        if not job:
             return False
 
-        params.append(job_id)
-        cursor.execute(
-            f"""
-                UPDATE matching_jobs
-                SET {", ".join(updates)}
-                WHERE id = %s
-            """,
-            params,
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+        if total_items is not None:
+            job.total_items = total_items
+        if processed_items is not None:
+            job.processed_items = processed_items
+        if matched_items is not None:
+            job.matched_items = matched_items
+        # Note: failed_items column doesn't exist in MatchingJob model
+        # Ignoring for API compatibility
+
+        session.commit()
+        return True
 
 
 def get_matching_job(job_id: int) -> dict:
@@ -585,28 +559,32 @@ def get_matching_job(job_id: int) -> dict:
     Returns:
         Job dictionary or None
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT id, user_id, job_type, celery_task_id, status,
-                       total_items, processed_items, matched_items, failed_items,
-                       error_message, started_at, completed_at, created_at
-                FROM matching_jobs
-                WHERE id = %s
-            """,
-            (job_id,),
-        )
-        result = cursor.fetchone()
-        if result:
-            job = dict(result)
-            # Calculate progress percentage
-            total = job.get("total_items", 0) or 0
-            processed = job.get("processed_items", 0) or 0
-            job["progress_percentage"] = round(
-                (processed / total * 100) if total > 0 else 0
-            )
-            return job
-        return None
+    with get_session() as session:
+        job = session.get(MatchingJob, job_id)
+        if not job:
+            return None
+
+        # Calculate progress percentage
+        total = job.total_items or 0
+        processed = job.processed_items or 0
+        progress_percentage = round((processed / total * 100) if total > 0 else 0)
+
+        return {
+            "id": job.id,
+            "user_id": job.user_id,
+            "job_type": job.job_type,
+            "celery_task_id": job.celery_task_id,
+            "status": job.status,
+            "total_items": job.total_items,
+            "processed_items": job.processed_items,
+            "matched_items": job.matched_items,
+            "failed_items": None,  # Not in model
+            "error_message": job.error_message,
+            "started_at": job.started_at,
+            "completed_at": job.completed_at,
+            "created_at": job.created_at,
+            "progress_percentage": progress_percentage,
+        }
 
 
 def get_active_matching_jobs(user_id: int) -> list:
@@ -619,28 +597,43 @@ def get_active_matching_jobs(user_id: int) -> list:
     Returns:
         List of active job dictionaries
     """
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT id, user_id, job_type, celery_task_id, status,
-                       total_items, processed_items, matched_items, failed_items,
-                       error_message, started_at, completed_at, created_at
-                FROM matching_jobs
-                WHERE user_id = %s AND status IN ('queued', 'running')
-                ORDER BY created_at DESC
-            """,
-            (user_id,),
-        )
-        jobs = []
-        for row in cursor.fetchall():
-            job = dict(row)
-            total = job.get("total_items", 0) or 0
-            processed = job.get("processed_items", 0) or 0
-            job["progress_percentage"] = round(
-                (processed / total * 100) if total > 0 else 0
+    with get_session() as session:
+        jobs = (
+            session.query(MatchingJob)
+            .filter(
+                MatchingJob.user_id == user_id,
+                MatchingJob.status.in_(["queued", "running"]),
             )
-            jobs.append(job)
-        return jobs
+            .order_by(MatchingJob.created_at.desc())
+            .all()
+        )
+
+        results = []
+        for job in jobs:
+            total = job.total_items or 0
+            processed = job.processed_items or 0
+            progress_percentage = round((processed / total * 100) if total > 0 else 0)
+
+            results.append(
+                {
+                    "id": job.id,
+                    "user_id": job.user_id,
+                    "job_type": job.job_type,
+                    "celery_task_id": job.celery_task_id,
+                    "status": job.status,
+                    "total_items": job.total_items,
+                    "processed_items": job.processed_items,
+                    "matched_items": job.matched_items,
+                    "failed_items": None,  # Not in model
+                    "error_message": job.error_message,
+                    "started_at": job.started_at,
+                    "completed_at": job.completed_at,
+                    "created_at": job.created_at,
+                    "progress_percentage": progress_percentage,
+                }
+            )
+
+        return results
 
 
 def cleanup_stale_matching_jobs(stale_threshold_minutes: int = 30) -> dict:
@@ -657,40 +650,42 @@ def cleanup_stale_matching_jobs(stale_threshold_minutes: int = 30) -> dict:
     Returns:
         {'cleaned_up': count, 'job_ids': [...]}
     """
-    with get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            # Find stale jobs
-            cursor.execute(
+    with get_session() as session:
+        # Find stale jobs using SQLAlchemy text for INTERVAL support
+        stale_jobs = session.execute(
+            text(
                 """
                 SELECT id, job_type, status, created_at, started_at
                 FROM matching_jobs
                 WHERE status IN ('queued', 'running')
                   AND (
-                    (status = 'queued' AND created_at < NOW() - INTERVAL '%s minutes')
+                    (status = 'queued' AND created_at < NOW() - INTERVAL :interval1)
                     OR
-                    (status = 'running' AND started_at < NOW() - INTERVAL '%s minutes')
+                    (status = 'running' AND started_at < NOW() - INTERVAL :interval2)
                   )
-            """,
-                (stale_threshold_minutes, stale_threshold_minutes),
-            )
-            stale_jobs = cursor.fetchall()
+            """
+            ),
+            {
+                "interval1": f"{stale_threshold_minutes} minutes",
+                "interval2": f"{stale_threshold_minutes} minutes",
+            },
+        ).fetchall()
 
-            if not stale_jobs:
-                return {"cleaned_up": 0, "job_ids": []}
+        if not stale_jobs:
+            return {"cleaned_up": 0, "job_ids": []}
 
-            job_ids = [job["id"] for job in stale_jobs]
+        job_ids = [job.id for job in stale_jobs]
 
-            # Mark as failed
-            cursor.execute(
-                """
-                UPDATE matching_jobs
-                SET status = 'failed',
-                    error_message = 'Job stalled - automatically cleaned up after timeout',
-                    completed_at = NOW()
-                WHERE id = ANY(%s)
-            """,
-                (job_ids,),
-            )
-            conn.commit()
+        # Mark as failed
+        session.query(MatchingJob).filter(MatchingJob.id.in_(job_ids)).update(
+            {
+                "status": "failed",
+                "error_message": "Job stalled - automatically cleaned up after timeout",
+                "completed_at": func.now(),
+            },
+            synchronize_session=False,
+        )
 
-            return {"cleaned_up": len(job_ids), "job_ids": job_ids}
+        session.commit()
+
+        return {"cleaned_up": len(job_ids), "job_ids": job_ids}
