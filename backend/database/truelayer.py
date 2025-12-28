@@ -21,7 +21,6 @@ from sqlalchemy import and_, cast, func, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, insert
 
 from .base import get_session
-from .models.category import NormalizedCategory, NormalizedSubcategory
 from .models.truelayer import (
     BankConnection,
     TrueLayerAccount,
@@ -409,57 +408,43 @@ def get_all_truelayer_transactions_with_enrichment(account_id=None):
     """Get all transactions with enrichment in SINGLE query (eliminates N+1 problem)."""
     with get_session() as session:
         # Build query with JOINs and JSONB field extraction
-        query = (
-            session.query(
-                TrueLayerTransaction,
-                NormalizedCategory.name.label("category"),
-                NormalizedSubcategory.name.label("subcategory"),
-                # Extract enrichment fields from JSONB using text()
-                text("metadata->'enrichment'->>'primary_category'").label(
-                    "enrichment_primary_category"
-                ),
-                text("metadata->'enrichment'->>'subcategory'").label(
-                    "enrichment_subcategory"
-                ),
-                text("metadata->'enrichment'->>'merchant_clean_name'").label(
-                    "enrichment_merchant_clean_name"
-                ),
-                text("metadata->'enrichment'->>'merchant_type'").label(
-                    "enrichment_merchant_type"
-                ),
-                text("metadata->'enrichment'->>'essential_discretionary'").label(
-                    "enrichment_essential_discretionary"
-                ),
-                text("metadata->'enrichment'->>'payment_method'").label(
-                    "enrichment_payment_method"
-                ),
-                text("metadata->'enrichment'->>'payment_method_subtype'").label(
-                    "enrichment_payment_method_subtype"
-                ),
-                text("metadata->'enrichment'->>'confidence_score'").label(
-                    "enrichment_confidence_score"
-                ),
-                text("metadata->'enrichment'->>'llm_provider'").label(
-                    "enrichment_llm_provider"
-                ),
-                text("metadata->'enrichment'->>'llm_model'").label(
-                    "enrichment_llm_model"
-                ),
-                cast(text("metadata->'enrichment'->>'enriched_at'"), TIMESTAMP).label(
-                    "enrichment_enriched_at"
-                ),
-                text("metadata->>'huququllah_classification'").label(
-                    "manual_huququllah_classification"
-                ),
-            )
-            .outerjoin(
-                NormalizedCategory,
-                TrueLayerTransaction.category_id == NormalizedCategory.id,
-            )
-            .outerjoin(
-                NormalizedSubcategory,
-                TrueLayerTransaction.subcategory_id == NormalizedSubcategory.id,
-            )
+        query = session.query(
+            TrueLayerTransaction,
+            # Extract enrichment fields from JSONB using text()
+            text("metadata->'enrichment'->>'primary_category'").label(
+                "enrichment_primary_category"
+            ),
+            text("metadata->'enrichment'->>'subcategory'").label(
+                "enrichment_subcategory"
+            ),
+            text("metadata->'enrichment'->>'merchant_clean_name'").label(
+                "enrichment_merchant_clean_name"
+            ),
+            text("metadata->'enrichment'->>'merchant_type'").label(
+                "enrichment_merchant_type"
+            ),
+            text("metadata->'enrichment'->>'essential_discretionary'").label(
+                "enrichment_essential_discretionary"
+            ),
+            text("metadata->'enrichment'->>'payment_method'").label(
+                "enrichment_payment_method"
+            ),
+            text("metadata->'enrichment'->>'payment_method_subtype'").label(
+                "enrichment_payment_method_subtype"
+            ),
+            text("metadata->'enrichment'->>'confidence_score'").label(
+                "enrichment_confidence_score"
+            ),
+            text("metadata->'enrichment'->>'llm_provider'").label(
+                "enrichment_llm_provider"
+            ),
+            text("metadata->'enrichment'->>'llm_model'").label("enrichment_llm_model"),
+            cast(text("metadata->'enrichment'->>'enriched_at'"), TIMESTAMP).label(
+                "enrichment_enriched_at"
+            ),
+            text("metadata->>'huququllah_classification'").label(
+                "manual_huququllah_classification"
+            ),
         )
 
         if account_id:
@@ -488,8 +473,8 @@ def get_all_truelayer_transactions_with_enrichment(account_id=None):
                 "enrichment_required": r.TrueLayerTransaction.enrichment_required
                 if hasattr(r.TrueLayerTransaction, "enrichment_required")
                 else None,
-                "category": r.category,
-                "subcategory": r.subcategory,
+                "category": r.enrichment_primary_category,  # Use enrichment data
+                "subcategory": r.enrichment_subcategory,  # Use enrichment data
                 "enrichment_primary_category": r.enrichment_primary_category,
                 "enrichment_subcategory": r.enrichment_subcategory,
                 "enrichment_merchant_clean_name": r.enrichment_merchant_clean_name,
