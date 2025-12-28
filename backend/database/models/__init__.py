@@ -11,6 +11,7 @@ from .amazon import (
 )
 from .apple import AppleTransaction, TrueLayerAppleTransactionMatch
 from .category import Category, CategoryKeyword
+from .enrichment import EnrichmentCache, TransactionEnrichmentSource
 from .gmail import (
     GmailConnection,
     GmailEmailContent,
@@ -45,4 +46,6 @@ __all__ = [
     "GmailReceipt",
     "GmailEmailContent",
     "PDFAttachment",
+    "TransactionEnrichmentSource",
+    "EnrichmentCache",
 ]
