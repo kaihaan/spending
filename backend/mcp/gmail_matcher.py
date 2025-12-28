@@ -483,7 +483,9 @@ def is_merchant_match(
     return False
 
 
-def extract_foreign_currency_amount(txn_description: str, receipt_currency: str = "USD") -> tuple[float | None, float | None]:
+def extract_foreign_currency_amount(
+    txn_description: str, receipt_currency: str = "USD"
+) -> tuple[float | None, float | None]:
     """
     Extract foreign currency amount and conversion rate from bank transaction description.
 

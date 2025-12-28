@@ -7,7 +7,7 @@ transaction sync, and import job management.
 
 import cache_manager
 
-from database import truelayer
+from backend.database import truelayer
 from mcp import truelayer_sync
 
 
@@ -127,7 +127,7 @@ def clear_transactions(user_id: int = 1, account_id: int = None) -> dict:
     from database import execute_query
 
     if account_id:
-        result = execute_query(
+        execute_query(
             "DELETE FROM truelayer_transactions WHERE account_id = %s",
             (account_id,),
             commit=True,
@@ -343,15 +343,13 @@ def plan_import(user_id: int = 1, from_date: str = None, to_date: str = None) ->
     """
     accounts = get_accounts(user_id)
 
-    plan = {
+    return {
         "user_id": user_id,
         "from_date": from_date,
         "to_date": to_date,
         "accounts": len(accounts),
         "estimated_transactions": len(accounts) * 1000,  # Rough estimate
     }
-
-    return plan
 
 
 def start_import(user_id: int = 1, from_date: str = None, to_date: str = None) -> dict:

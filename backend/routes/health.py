@@ -10,8 +10,6 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request
 from flask_login import current_user
 
-import database
-
 # Create health blueprint
 health_bp = Blueprint("health", __name__, url_prefix="/api")
 
@@ -23,9 +21,13 @@ def check_db_connection() -> bool:
         True if database is accessible
     """
     try:
-        with database.get_db() as conn, conn.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            return cursor.fetchone()[0] == 1
+        from sqlalchemy import text
+
+        from backend.database.base import get_session
+
+        with get_session() as session:
+            result = session.execute(text("SELECT 1")).scalar()
+            return result == 1
     except Exception:
         return False
 

@@ -52,6 +52,11 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 
+[dependency-groups]
+dev = [
+    "ruff>=0.14.10",
+]
+
 [tool.ruff.lint.isort]
 known-first-party = ["mcp", "tasks", "config", "database", "routes", "services"]
 section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]

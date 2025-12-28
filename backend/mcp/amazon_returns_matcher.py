@@ -6,7 +6,15 @@ Updates transaction descriptions and marks items as returned.
 
 from datetime import UTC, datetime, timedelta
 
-import database
+from backend.database.amazon import (
+    get_amazon_order_by_id,
+    get_amazon_returns,
+    link_return_to_transactions,
+)
+from backend.database.enrichment import (
+    add_enrichment_source,
+    update_pre_enrichment_status,
+)
 
 
 def match_all_returns():
@@ -17,7 +25,7 @@ def match_all_returns():
         Dictionary with matching statistics
     """
     # Get all returns that haven't been matched yet
-    all_returns = database.get_amazon_returns()
+    all_returns = get_amazon_returns()
     unmatched_returns = [r for r in all_returns if r["original_transaction_id"] is None]
 
     if not unmatched_returns:
@@ -61,7 +69,7 @@ def match_single_return(ret):
         Match result dictionary or None
     """
     # Step 1: Find the original Amazon order by order_id
-    order = database.get_amazon_order_by_id(ret["order_id"])
+    order = get_amazon_order_by_id(ret["order_id"])
 
     if not order:
         return {"success": False, "reason": "Order not found"}
@@ -86,14 +94,14 @@ def match_single_return(ret):
     )
 
     # Step 4.5: Update pre-enrichment status to 'Matched' for refund transaction
-    database.update_pre_enrichment_status(refund_transaction["id"], "Matched")
+    update_pre_enrichment_status(refund_transaction["id"], "Matched")
 
     # Step 5: Mark original transaction as returned (updates enrichment source description)
     mark_original_as_returned(original_transaction["id"])
 
     # Step 6: Link return to transactions
     # Now that FK constraints are removed, we can link TrueLayer transactions
-    database.link_return_to_transactions(
+    link_return_to_transactions(
         ret["id"], original_transaction["id"], refund_transaction["id"]
     )
 
@@ -116,24 +124,24 @@ def find_transaction_for_order(order_db_id):
     Returns:
         Transaction dictionary or None (with 'source' field set to 'truelayer')
     """
-    from psycopg2.extras import RealDictCursor
+    from sqlalchemy import text
 
-    with database.get_db() as conn:
-        c = conn.cursor(cursor_factory=RealDictCursor)
+    from backend.database.base import get_session
 
-        # Check TrueLayer transactions
-        c.execute(
-            """
-            SELECT tt.*, 'truelayer' as source
-            FROM truelayer_transactions tt
-            JOIN truelayer_amazon_transaction_matches tatm ON tt.id = tatm.truelayer_transaction_id
-            WHERE tatm.amazon_order_id = %s
-        """,
-            (order_db_id,),
-        )
-        row = c.fetchone()
+    with get_session() as session:
+        # Check TrueLayer transactions with Amazon matches
+        result = session.execute(
+            text("""
+                SELECT tt.*, 'truelayer' as source
+                FROM truelayer_transactions tt
+                JOIN truelayer_amazon_transaction_matches tatm
+                    ON tt.id = tatm.truelayer_transaction_id
+                WHERE tatm.amazon_order_id = :order_id
+            """),
+            {"order_id": order_db_id},
+        ).first()
 
-        return dict(row) if row else None
+        return dict(result._mapping) if result else None
 
 
 def find_refund_transaction(ret):
@@ -147,7 +155,9 @@ def find_refund_transaction(ret):
     Returns:
         Transaction dictionary or None
     """
-    from psycopg2.extras import RealDictCursor
+    from sqlalchemy import text
+
+    from backend.database.base import get_session
 
     # Parse refund date
     try:
@@ -170,32 +180,31 @@ def find_refund_transaction(ret):
     amount_refunded = abs(ret["amount_refunded"])
 
     # Use SQL to filter transactions (not Python loops) - MASSIVE performance improvement
-    with database.get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            # SQL does the filtering - only fetch matching candidates
-            cursor.execute(
-                """
+    with get_session() as session:
+        # SQL does the filtering - only fetch matching candidates
+        results = session.execute(
+            text("""
                 SELECT *
                 FROM truelayer_transactions
                 WHERE transaction_type = 'CREDIT'
-                  AND amount = %s
-                  AND (UPPER(merchant_name) LIKE '%%AMAZON%%'
-                       OR UPPER(merchant_name) LIKE '%%AMZN%%'
-                       OR UPPER(description) LIKE '%%AMAZON%%'
-                       OR UPPER(description) LIKE '%%AMZN%%')
-                  AND timestamp BETWEEN %s AND %s
-                ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - %s)))
+                  AND amount = :amount
+                  AND (UPPER(merchant_name) LIKE '%AMAZON%'
+                       OR UPPER(merchant_name) LIKE '%AMZN%'
+                       OR UPPER(description) LIKE '%AMAZON%'
+                       OR UPPER(description) LIKE '%AMZN%')
+                  AND timestamp BETWEEN :start_date AND :end_date
+                ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - :refund_date)))
                 LIMIT 5
-            """,
-                (
-                    amount_refunded,
-                    refund_date - timedelta(days=7),
-                    refund_date + timedelta(days=3),
-                    refund_date,
-                ),
-            )
+            """),
+            {
+                "amount": amount_refunded,
+                "start_date": refund_date - timedelta(days=7),
+                "end_date": refund_date + timedelta(days=3),
+                "refund_date": refund_date,
+            },
+        ).fetchall()
 
-            candidates = cursor.fetchall()
+        candidates = [dict(row._mapping) for row in results]
 
     if not candidates:
         return None
@@ -228,80 +237,69 @@ def amounts_match(amount1, amount2, tolerance=0.01):
 
 def add_refund_enrichment_source(transaction_id, order_product_names, amazon_order_id):
     """Add an enrichment source entry for a refund transaction."""
+    description = (
+        f"[REFUND] {order_product_names}" if order_product_names else "[REFUND]"
+    )
 
-    with database.get_db() as conn, conn.cursor() as cursor:
-        description = (
-            f"[REFUND] {order_product_names}" if order_product_names else "[REFUND]"
-        )
-        cursor.execute(
-            """
-                INSERT INTO transaction_enrichment_sources
-                    (truelayer_transaction_id, source_type, description,
-                     order_id, match_confidence, match_method, is_primary)
-                VALUES (%s, 'amazon', %s, %s, 100, 'return_match', TRUE)
-                ON CONFLICT (truelayer_transaction_id, source_type, source_id)
-                DO UPDATE SET
-                    description = EXCLUDED.description,
-                    updated_at = NOW()
-            """,
-            (transaction_id, description, amazon_order_id),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    # Use add_enrichment_source function from enrichment module
+    add_enrichment_source(
+        transaction_id=transaction_id,
+        source_type="amazon",
+        description=description,
+        order_id=amazon_order_id,
+        match_confidence=100,
+        match_method="return_match",
+        is_primary=True,
+    )
+    return True
 
 
 def mark_original_as_returned(transaction_id):
     """Mark the original transaction as returned by updating its enrichment source description."""
-    from psycopg2.extras import RealDictCursor
+    from datetime import datetime
 
-    with database.get_db() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            # Check if there's an existing enrichment source
-            cursor.execute(
-                """
-                SELECT id, description FROM transaction_enrichment_sources
-                WHERE truelayer_transaction_id = %s AND is_primary = TRUE
-                LIMIT 1
-            """,
-                (transaction_id,),
+    from backend.database.base import get_session
+    from backend.database.models.enrichment import TransactionEnrichmentSource
+    from backend.database.models.truelayer import TrueLayerTransaction
+
+    with get_session() as session:
+        # Check if there's an existing enrichment source
+        enrichment = (
+            session.query(TransactionEnrichmentSource)
+            .filter(
+                TransactionEnrichmentSource.truelayer_transaction_id == transaction_id,
+                TransactionEnrichmentSource.is_primary == True,  # noqa: E712
             )
-            row = cursor.fetchone()
+            .first()
+        )
 
-            if row:
-                current_desc = row["description"] or ""
-                if not current_desc.startswith("[RETURNED] "):
-                    new_desc = f"[RETURNED] {current_desc}"
-                    cursor.execute(
-                        """
-                        UPDATE transaction_enrichment_sources
-                        SET description = %s, updated_at = NOW()
-                        WHERE id = %s
-                    """,
-                        (new_desc, row["id"]),
-                    )
-                    conn.commit()
-                    return True
-            else:
-                # No enrichment source exists, get description from transaction and create one
-                cursor.execute(
-                    """
-                    SELECT description FROM truelayer_transactions WHERE id = %s
-                """,
-                    (transaction_id,),
+        if enrichment:
+            current_desc = enrichment.description or ""
+            if not current_desc.startswith("[RETURNED] "):
+                enrichment.description = f"[RETURNED] {current_desc}"
+                enrichment.updated_at = datetime.now(UTC)
+                session.commit()
+                return True
+        else:
+            # No enrichment source exists, get description from transaction and create one
+            txn = (
+                session.query(TrueLayerTransaction)
+                .filter(TrueLayerTransaction.id == transaction_id)
+                .first()
+            )
+
+            if txn:
+                desc = txn.description or ""
+                new_enrichment = TransactionEnrichmentSource(
+                    truelayer_transaction_id=transaction_id,
+                    source_type="manual",
+                    description=f"[RETURNED] {desc}",
+                    match_confidence=100,
+                    match_method="return_original",
+                    is_primary=True,
                 )
-                txn_row = cursor.fetchone()
-                if txn_row:
-                    desc = txn_row["description"] or ""
-                    cursor.execute(
-                        """
-                        INSERT INTO transaction_enrichment_sources
-                            (truelayer_transaction_id, source_type, description,
-                             match_confidence, match_method, is_primary)
-                        VALUES (%s, 'manual', %s, 100, 'return_original', TRUE)
-                    """,
-                        (transaction_id, f"[RETURNED] {desc}"),
-                    )
-                    conn.commit()
-                    return True
+                session.add(new_enrichment)
+                session.commit()
+                return True
 
-            return False
+        return False

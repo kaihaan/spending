@@ -30,9 +30,17 @@ from .gmail import (
 )
 from .truelayer import (
     BankConnection,
+    OAuthState,
     TrueLayerAccount,
     TrueLayerBalance,
+    TrueLayerCard,
+    TrueLayerCardBalanceSnapshot,
+    TrueLayerCardTransaction,
+    TrueLayerEnrichmentJob,
+    TrueLayerImportJob,
+    TrueLayerImportProgress,
     TrueLayerTransaction,
+    WebhookEvent,
 )
 from .user import AccountMapping, User
 
@@ -52,6 +60,14 @@ __all__ = [
     "TrueLayerAccount",
     "TrueLayerTransaction",
     "TrueLayerBalance",
+    "WebhookEvent",
+    "OAuthState",
+    "TrueLayerCard",
+    "TrueLayerCardTransaction",
+    "TrueLayerCardBalanceSnapshot",
+    "TrueLayerImportJob",
+    "TrueLayerImportProgress",
+    "TrueLayerEnrichmentJob",
     "AmazonOrder",
     "AmazonReturn",
     "AmazonBusinessConnection",

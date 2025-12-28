@@ -26,11 +26,7 @@ Organization:
 """
 
 # Core connection utilities (always available)
-import os
-
-# Temporary: Until all modules are created, provide backward compatibility
-# by importing from the old database_postgres.py file
-import sys
+# (No legacy imports needed - all functions imported from domain modules)
 
 # Amazon operations
 from .amazon import (
@@ -82,9 +78,6 @@ from .apple import (
 
 # SQLAlchemy-based functions (new)
 from .base import Base, SessionLocal, engine, get_session
-
-# psycopg2-based functions (legacy - being migrated to SQLAlchemy)
-from .base_psycopg2 import DB_CONFIG, close_pool, execute_query, get_db, init_pool
 
 # Categories & Rules operations
 from .categories import (
@@ -342,36 +335,9 @@ from .truelayer import (
     update_import_job_status,
 )
 
-# Add parent directory to path to import database_postgres
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-try:
-    # Import all functions from old module for backward compatibility
-    # This will be removed once all domain modules are created
-    from database_postgres import *  # noqa: F401, F403
-
-    print(
-        "⚠️  Database layer: Using legacy database_postgres.py (refactoring in progress)"
-    )
-except ImportError:
-    # If database_postgres doesn't exist yet, that's fine
-    pass
-
-# Override fallback imports with refactored versions
-# (Ensures migrated functions from domain modules take precedence)
-
-
 # Public API
 __all__ = [
-    # Core utilities (psycopg2 - legacy)
-    "init_pool",
-    "get_db",
-    "close_pool",
-    "execute_query",
-    "DB_CONFIG",
-    # Core utilities (SQLAlchemy - new)
+    # Core utilities (SQLAlchemy)
     "Base",
     "engine",
     "SessionLocal",

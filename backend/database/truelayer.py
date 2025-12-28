@@ -15,6 +15,8 @@ NOTE: Some functions reference tables without models (cards, webhooks, oauth_sta
       These functions are marked with TODO and require model creation before conversion.
 """
 
+from datetime import UTC
+
 from sqlalchemy import and_, cast, func, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, insert
 
@@ -512,79 +514,92 @@ def get_all_truelayer_transactions_with_enrichment(account_id=None):
 #       corresponding SQLAlchemy model. Create WebhookEvent model first, then convert.
 
 
-def insert_webhook_event(
-    event_id, event_type, payload, signature=None, processed=False
-):
-    """Store an incoming TrueLayer webhook event for audit trail.
+def insert_webhook_event(event_id, event_type, payload, signature, processed=False):
+    """Insert a new TrueLayer webhook event.
 
-    TODO: Convert to SQLAlchemy after creating WebhookEvent model.
+    Converted to SQLAlchemy.
     """
+    import json
 
-    from .base_psycopg2 import get_db
+    from sqlalchemy.dialects.postgresql import insert
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                INSERT INTO truelayer_webhook_events
-                (event_id, event_type, payload, signature, processed)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING id
-            """,
-            (event_id, event_type, str(payload), signature, processed),
+    from .base import get_session
+    from .models.truelayer import WebhookEvent
+
+    with get_session() as session:
+        stmt = (
+            insert(WebhookEvent)
+            .values(
+                event_id=event_id,
+                event_type=event_type,
+                payload=payload if isinstance(payload, dict) else json.loads(payload),
+                signature=signature,
+                processed=processed,
+            )
+            .returning(WebhookEvent.id)
         )
-        webhook_id = cursor.fetchone()[0]
-        conn.commit()
+        result = session.execute(stmt)
+        webhook_id = result.scalar_one()
+        session.commit()
         return webhook_id
 
 
 def mark_webhook_processed(event_id):
     """Mark a webhook event as processed.
 
-    TODO: Convert to SQLAlchemy after creating WebhookEvent model.
+    Converted to SQLAlchemy.
     """
-    from .base_psycopg2 import get_db
+    from datetime import datetime
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE truelayer_webhook_events
-                SET processed = true, processed_at = NOW()
-                WHERE event_id = %s
-            """,
-            (event_id,),
+    from sqlalchemy import update
+
+    from .base import get_session
+    from .models.truelayer import WebhookEvent
+
+    with get_session() as session:
+        stmt = (
+            update(WebhookEvent)
+            .where(WebhookEvent.event_id == event_id)
+            .values(processed=True, processed_at=datetime.now(UTC))
         )
-        conn.commit()
-        return cursor.rowcount > 0
+        result = session.execute(stmt)
+        session.commit()
+        return result.rowcount > 0
 
 
 def get_webhook_events(processed_only=False):
     """Get webhook events from database.
 
-    TODO: Convert to SQLAlchemy after creating WebhookEvent model.
+    Converted to SQLAlchemy.
     """
-    from psycopg2.extras import RealDictCursor
+    from .base import get_session
+    from .models.truelayer import WebhookEvent
 
-    from .base_psycopg2 import get_db
+    with get_session() as session:
+        query = session.query(WebhookEvent)
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
         if processed_only:
-            cursor.execute("""
-                    SELECT id, event_id, event_type, payload, signature,
-                           processed, created_at, processed_at
-                    FROM truelayer_webhook_events
-                    WHERE processed = true
-                    ORDER BY created_at DESC
-                    LIMIT 100
-                """)
-        else:
-            cursor.execute("""
-                    SELECT id, event_id, event_type, payload, signature,
-                           processed, created_at, processed_at
-                    FROM truelayer_webhook_events
-                    ORDER BY created_at DESC
-                    LIMIT 100
-                """)
-        return cursor.fetchall()
+            query = query.filter(WebhookEvent.processed.is_(True))
+
+        # Order by created_at DESC, limit 100
+        query = query.order_by(WebhookEvent.received_at.desc()).limit(100)
+
+        events = query.all()
+
+        # Convert to dicts
+        return [
+            {
+                "id": e.id,
+                "event_id": e.event_id,
+                "event_type": e.event_type,
+                "payload": e.payload,
+                "signature": e.signature,
+                "processed": e.processed,
+                "received_at": e.received_at,
+                "processed_at": e.processed_at,
+            }
+            for e in events
+        ]
 
 
 def insert_balance_snapshot(account_id, current_balance, currency, snapshot_at):
@@ -642,109 +657,163 @@ def get_latest_balance_snapshots(account_id=None, limit=10):
 
 
 def save_connection_card(
-    connection_id, card_id, card_name, card_type, last_four=None, issuer=None
+    connection_id, card_id, card_name, card_type, last_four, issuer
 ):
-    """Save a card linked to a TrueLayer bank connection.
+    """Save or update a TrueLayer card for a connection.
 
-    TODO: Convert to SQLAlchemy after creating TrueLayerCard model.
+    Converted to SQLAlchemy.
     """
+    from datetime import datetime
 
-    from .base_psycopg2 import get_db
+    from sqlalchemy.dialects.postgresql import insert
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO truelayer_cards
-            (connection_id, card_id, card_name, card_type, last_four, issuer, status)
-            VALUES (%s, %s, %s, %s, %s, %s, 'active')
-            ON CONFLICT (connection_id, card_id) DO UPDATE
-            SET card_name = EXCLUDED.card_name, card_type = EXCLUDED.card_type, updated_at = NOW()
-            RETURNING id
-        """,
-            (connection_id, card_id, card_name, card_type, last_four, issuer),
+    from .base import get_session
+    from .models.truelayer import TrueLayerCard
+
+    with get_session() as session:
+        stmt = (
+            insert(TrueLayerCard)
+            .values(
+                connection_id=connection_id,
+                card_id=card_id,
+                card_name=card_name,
+                card_type=card_type,
+                last_four=last_four,
+                issuer=issuer,
+                status="active",
+            )
+            .on_conflict_do_update(
+                index_elements=["connection_id", "card_id"],
+                set_={
+                    "card_name": card_name,
+                    "card_type": card_type,
+                    "updated_at": datetime.now(UTC),
+                },
+            )
+            .returning(TrueLayerCard.id)
         )
-        card_db_id = cursor.fetchone()[0]
-        conn.commit()
+        result = session.execute(stmt)
+        card_db_id = result.scalar_one()
+        session.commit()
         return card_db_id
 
 
 def get_connection_cards(connection_id):
     """Get all cards linked to a TrueLayer bank connection.
 
-    TODO: Convert to SQLAlchemy after creating TrueLayerCard model.
+    Converted to SQLAlchemy.
     """
-    from psycopg2.extras import RealDictCursor
+    from .base import get_session
+    from .models.truelayer import TrueLayerCard
 
-    from .base_psycopg2 import get_db
-
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT id, connection_id, card_id, card_name, card_type,
-                       last_four, issuer, status, last_synced_at, created_at
-                FROM truelayer_cards
-                WHERE connection_id = %s
-                ORDER BY card_name
-            """,
-            (connection_id,),
+    with get_session() as session:
+        cards = (
+            session.query(TrueLayerCard)
+            .filter(TrueLayerCard.connection_id == connection_id)
+            .order_by(TrueLayerCard.card_name)
+            .all()
         )
-        return cursor.fetchall()
+
+        return [
+            {
+                "id": c.id,
+                "connection_id": c.connection_id,
+                "card_id": c.card_id,
+                "card_name": c.card_name,
+                "card_type": c.card_type,
+                "last_four": c.last_four,
+                "issuer": c.issuer,
+                "status": c.status,
+                "last_synced_at": c.last_synced_at,
+                "created_at": c.created_at,
+            }
+            for c in cards
+        ]
 
 
 def get_card_by_truelayer_id(truelayer_card_id):
-    """Get card from database by TrueLayer card ID."""
-    from psycopg2.extras import RealDictCursor
+    """Get card from database by TrueLayer card ID.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from .base import get_session
+    from .models.truelayer import TrueLayerCard
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT id, connection_id, card_id, card_name, card_type,
-                       last_four, issuer, status, created_at
-                FROM truelayer_cards
-                WHERE card_id = %s
-            """,
-            (truelayer_card_id,),
+    with get_session() as session:
+        card = (
+            session.query(TrueLayerCard)
+            .filter(TrueLayerCard.card_id == truelayer_card_id)
+            .first()
         )
-        return cursor.fetchone()
+
+        if not card:
+            return None
+
+        return {
+            "id": card.id,
+            "connection_id": card.connection_id,
+            "card_id": card.card_id,
+            "card_name": card.card_name,
+            "card_type": card.card_type,
+            "last_four": card.last_four,
+            "issuer": card.issuer,
+            "status": card.status,
+            "created_at": card.created_at,
+        }
 
 
 def update_card_last_synced(card_id, timestamp):
-    """Update the last sync timestamp for a specific TrueLayer card."""
+    """Update the last sync timestamp for a specific TrueLayer card.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from datetime import datetime
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE truelayer_cards
-                SET last_synced_at = %s, updated_at = NOW()
-                WHERE id = %s
-            """,
-            (timestamp, card_id),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    from .base import get_session
+    from .models.truelayer import TrueLayerCard
+
+    with get_session() as session:
+        card = session.get(TrueLayerCard, card_id)
+        if not card:
+            return False
+
+        card.last_synced_at = timestamp
+        card.updated_at = datetime.now(UTC)
+        session.commit()
+        return True
 
 
 def get_card_transaction_by_id(normalised_provider_id):
-    """Check if a TrueLayer card transaction already exists (deduplication)."""
-    from psycopg2.extras import RealDictCursor
+    """Check if a TrueLayer card transaction already exists (deduplication).
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from .base import get_session
+    from .models.truelayer import TrueLayerCardTransaction
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT id, card_id, normalised_provider_id, timestamp,
-                       description, amount, merchant_name, category
-                FROM truelayer_card_transactions
-                WHERE normalised_provider_id = %s
-            """,
-            (normalised_provider_id,),
+    with get_session() as session:
+        txn = (
+            session.query(TrueLayerCardTransaction)
+            .filter(
+                TrueLayerCardTransaction.normalised_provider_id
+                == normalised_provider_id
+            )
+            .first()
         )
-        return cursor.fetchone()
+
+        if not txn:
+            return None
+
+        return {
+            "id": txn.id,
+            "card_id": txn.card_id,
+            "normalised_provider_id": txn.normalised_provider_id,
+            "timestamp": txn.timestamp,
+            "description": txn.description,
+            "amount": txn.amount,
+            "merchant_name": txn.merchant_name,
+            "category": txn.category,
+        }
 
 
 def insert_truelayer_card_transaction(
@@ -756,129 +825,148 @@ def insert_truelayer_card_transaction(
     amount,
     currency,
     transaction_type,
-    transaction_category,
+    category,
     merchant_name,
     running_balance,
     metadata,
 ):
-    """Insert a new card transaction from TrueLayer."""
+    """Insert a new card transaction from TrueLayer.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from sqlalchemy.dialects.postgresql import insert
 
-    with get_db() as conn, conn.cursor() as cursor:
+    from .base import get_session
+    from .models.truelayer import TrueLayerCardTransaction
+
+    with get_session() as session:
         try:
-            cursor.execute(
-                """
-                    INSERT INTO truelayer_card_transactions
-                    (card_id, transaction_id, normalised_provider_id, timestamp,
-                     description, amount, currency, transaction_type, category,
-                     merchant_name, running_balance, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                """,
-                (
-                    card_id,
-                    transaction_id,
-                    normalised_provider_id,
-                    timestamp,
-                    description,
-                    amount,
-                    currency,
-                    transaction_type,
-                    transaction_category,
-                    merchant_name,
-                    running_balance,
-                    str(metadata),
-                ),
+            stmt = (
+                insert(TrueLayerCardTransaction)
+                .values(
+                    card_id=card_id,
+                    transaction_id=transaction_id,
+                    normalised_provider_id=normalised_provider_id,
+                    timestamp=timestamp,
+                    description=description,
+                    amount=amount,
+                    currency=currency,
+                    transaction_type=transaction_type,
+                    category=category,
+                    merchant_name=merchant_name,
+                    running_balance=running_balance,
+                    metadata=str(metadata)
+                    if metadata
+                    else None,  # Note: TEXT not JSONB
+                )
+                .returning(TrueLayerCardTransaction.id)
             )
-            txn_id = cursor.fetchone()[0]
-            conn.commit()
+            result = session.execute(stmt)
+            txn_id = result.scalar_one()
+            session.commit()
             return txn_id
         except Exception as e:
-            conn.rollback()
-            print(f"Error inserting TrueLayer card transaction: {e}")
+            session.rollback()
+            print(f"Error inserting card transaction: {e}")
             return None
 
 
 def get_all_truelayer_card_transactions(card_id=None):
-    """Get all card transactions synced from TrueLayer."""
-    from psycopg2.extras import RealDictCursor
+    """Get TrueLayer card transactions (all or for specific card).
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from .base import get_session
+    from .models.truelayer import TrueLayerCardTransaction
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
+        query = session.query(TrueLayerCardTransaction)
+
         if card_id:
-            cursor.execute(
-                """
-                SELECT id, card_id, transaction_id, normalised_provider_id,
-                       timestamp, description, amount, currency, transaction_type,
-                       category, merchant_name, running_balance, metadata, created_at
-                FROM truelayer_card_transactions
-                WHERE card_id = %s
-                ORDER BY timestamp DESC
-            """,
-                (card_id,),
-            )
-        else:
-            cursor.execute("""
-                    SELECT id, card_id, transaction_id, normalised_provider_id,
-                           timestamp, description, amount, currency, transaction_type,
-                           category, merchant_name, running_balance, metadata, created_at
-                    FROM truelayer_card_transactions
-                    ORDER BY timestamp DESC
-                """)
-        return cursor.fetchall()
+            query = query.filter(TrueLayerCardTransaction.card_id == card_id)
+
+        query = query.order_by(TrueLayerCardTransaction.timestamp.desc())
+
+        transactions = query.all()
+
+        return [
+            {
+                "id": t.id,
+                "card_id": t.card_id,
+                "transaction_id": t.transaction_id,
+                "normalised_provider_id": t.normalised_provider_id,
+                "timestamp": t.timestamp,
+                "description": t.description,
+                "amount": t.amount,
+                "currency": t.currency,
+                "transaction_type": t.transaction_type,
+                "category": t.category,
+                "merchant_name": t.merchant_name,
+                "running_balance": t.running_balance,
+                "metadata": t.metadata,
+                "created_at": t.created_at,
+            }
+            for t in transactions
+        ]
 
 
 def insert_card_balance_snapshot(card_id, current_balance, currency, snapshot_at):
-    """Store a balance snapshot from TrueLayer card."""
+    """Store a balance snapshot from TrueLayer card.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from sqlalchemy.dialects.postgresql import insert
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                INSERT INTO truelayer_card_balance_snapshots
-                (card_id, current_balance, currency, snapshot_at)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id
-            """,
-            (card_id, current_balance, currency, snapshot_at),
+    from .base import get_session
+    from .models.truelayer import TrueLayerCardBalanceSnapshot
+
+    with get_session() as session:
+        stmt = (
+            insert(TrueLayerCardBalanceSnapshot)
+            .values(
+                card_id=card_id,
+                current_balance=current_balance,
+                currency=currency,
+                snapshot_at=snapshot_at,
+            )
+            .returning(TrueLayerCardBalanceSnapshot.id)
         )
-        snapshot_id = cursor.fetchone()[0]
-        conn.commit()
+        result = session.execute(stmt)
+        snapshot_id = result.scalar_one()
+        session.commit()
         return snapshot_id
 
 
 def get_latest_card_balance_snapshots(card_id=None, limit=10):
-    """Get the latest balance snapshots for cards."""
-    from psycopg2.extras import RealDictCursor
+    """Get the latest balance snapshots for cards.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from .base import get_session
+    from .models.truelayer import TrueLayerCardBalanceSnapshot
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
+    with get_session() as session:
+        query = session.query(TrueLayerCardBalanceSnapshot)
+
         if card_id:
-            cursor.execute(
-                """
-                    SELECT id, card_id, current_balance, currency, snapshot_at
-                    FROM truelayer_card_balance_snapshots
-                    WHERE card_id = %s
-                    ORDER BY snapshot_at DESC
-                    LIMIT %s
-                """,
-                (card_id, limit),
-            )
-        else:
-            cursor.execute(
-                """
-                    SELECT id, card_id, current_balance, currency, snapshot_at
-                    FROM truelayer_card_balance_snapshots
-                    ORDER BY snapshot_at DESC
-                    LIMIT %s
-                """,
-                (limit,),
-            )
-        return cursor.fetchall()
+            query = query.filter(TrueLayerCardBalanceSnapshot.card_id == card_id)
+
+        query = query.order_by(TrueLayerCardBalanceSnapshot.snapshot_at.desc()).limit(
+            limit
+        )
+
+        snapshots = query.all()
+
+        return [
+            {
+                "id": s.id,
+                "card_id": s.card_id,
+                "current_balance": s.current_balance,
+                "currency": s.currency,
+                "snapshot_at": s.snapshot_at,
+            }
+            for s in snapshots
+        ]
 
 
 # ============================================================================
@@ -889,53 +977,84 @@ def get_latest_card_balance_snapshots(card_id=None, limit=10):
 
 
 def store_oauth_state(user_id, state, code_verifier):
-    """Store OAuth state and code_verifier temporarily for callback verification.
+    """Store OAuth state for CSRF protection (with 10-minute expiry).
 
-    TODO: Convert to SQLAlchemy after creating OAuthState model.
+    Converted to SQLAlchemy.
     """
+    from datetime import datetime, timedelta
 
-    from .base_psycopg2 import get_db
+    from sqlalchemy.dialects.postgresql import insert
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                INSERT INTO oauth_state (user_id, state, code_verifier, expires_at)
-                VALUES (%s, %s, %s, NOW() + INTERVAL '10 minutes')
-                ON CONFLICT (state) DO UPDATE SET
-                  code_verifier = EXCLUDED.code_verifier,
-                  expires_at = EXCLUDED.expires_at
-            """,
-            (user_id, state, code_verifier),
+    from .base import get_session
+    from .models.truelayer import OAuthState
+
+    with get_session() as session:
+        expires_at = datetime.now() + timedelta(minutes=10)
+
+        stmt = (
+            insert(OAuthState)
+            .values(
+                user_id=user_id,
+                state=state,
+                code_verifier=code_verifier,
+                expires_at=expires_at,
+            )
+            .on_conflict_do_update(
+                index_elements=["state"],
+                set_={
+                    "code_verifier": code_verifier,
+                    "expires_at": expires_at,
+                },
+            )
         )
-        conn.commit()
+        session.execute(stmt)
+        session.commit()
 
 
 def get_oauth_state(state):
-    """Retrieve stored OAuth state and code_verifier."""
-    from psycopg2.extras import RealDictCursor
+    """Retrieve stored OAuth state and code_verifier.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from datetime import datetime
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT user_id, state, code_verifier
-                FROM oauth_state
-                WHERE state = %s AND expires_at > NOW()
-            """,
-            (state,),
+    from .base import get_session
+    from .models.truelayer import OAuthState
+
+    with get_session() as session:
+        oauth_state = (
+            session.query(OAuthState)
+            .filter(
+                OAuthState.state == state,
+                OAuthState.expires_at > datetime.now(),  # Note: WITHOUT timezone
+            )
+            .first()
         )
-        return cursor.fetchone()
+
+        if not oauth_state:
+            return None
+
+        return {
+            "user_id": oauth_state.user_id,
+            "state": oauth_state.state,
+            "code_verifier": oauth_state.code_verifier,
+        }
 
 
 def delete_oauth_state(state):
-    """Delete OAuth state after use."""
+    """Delete OAuth state after use.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from sqlalchemy import delete
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute("DELETE FROM oauth_state WHERE state = %s", (state,))
-        conn.commit()
+    from .base import get_session
+    from .models.truelayer import OAuthState
+
+    with get_session() as session:
+        stmt = delete(OAuthState).where(OAuthState.state == state)
+        session.execute(stmt)
+        session.commit()
 
 
 # ============================================================================
@@ -957,67 +1076,91 @@ def create_import_job(
     auto_enrich=True,
     batch_size=50,
 ):
-    """Create new import job and return job_id.
-
-    TODO: Convert to SQLAlchemy after creating ImportJob model.
+    """Create a new TrueLayer import job.
 
     Args:
         user_id: User ID
-        connection_id: Bank connection ID
+        connection_id: Bank connection ID (optional)
         job_type: 'date_range', 'incremental', or 'full_sync'
-        from_date: Start date (YYYY-MM-DD)
-        to_date: End date (YYYY-MM-DD)
-        account_ids: List of account IDs to sync
-        card_ids: List of card IDs to sync
-        auto_enrich: Whether to auto-enrich after import
+        from_date: Start date for date_range imports
+        to_date: End date for date_range imports
+        account_ids: List of account IDs to sync (empty = all)
+        card_ids: List of card IDs to sync (empty = all)
+        auto_enrich: Whether to enrich after import
         batch_size: Transactions per batch
 
     Returns:
-        job_id (int)
+        int: Created job ID
+
+    Converted to SQLAlchemy.
     """
+    from sqlalchemy.dialects.postgresql import insert
 
-    from .base_psycopg2 import get_db
+    from .base import get_session
+    from .models.truelayer import TrueLayerImportJob
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                INSERT INTO truelayer_import_jobs
-                (user_id, connection_id, job_type, from_date, to_date,
-                 account_ids, card_ids, auto_enrich, batch_size, job_status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
-                RETURNING id
-            """,
-            (
-                user_id,
-                connection_id,
-                job_type,
-                from_date,
-                to_date,
-                account_ids or [],
-                card_ids or [],
-                auto_enrich,
-                batch_size,
-            ),
+    with get_session() as session:
+        stmt = (
+            insert(TrueLayerImportJob)
+            .values(
+                user_id=user_id,
+                connection_id=connection_id,
+                job_type=job_type,
+                from_date=from_date,
+                to_date=to_date,
+                account_ids=account_ids or [],
+                card_ids=card_ids or [],
+                auto_enrich=auto_enrich,
+                batch_size=batch_size,
+                job_status="pending",
+            )
+            .returning(TrueLayerImportJob.id)
         )
-        job_id = cursor.fetchone()[0]
-        conn.commit()
+        result = session.execute(stmt)
+        job_id = result.scalar_one()
+        session.commit()
         return job_id
 
 
 def get_import_job(job_id):
-    """Get import job details by ID."""
-    from psycopg2.extras import RealDictCursor
+    """Get import job by ID.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from .base import get_session
+    from .models.truelayer import TrueLayerImportJob
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT * FROM truelayer_import_jobs WHERE id = %s
-            """,
-            (job_id,),
-        )
-        return cursor.fetchone()
+    with get_session() as session:
+        job = session.get(TrueLayerImportJob, job_id)
+
+        if not job:
+            return None
+
+        return {
+            "id": job.id,
+            "user_id": job.user_id,
+            "connection_id": job.connection_id,
+            "job_status": job.job_status,
+            "job_type": job.job_type,
+            "from_date": job.from_date,
+            "to_date": job.to_date,
+            "account_ids": job.account_ids,
+            "card_ids": job.card_ids,
+            "total_accounts": job.total_accounts,
+            "total_transactions_synced": job.total_transactions_synced,
+            "total_transactions_duplicates": job.total_transactions_duplicates,
+            "total_transactions_errors": job.total_transactions_errors,
+            "auto_enrich": job.auto_enrich,
+            "enrich_after_completion": job.enrich_after_completion,
+            "enrichment_job_id": job.enrichment_job_id,
+            "batch_size": job.batch_size,
+            "created_at": job.created_at,
+            "started_at": job.started_at,
+            "completed_at": job.completed_at,
+            "estimated_completion": job.estimated_completion,
+            "metadata": job.metadata_,
+            "error_message": job.error_message,
+        }
 
 
 def update_import_job_status(
@@ -1029,218 +1172,333 @@ def update_import_job_status(
     Args:
         job_id: Job ID
         status: 'pending', 'running', 'completed', 'failed', 'enriching'
-        estimated_completion: ISO datetime string
-        error_message: Error details if failed
+        estimated_completion: Estimated completion time
+        error_message: Error message if failed
+
+    Converted to SQLAlchemy.
     """
+    from datetime import datetime
 
-    from .base_psycopg2 import get_db
+    from .base import get_session
+    from .models.truelayer import TrueLayerImportJob
 
-    with get_db() as conn, conn.cursor() as cursor:
+    with get_session() as session:
+        job = session.get(TrueLayerImportJob, job_id)
+        if not job:
+            return
+
+        job.job_status = status
+
         if status == "running":
-            cursor.execute(
-                """
-                    UPDATE truelayer_import_jobs
-                    SET job_status = %s, started_at = CURRENT_TIMESTAMP,
-                        estimated_completion = %s
-                    WHERE id = %s
-                """,
-                (status, estimated_completion, job_id),
-            )
+            job.started_at = datetime.now(UTC)
+            if estimated_completion:
+                job.estimated_completion = estimated_completion
         elif status in ("completed", "failed"):
-            cursor.execute(
-                """
-                    UPDATE truelayer_import_jobs
-                    SET job_status = %s, completed_at = CURRENT_TIMESTAMP,
-                        error_message = %s
-                    WHERE id = %s
-                """,
-                (status, error_message, job_id),
-            )
-        else:
-            cursor.execute(
-                """
-                    UPDATE truelayer_import_jobs
-                    SET job_status = %s
-                    WHERE id = %s
-                """,
-                (status, job_id),
-            )
-        conn.commit()
+            job.completed_at = datetime.now(UTC)
+            if error_message:
+                job.error_message = error_message
+        elif status == "enriching":
+            # No additional fields to set
+            pass
+
+        session.commit()
 
 
 def add_import_progress(job_id, account_id, synced, duplicates, errors, error_msg=None):
-    """Record per-account progress."""
+    """Record per-account progress.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from datetime import datetime
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                INSERT INTO truelayer_import_progress
-                (job_id, account_id, progress_status, synced_count, duplicates_count,
-                 errors_count, error_message)
-                VALUES (%s, %s, 'completed', %s, %s, %s, %s)
-                ON CONFLICT (job_id, account_id) DO UPDATE SET
-                  progress_status = 'completed',
-                  synced_count = EXCLUDED.synced_count,
-                  duplicates_count = EXCLUDED.duplicates_count,
-                  errors_count = EXCLUDED.errors_count,
-                  error_message = EXCLUDED.error_message,
-                  completed_at = CURRENT_TIMESTAMP,
-                  updated_at = CURRENT_TIMESTAMP
-            """,
-            (job_id, account_id, synced, duplicates, errors, error_msg),
+    from sqlalchemy.dialects.postgresql import insert
+
+    from .base import get_session
+    from .models.truelayer import TrueLayerImportProgress
+
+    with get_session() as session:
+        stmt = (
+            insert(TrueLayerImportProgress)
+            .values(
+                job_id=job_id,
+                account_id=account_id,
+                progress_status="completed",
+                synced_count=synced,
+                duplicates_count=duplicates,
+                errors_count=errors,
+                error_message=error_msg,
+            )
+            .on_conflict_do_update(
+                index_elements=["job_id", "account_id"],  # Need composite index
+                set_={
+                    "progress_status": "completed",
+                    "synced_count": synced,
+                    "duplicates_count": duplicates,
+                    "errors_count": errors,
+                    "error_message": error_msg,
+                    "completed_at": datetime.now(UTC),
+                    "updated_at": datetime.now(UTC),
+                },
+            )
         )
-        conn.commit()
+        session.execute(stmt)
+        session.commit()
 
 
 def get_import_progress(job_id):
-    """Get all per-account progress for a job."""
-    from psycopg2.extras import RealDictCursor
+    """Get progress for all accounts in a job.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-                SELECT
-                    p.*,
-                    a.display_name,
-                    a.account_id,
-                    a.account_type,
-                    a.currency
-                FROM truelayer_import_progress p
-                LEFT JOIN truelayer_accounts a ON p.account_id = a.id
-                WHERE p.job_id = %s
-                ORDER BY p.created_at
-            """,
-            (job_id,),
+    from .base import get_session
+    from .models.truelayer import TrueLayerAccount, TrueLayerImportProgress
+
+    with get_session() as session:
+        # LEFT JOIN with truelayer_accounts to get account info
+        results = (
+            session.query(
+                TrueLayerImportProgress,
+                TrueLayerAccount.display_name,
+                TrueLayerAccount.account_id,
+                TrueLayerAccount.account_type,
+                TrueLayerAccount.currency,
+            )
+            .outerjoin(
+                TrueLayerAccount,
+                TrueLayerImportProgress.account_id == TrueLayerAccount.id,
+            )
+            .filter(TrueLayerImportProgress.job_id == job_id)
+            .order_by(TrueLayerImportProgress.created_at)
+            .all()
         )
-        return cursor.fetchall()
+
+        return [
+            {
+                "id": p.id,
+                "job_id": p.job_id,
+                "account_id": p.account_id,
+                "progress_status": p.progress_status,
+                "synced_count": p.synced_count,
+                "duplicates_count": p.duplicates_count,
+                "errors_count": p.errors_count,
+                "started_at": p.started_at,
+                "completed_at": p.completed_at,
+                "error_message": p.error_message,
+                "metadata": p.metadata_,
+                "created_at": p.created_at,
+                "updated_at": p.updated_at,
+                # Account info from JOIN
+                "display_name": display_name,
+                "account_id_truelayer": account_id_tl,
+                "account_type": account_type,
+                "currency": currency,
+            }
+            for p, display_name, account_id_tl, account_type, currency in results
+        ]
 
 
 def mark_job_completed(job_id, total_synced, total_duplicates, total_errors):
-    """Mark job as completed with final counts."""
+    """Mark job as completed with final counts.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from datetime import datetime
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                UPDATE truelayer_import_jobs
-                SET job_status = 'completed',
-                    completed_at = CURRENT_TIMESTAMP,
-                    total_transactions_synced = %s,
-                    total_transactions_duplicates = %s,
-                    total_transactions_errors = %s
-                WHERE id = %s
-            """,
-            (total_synced, total_duplicates, total_errors, job_id),
-        )
-        conn.commit()
+    from .base import get_session
+    from .models.truelayer import TrueLayerImportJob
+
+    with get_session() as session:
+        job = session.get(TrueLayerImportJob, job_id)
+        if not job:
+            return
+
+        job.job_status = "completed"
+        job.completed_at = datetime.now(UTC)
+        job.total_transactions_synced = total_synced
+        job.total_transactions_duplicates = total_duplicates
+        job.total_transactions_errors = total_errors
+
+        session.commit()
 
 
 def get_user_import_history(user_id, limit=50):
-    """Get recent import jobs for user."""
-    from psycopg2.extras import RealDictCursor
+    """Get recent import jobs for user.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from sqlalchemy import case, distinct, func
 
-    with get_db() as conn, conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(
-            """
-            SELECT
-                j.*,
-                COUNT(DISTINCT p.account_id) FILTER (WHERE p.progress_status = 'completed')
-                    as completed_accounts,
-                COUNT(DISTINCT p.account_id) as total_accounts
-            FROM truelayer_import_jobs j
-            LEFT JOIN truelayer_import_progress p ON p.job_id = j.id
-            WHERE j.user_id = %s
-            GROUP BY j.id
-            ORDER BY j.created_at DESC
-            LIMIT %s
-        """,
-            (user_id, limit),
+    from .base import get_session
+    from .models.truelayer import TrueLayerImportJob, TrueLayerImportProgress
+
+    with get_session() as session:
+        # Complex aggregation query - using COUNT FILTER
+        results = (
+            session.query(
+                TrueLayerImportJob,
+                func.count(
+                    distinct(
+                        case(
+                            (
+                                TrueLayerImportProgress.progress_status == "completed",
+                                TrueLayerImportProgress.account_id,
+                            ),
+                            else_=None,
+                        )
+                    )
+                ).label("completed_accounts"),
+                func.count(distinct(TrueLayerImportProgress.account_id)).label(
+                    "total_accounts"
+                ),
+            )
+            .outerjoin(
+                TrueLayerImportProgress,
+                TrueLayerImportProgress.job_id == TrueLayerImportJob.id,
+            )
+            .filter(TrueLayerImportJob.user_id == user_id)
+            .group_by(TrueLayerImportJob.id)
+            .order_by(TrueLayerImportJob.created_at.desc())
+            .limit(limit)
+            .all()
         )
-        return cursor.fetchall()
+
+        return [
+            {
+                "id": job.id,
+                "user_id": job.user_id,
+                "connection_id": job.connection_id,
+                "job_status": job.job_status,
+                "job_type": job.job_type,
+                "from_date": job.from_date,
+                "to_date": job.to_date,
+                "account_ids": job.account_ids,
+                "card_ids": job.card_ids,
+                "total_accounts": job.total_accounts,
+                "total_transactions_synced": job.total_transactions_synced,
+                "total_transactions_duplicates": job.total_transactions_duplicates,
+                "total_transactions_errors": job.total_transactions_errors,
+                "auto_enrich": job.auto_enrich,
+                "enrich_after_completion": job.enrich_after_completion,
+                "enrichment_job_id": job.enrichment_job_id,
+                "batch_size": job.batch_size,
+                "created_at": job.created_at,
+                "started_at": job.started_at,
+                "completed_at": job.completed_at,
+                "estimated_completion": job.estimated_completion,
+                "metadata": job.metadata_,
+                "error_message": job.error_message,
+                # Aggregated counts
+                "completed_accounts": completed_accounts,
+                "total_accounts_count": total_accounts_count,
+            }
+            for job, completed_accounts, total_accounts_count in results
+        ]
 
 
 def get_job_transaction_ids(job_id):
-    """Get all transaction IDs that were imported in a job."""
+    """Get all transaction IDs that were imported in a job.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from sqlalchemy import func
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-                SELECT ARRAY_AGG(DISTINCT id)
-                FROM truelayer_transactions
-                WHERE import_job_id = %s
-            """,
-            (job_id,),
+    from .base import get_session
+    from .models.truelayer import TrueLayerTransaction
+
+    with get_session() as session:
+        # ARRAY_AGG to collect distinct IDs
+        result = (
+            session.query(func.array_agg(TrueLayerTransaction.id.distinct()))
+            .filter(TrueLayerTransaction.import_job_id == job_id)
+            .first()
         )
-        result = cursor.fetchone()
-        return result[0] or [] if result else []
+
+        if not result or not result[0]:
+            return []
+
+        return result[0]
 
 
 def create_enrichment_job(user_id, import_job_id=None, transaction_ids=None):
-    """Create enrichment job and return job_id."""
+    """Create enrichment job and return job_id.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from sqlalchemy.dialects.postgresql import insert
 
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO truelayer_enrichment_jobs
-            (user_id, import_job_id, transaction_ids, job_status, total_transactions)
-            VALUES (%s, %s, %s, 'pending', %s)
-            RETURNING id
-        """,
-            (
-                user_id,
-                import_job_id,
-                transaction_ids or [],
-                len(transaction_ids or []),
-            ),
+    from .base import get_session
+    from .models.truelayer import TrueLayerEnrichmentJob
+
+    with get_session() as session:
+        stmt = (
+            insert(TrueLayerEnrichmentJob)
+            .values(
+                user_id=user_id,
+                import_job_id=import_job_id,
+                transaction_ids=transaction_ids or [],
+                job_status="pending",
+                total_transactions=len(transaction_ids or []),
+            )
+            .returning(TrueLayerEnrichmentJob.id)
         )
-        job_id = cursor.fetchone()[0]
-        conn.commit()
+        result = session.execute(stmt)
+        job_id = result.scalar_one()
+        session.commit()
         return job_id
 
 
 def update_enrichment_job(
-    job_id, status, successful=None, failed=None, cost=None, tokens=None
+    job_id,
+    status=None,
+    successful=None,
+    failed=None,
+    cached=None,
+    cost=None,
+    tokens=None,
+    provider=None,
+    model=None,
+    error_message=None,
 ):
-    """Update enrichment job progress."""
+    """Update enrichment job progress.
 
-    from .base_psycopg2 import get_db
+    Converted to SQLAlchemy.
+    """
+    from datetime import datetime
 
-    with get_db() as conn, conn.cursor() as cursor:
-        if status == "running":
-            cursor.execute(
-                """
-                    UPDATE truelayer_enrichment_jobs
-                    SET job_status = %s, started_at = CURRENT_TIMESTAMP
-                    WHERE id = %s
-                """,
-                (status, job_id),
-            )
-        elif status in ("completed", "failed"):
-            cursor.execute(
-                """
-                    UPDATE truelayer_enrichment_jobs
-                    SET job_status = %s,
-                        completed_at = CURRENT_TIMESTAMP,
-                        successful_enrichments = %s,
-                        failed_enrichments = %s,
-                        total_cost = %s,
-                        total_tokens = %s
-                    WHERE id = %s
-                """,
-                (status, successful, failed, cost, tokens, job_id),
-            )
-        conn.commit()
+    from .base import get_session
+    from .models.truelayer import TrueLayerEnrichmentJob
+
+    with get_session() as session:
+        job = session.get(TrueLayerEnrichmentJob, job_id)
+        if not job:
+            return
+
+        if status:
+            job.job_status = status
+            if status == "running":
+                job.started_at = datetime.now(UTC)
+            elif status in ("completed", "failed"):
+                job.completed_at = datetime.now(UTC)
+
+        if successful is not None:
+            job.successful_enrichments = successful
+        if failed is not None:
+            job.failed_enrichments = failed
+        if cached is not None:
+            job.cached_hits = cached
+        if cost is not None:
+            job.total_cost = cost
+        if tokens is not None:
+            job.total_tokens = tokens
+        if provider is not None:
+            job.llm_provider = provider
+        if model is not None:
+            job.llm_model = model
+        if error_message is not None:
+            job.error_message = error_message
+
+        session.commit()
 
 
 def get_unenriched_truelayer_transactions():

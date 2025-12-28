@@ -8,13 +8,13 @@ Manages token storage, refresh, and encryption.
 import base64
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import requests
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
-import database
+from backend.database import truelayer
 
 # Load environment variables (override=True to prefer .env file over shell env)
 load_dotenv(override=False)  # Docker env vars take precedence
@@ -76,34 +76,34 @@ def get_authorization_url(user_id: int) -> dict:
     code_verifier, code_challenge = generate_pkce_challenge()
 
     # Store state and verifier in database for callback validation
-    from database.base import get_db
+    from datetime import datetime
 
-    with get_db() as conn:
-        with conn.cursor() as cursor:
-            # Ensure table exists first (CREATE TABLE IF NOT EXISTS is idempotent)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS truelayer_oauth_state (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    state TEXT UNIQUE NOT NULL,
-                    code_verifier TEXT NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-            """)
+    from sqlalchemy.dialects.postgresql import insert
 
-            # Insert OAuth state
-            cursor.execute(
-                """
-                INSERT INTO truelayer_oauth_state (user_id, state, code_verifier, created_at)
-                VALUES (%s, %s, %s, NOW())
-                ON CONFLICT (state) DO UPDATE
-                SET code_verifier = EXCLUDED.code_verifier, created_at = EXCLUDED.created_at
-            """,
-                (user_id, state, code_verifier),
+    from backend.database.base import get_session
+    from backend.database.models.truelayer import OAuthState
+
+    with get_session() as session:
+        # Upsert OAuth state (on conflict update)
+        stmt = (
+            insert(OAuthState)
+            .values(
+                user_id=user_id,
+                state=state,
+                code_verifier=code_verifier,
+                created_at=datetime.now(UTC),
             )
-
-            conn.commit()
-            print(f"✓ Stored OAuth state for user {user_id}")
+            .on_conflict_do_update(
+                index_elements=["state"],
+                set_={
+                    "code_verifier": code_verifier,
+                    "created_at": datetime.now(UTC),
+                },
+            )
+        )
+        session.execute(stmt)
+        session.commit()
+        print(f"✓ Stored OAuth state for user {user_id}")
 
     params = {
         "client_id": TRUELAYER_CLIENT_ID,
@@ -266,7 +266,7 @@ def save_bank_connection(user_id: int, connection_data: dict) -> dict:
         )
 
         # Insert into database
-        connection_id = database.save_bank_connection(
+        connection_id = truelayer.save_bank_connection(
             user_id=user_id,
             provider_id=connection_data.get("provider_id"),
             access_token=encrypted_access,
@@ -377,7 +377,7 @@ def discover_and_save_accounts(connection_id: int, access_token: str) -> dict:
             print(
                 f"   Updating connection {connection_id} with provider: {provider_id} / {provider_display_name}"
             )
-            database.update_connection_provider(
+            truelayer.update_connection_provider(
                 connection_id, provider_id, provider_display_name
             )
 
@@ -392,7 +392,7 @@ def discover_and_save_accounts(connection_id: int, access_token: str) -> dict:
             print(f"   Saving account: {display_name} (account_id={account_id})")
 
             # Save to database
-            db_account_id = database.save_connection_account(
+            db_account_id = truelayer.save_connection_account(
                 connection_id=connection_id,
                 account_id=account_id,
                 display_name=display_name,

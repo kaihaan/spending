@@ -1,9 +1,9 @@
 """Celery application configuration for asynchronous task processing."""
 
+import contextlib
 import os
 
 from celery import Celery
-from celery.signals import worker_process_init
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -16,27 +16,8 @@ celery_app = Celery(
     backend=os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0"),
 )
 
-
-@worker_process_init.connect
-def init_worker_db_pool(**kwargs):
-    """Reinitialize database connection pool after worker fork.
-
-    PostgreSQL connections cannot be shared across forked processes.
-    Each worker process needs its own fresh connection pool.
-    """
-    import database
-
-    # Close existing pool if any
-    if database.connection_pool is not None:
-        try:
-            database.connection_pool.closeall()
-        except Exception:
-            pass
-        database.connection_pool = None
-    # Initialize fresh pool for this worker
-    database.init_pool()
-    print(f"✓ Worker {os.getpid()} initialized fresh DB connection pool")
-
+# Note: SQLAlchemy manages its own connection pool automatically.
+# No manual pool initialization needed for Celery workers.
 
 # Celery configuration
 celery_app.conf.update(
@@ -53,22 +34,14 @@ celery_app.conf.update(
 
 # Tasks are registered via @celery_app.task decorators in their respective modules
 # Import tasks to ensure they're registered with Celery
-try:
+with contextlib.suppress(ImportError):
     from tasks import enrichment_tasks  # noqa: F401
-except ImportError:
-    pass
 
-try:
+with contextlib.suppress(ImportError):
     from tasks import gmail_tasks  # noqa: F401
-except ImportError:
-    pass
 
-try:
+with contextlib.suppress(ImportError):
     from tasks import matching_tasks  # noqa: F401
-except ImportError:
-    pass
 
-try:
+with contextlib.suppress(ImportError):
     from tasks import truelayer_tasks  # noqa: F401
-except ImportError:
-    pass

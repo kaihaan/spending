@@ -7,6 +7,7 @@ delegate to truelayer_service for business logic.
 """
 
 import traceback
+from datetime import UTC
 
 from flask import Blueprint, jsonify, redirect, request
 
@@ -75,26 +76,29 @@ def callback():
         print(f"✓ TrueLayer OAuth callback received (state: {state[:8]}...)")
 
         # Retrieve code_verifier and user_id from database using state
-        from database.base import get_db
+        from datetime import datetime, timedelta
 
-        with get_db() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
-                    SELECT user_id, code_verifier
-                    FROM truelayer_oauth_state
-                    WHERE state = %s
-                    AND created_at > NOW() - INTERVAL '10 minutes'
-                """,
-                (state,),
+        from backend.database.base import get_session
+        from backend.database.models.truelayer import OAuthState
+
+        with get_session() as session:
+            # Query OAuth state created within last 10 minutes
+            ten_minutes_ago = datetime.now(UTC) - timedelta(minutes=10)
+            oauth_state = (
+                session.query(OAuthState)
+                .filter(
+                    OAuthState.state == state,
+                    OAuthState.created_at > ten_minutes_ago,
+                )
+                .first()
             )
 
-            result = cursor.fetchone()
-
-        if not result:
+        if not oauth_state:
             print(f"❌ Invalid or expired OAuth state: {state[:8]}...")
             return redirect("http://localhost:5173/settings#bank?error=invalid_state")
 
-        user_id, code_verifier = result
+        user_id = oauth_state.user_id
+        code_verifier = oauth_state.code_verifier
         print(f"✓ Retrieved OAuth state for user {user_id}")
 
         # Exchange authorization code for access/refresh tokens
@@ -109,9 +113,9 @@ def callback():
         print(f"   Provider: {provider_name} (id: {provider_id})")
 
         # Check if connection already exists for this provider
-        import database
+        from backend.database import truelayer
 
-        existing_connections = database.get_user_connections(user_id)
+        existing_connections = truelayer.get_user_connections(user_id)
         existing_connection = next(
             (c for c in existing_connections if c.get("provider_id") == provider_id),
             None,
@@ -132,7 +136,7 @@ def callback():
                 else None
             )
 
-            database.update_connection_tokens(
+            truelayer.update_connection_tokens(
                 connection_id=connection_id,
                 access_token=encrypted_access,
                 refresh_token=encrypted_refresh,
@@ -164,11 +168,9 @@ def callback():
             traceback.print_exc()
 
         # Clean up OAuth state from database
-        with get_db() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM truelayer_oauth_state WHERE state = %s", (state,)
-            )
-            conn.commit()
+        with get_session() as session:
+            session.query(OAuthState).filter(OAuthState.state == state).delete()
+            session.commit()
 
         # Redirect to frontend settings with success
         return redirect("http://localhost:5173/settings#bank?success=true")
