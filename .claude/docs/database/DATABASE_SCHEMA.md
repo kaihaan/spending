@@ -1,6 +1,6 @@
 # Database Schema Documentation
 
-**Last Updated:** 2025-12-24
+**Last Updated:** 2025-12-28
 **Database Type:** PostgreSQL (via Docker)
 **ORM:** Direct SQL via `psycopg2` with cursor factory for dict conversion
 
@@ -19,6 +19,19 @@ This document provides a comprehensive reference for the Personal Finance applic
 ---
 
 ## Schema Changes Log
+
+### 2025-12-28: Users Table Documentation Update
+- **Change:** Documented 5 undocumented columns in `users` table (username, password_hash, is_admin, is_active, last_login_at)
+- **Reason:** Schema documentation was incomplete - database contained 9 columns but only 4 were documented
+- **Impact:** No code changes required - this is a documentation-only update to match actual database state
+- **Details:**
+  - Added `username` VARCHAR(100) with UNIQUE constraint
+  - Added `password_hash` VARCHAR(255) for authentication
+  - Added `is_admin` BOOLEAN (default FALSE) for role-based access control
+  - Added `is_active` BOOLEAN (default TRUE) for account status management
+  - Added `last_login_at` TIMESTAMP for login tracking
+- **Migration:** None required - columns already exist in database (created via init scripts)
+- **References:** Columns are used by User model in `backend/database/models/user.py`
 
 ### 2025-12-24: Gmail Integration Tables Documentation
 - **Change:** Added documentation for 4 Gmail-related tables (gmail_connections, gmail_receipts, gmail_email_content, pdf_attachments)
@@ -109,12 +122,41 @@ User accounts for the personal finance application.
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
 | id | INTEGER | NO | AUTO | Primary key, auto-increment |
-| email | VARCHAR | NO | | User email address (unique) |
+| email | VARCHAR(255) | NO | | User email address (unique) |
 | created_at | TIMESTAMP+TZ | YES | NOW() | Account creation timestamp |
-| updated_at | TIMESTAMP+TZ | YES | NOW() | Last account update timestamp |
+| updated_at | TIMESTAMP+TZ | YES | NOW() | Last account update timestamp (auto-updated via trigger) |
+| username | VARCHAR(100) | YES | | Optional username (unique) |
+| password_hash | VARCHAR(255) | YES | | Hashed password for authentication |
+| is_admin | BOOLEAN | NO | FALSE | Admin flag for elevated privileges |
+| is_active | BOOLEAN | NO | TRUE | Account active status |
+| last_login_at | TIMESTAMP | YES | | Last login timestamp (without timezone) |
 
 **Primary Key:** `id`
-**Constraints:** `email` should be unique (not enforced in schema, validate in code)
+**Unique Constraints:**
+- `users_email_key` (UNIQUE on email)
+- `users_username_key` (UNIQUE on username)
+
+**Indexes:**
+- `idx_users_email` (btree on email)
+- `idx_users_username` (btree on username)
+
+**Triggers:**
+- `update_users_updated_at` - Automatically updates `updated_at` column on row modification
+
+**Referenced By (Foreign Keys):**
+- `bank_connections.user_id`
+- `oauth_state.user_id`
+- `security_audit_log.user_id`
+- `truelayer_connections.user_id`
+- `truelayer_enrichment_jobs.user_id`
+- `truelayer_import_jobs.user_id`
+- `user_sessions.user_id`
+
+**Security Notes:**
+- `password_hash` stores bcrypt/argon2 hashes, NOT plaintext passwords
+- Authentication system assumes optional password (username/password can be NULL for OAuth-only accounts)
+- `is_admin` controls access to admin-only API endpoints
+- `is_active` allows soft-disabling accounts without deletion
 
 ---
 
