@@ -35,6 +35,29 @@ Key features:
 4. **Huququllah**: Calculate Islamic wealth obligation (essential vs discretionary spend)
 5. **Analytics**: Visualise spending patterns with D3 charts
 
+## Code Generation
+When **generating Javascript / Typescript code**:
+- Assume ESLint with @typescript-eslint/recommended is enabled
+- Avoid unused imports or variables
+- Prefer explicit return types for exported functions
+- Match existing project formatting
+
+When **generating Python code**:
+- Assume Ruff is enabled with default + pyupgrade rules
+- Code must be Black-compatible (no manual formatting)
+- Do not introduce unused imports, variables, or unreachable code
+- Prefer explicit return types for public functions
+- Use modern Python syntax (>=3.10):
+  - typing | instead of Union
+  - list/dict comprehensions where appropriate
+  - dataclasses or pydantic models instead of ad-hoc dicts
+- Avoid overly clever constructs; prefer readability
+- Follow PEP 8 naming and structure
+- Write docstrings for public modules, classes, and functions
+- Raise specific exceptions; do not use bare `except`
+- Do not suppress lint rules unless explicitly requested
+
+**Context7 Documentation MCP Server**: Always use Context7 for code generation, setup/configuration steps, or library/API documentation. Use Context7 MCP tools to resolve library ID and get library docs automatically.
 
 ## Tech Stack
 
@@ -176,19 +199,6 @@ python3 -m backend.mcp_server.server
 # User message: /mcp
 # Expected: "Reconnected to spending-app"
 ```
-
-**Troubleshooting:**
-- **"Flask API health check failed"** → Ensure backend running: `docker-compose up -d backend`
-- **"Connection error"** → Check `FLASK_API_URL` points to `http://localhost:5000`
-- **"Job timeout"** → Check Celery workers: `docker logs -f spending-celery`
-- **Empty tools list** → Restart Claude Code to reload MCP configuration
-
-**Documentation:**
-- Full reference: `backend/mcp_server/README.md`
-- Tool catalog with examples and parameters
-- Workflow patterns and best practices
-
----
 
 ### Gmail Integration Architecture
 
@@ -452,7 +462,6 @@ docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
    - [TrueLayer Rate Limits Support Article](https://support.truelayer.com/hc/en-us/articles/360003994498-What-rate-limits-apply-to-the-Data-API)
    - Data API spec: `.claude/docs/api/True Layer API/Data API V1.json` (429 response definitions)
 
-4. **Context7 Documentation MCP Server**: Always use Context7 for code generation, setup/configuration steps, or library/API documentation. Use Context7 MCP tools to resolve library ID and get library docs automatically.
 
 5. **Docker Services (CRITICAL)**
    All services run in Docker containers - `pkill` commands do NOT work:

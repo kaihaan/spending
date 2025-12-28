@@ -6,7 +6,7 @@ Handles all database operations for Apple transaction imports and matching.
 
 from psycopg2.extras import RealDictCursor
 
-from .base import get_db
+from .base_psycopg2 import get_db
 
 # ============================================================================
 # APPLE TRANSACTIONS MANAGEMENT FUNCTIONS

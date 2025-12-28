@@ -9,7 +9,7 @@ import json
 
 from psycopg2.extras import RealDictCursor
 
-from .base import get_db
+from .base_psycopg2 import get_db
 
 # ============================================================================
 # MULTI-SOURCE ENRICHMENT FUNCTIONS

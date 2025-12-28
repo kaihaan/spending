@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS gmail_transaction_matches (
         CHECK(match_confidence >= 0 AND match_confidence <= 100),
     match_type VARCHAR(20) DEFAULT 'standard'
         CHECK(match_type IN ('standard', 'split_payment', 'bundled_order')),
-    match_method VARCHAR(30),                -- amount_date, merchant_amount, fuzzy_merchant
+    match_method VARCHAR(100),               -- Match algorithm method (e.g., exact_amount_date_merchant_early_receipt)
 
     -- Currency handling
     currency_converted BOOLEAN DEFAULT FALSE,

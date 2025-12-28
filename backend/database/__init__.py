@@ -79,7 +79,12 @@ from .apple import (
     import_apple_transactions,
     match_apple_transaction,
 )
-from .base import DB_CONFIG, close_pool, execute_query, get_db, init_pool
+
+# SQLAlchemy-based functions (new)
+from .base import Base, SessionLocal, engine, get_session
+
+# psycopg2-based functions (legacy - being migrated to SQLAlchemy)
+from .base_psycopg2 import DB_CONFIG, close_pool, execute_query, get_db, init_pool
 
 # Categories & Rules operations
 from .categories import (
@@ -360,12 +365,17 @@ except ImportError:
 
 # Public API
 __all__ = [
-    # Core utilities
+    # Core utilities (psycopg2 - legacy)
     "init_pool",
     "get_db",
     "close_pool",
     "execute_query",
     "DB_CONFIG",
+    # Core utilities (SQLAlchemy - new)
+    "Base",
+    "engine",
+    "SessionLocal",
+    "get_session",
     # Gmail operations
     "save_gmail_connection",
     "get_gmail_connection",

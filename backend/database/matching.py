@@ -6,7 +6,7 @@ Handles consistency checking and matching logic across different transaction sou
 
 from psycopg2.extras import RealDictCursor
 
-from .base import get_db
+from .base_psycopg2 import get_db
 
 # ============================================================================
 # SOURCE COVERAGE & STALENESS DETECTION

@@ -10,7 +10,7 @@ import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from .base import get_db
+from .base_psycopg2 import get_db
 
 # ============================================================================
 # CORE TRANSACTION FUNCTIONS

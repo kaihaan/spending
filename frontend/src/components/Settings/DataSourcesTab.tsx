@@ -550,10 +550,10 @@ export default function DataSourcesTab() {
         : '/apple';
 
       const response = await axios.get(`${API_URL}${endpoint}`);
-      // Amazon Business returns array directly, others use objects
-      const data = vendor === 'amazon-business'
+      // Amazon Business and Gmail return arrays directly, others use objects
+      const data = (vendor === 'amazon-business' || vendor === 'gmail')
         ? response.data
-        : response.data.orders ?? response.data.returns ?? response.data.transactions ?? response.data.receipts ?? [];
+        : response.data.orders ?? response.data.returns ?? response.data.transactions ?? [];
       setExpandedData(data);
     } catch (err) {
       console.error('Error fetching data:', err);

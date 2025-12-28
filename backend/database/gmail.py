@@ -21,7 +21,7 @@ from datetime import datetime
 
 from psycopg2.extras import RealDictCursor
 
-from .base import get_db
+from .base_psycopg2 import get_db
 
 # ============================================================================
 # GMAIL INTEGRATION FUNCTIONS
@@ -699,6 +699,8 @@ def save_gmail_match(
     confidence: int,
     match_method: str = None,
     match_type: str = "standard",
+    currency_converted: bool = False,
+    conversion_rate: float = None,
 ) -> int:
     """Save a match between a TrueLayer transaction and Gmail receipt."""
     with get_db() as conn:
@@ -707,11 +709,13 @@ def save_gmail_match(
                 """
                 INSERT INTO gmail_transaction_matches
                 (truelayer_transaction_id, gmail_receipt_id, match_confidence,
-                 match_method, match_type)
-                VALUES (%s, %s, %s, %s, %s)
+                 match_method, match_type, currency_converted, conversion_rate)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (truelayer_transaction_id, gmail_receipt_id) DO UPDATE
                 SET match_confidence = EXCLUDED.match_confidence,
                     match_method = EXCLUDED.match_method,
+                    currency_converted = EXCLUDED.currency_converted,
+                    conversion_rate = EXCLUDED.conversion_rate,
                     matched_at = NOW()
                 RETURNING id
             """,
@@ -721,6 +725,8 @@ def save_gmail_match(
                     confidence,
                     match_method,
                     match_type,
+                    currency_converted,
+                    conversion_rate,
                 ),
             )
             result = cursor.fetchone()

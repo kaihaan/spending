@@ -186,7 +186,14 @@
       "Bash(./node_modules/.bin/eslint:*)",
       "Bash(pre-commit:*)",
       "Bash(/home/kaihaan/prj/spending/frontend/fix-remaining.sh)",
-      "Bash(npx eslint:*)"
+      "Bash(npx eslint:*)",
+      "mcp__playwright__browser_handle_dialog",
+      "mcp__plugin_serena_serena__find_symbol",
+      "Skill(superpowers:writing-plans)",
+      "Skill(superpowers:subagent-driven-development)",
+      "Bash(pip3 install:*)",
+      "Bash(alembic init:*)",
+      "Bash(alembic current:*)"
     ],
     "deny": [],
     "ask": []

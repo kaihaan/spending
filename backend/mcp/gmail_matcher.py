@@ -116,6 +116,8 @@ def match_all_gmail_receipts(user_id: int = 1) -> dict:
                     best_match["confidence"],
                     best_match["match_method"],
                     user_confirmed=False,
+                    currency_converted=best_match.get("currency_converted", False),
+                    conversion_rate=best_match.get("conversion_rate"),
                 )
 
                 if success:
@@ -221,6 +223,8 @@ def match_all_gmail_receipts(user_id: int = 1) -> dict:
                     best_match["confidence"],
                     best_match["match_method"],
                     user_confirmed=False,
+                    currency_converted=best_match.get("currency_converted", False),
+                    conversion_rate=best_match.get("conversion_rate"),
                 )
 
                 if success:
@@ -265,12 +269,13 @@ def find_matching_transactions(receipt: dict, transactions: list) -> list[dict]:
         receipt.get("receipt_date")
     ) or parse_receipt_date(receipt.get("received_at"))
     receipt_merchant = receipt.get("merchant_name_normalized")
+    receipt_currency = receipt.get("currency_code", "GBP")  # Default to GBP
 
     if not receipt_amount or not receipt_date:
         return []
 
     for txn in transactions:
-        confidence, match_method = calculate_match_confidence(
+        confidence, match_method, conversion_rate = calculate_match_confidence(
             receipt_amount=receipt_amount,
             receipt_date=receipt_date,
             receipt_merchant=receipt_merchant,
@@ -278,6 +283,7 @@ def find_matching_transactions(receipt: dict, transactions: list) -> list[dict]:
             txn_date=parse_transaction_date(txn.get("date") or txn.get("timestamp")),
             txn_description=txn.get("description", ""),
             txn_merchant=txn.get("merchant_name", ""),
+            receipt_currency=receipt_currency,
         )
 
         if confidence >= CONFIRMATION_THRESHOLD:
@@ -286,6 +292,8 @@ def find_matching_transactions(receipt: dict, transactions: list) -> list[dict]:
                     "transaction_id": txn["id"],
                     "confidence": confidence,
                     "match_method": match_method,
+                    "conversion_rate": conversion_rate,
+                    "currency_converted": conversion_rate is not None,
                     "transaction_amount": abs(float(txn.get("amount", 0))),
                     "transaction_date": str(txn.get("date")),
                     "transaction_description": txn.get("description"),
@@ -306,38 +314,59 @@ def calculate_match_confidence(
     txn_date: datetime,
     txn_description: str,
     txn_merchant: str,
-) -> tuple[int, str]:
+    receipt_currency: str = "GBP",
+) -> tuple[int, str, float | None]:
     """
-    Calculate match confidence score.
+    Calculate match confidence score with multi-currency support.
 
     Args:
         receipt_amount: Receipt total amount
         receipt_date: Receipt date
         receipt_merchant: Normalized receipt merchant name
-        txn_amount: Transaction amount (absolute)
+        txn_amount: Transaction amount (absolute, in GBP)
         txn_date: Transaction date
         txn_description: Transaction description
         txn_merchant: Transaction merchant name
+        receipt_currency: Receipt currency code (default: GBP)
 
     Returns:
-        Tuple of (confidence score 0-100, match method string)
+        Tuple of (confidence score 0-100, match method string, conversion_rate or None)
     """
     if not txn_date:
-        return 0, None
+        return 0, None, None
 
-    # Amount matching
-    amount_exact = is_amount_exact_match(receipt_amount, txn_amount)
-    amount_fuzzy = is_amount_fuzzy_match(receipt_amount, txn_amount)
+    # Check for multi-currency transaction
+    conversion_rate = None
+    compare_amount = txn_amount  # Default to GBP amount
+
+    if receipt_currency != "GBP":
+        # Try to extract foreign currency amount from transaction description
+        foreign_amount, extracted_rate = extract_foreign_currency_amount(
+            txn_description, receipt_currency
+        )
+
+        if foreign_amount is not None:
+            # Found foreign currency in transaction - compare in that currency
+            compare_amount = foreign_amount
+            conversion_rate = extracted_rate
+            logger.debug(
+                f"Multi-currency match: Receipt {receipt_amount} {receipt_currency} vs "
+                f"Transaction {foreign_amount} {receipt_currency} (GBP: £{txn_amount}, rate: {extracted_rate})"
+            )
+
+    # Amount matching (using appropriate currency)
+    amount_exact = is_amount_exact_match(receipt_amount, compare_amount)
+    amount_fuzzy = is_amount_fuzzy_match(receipt_amount, compare_amount)
 
     if not amount_exact and not amount_fuzzy:
-        return 0, None
+        return 0, None, None
 
     # Date matching (keep sign to detect early receipts)
     date_diff_days = (receipt_date - txn_date).days  # Negative = receipt before txn
     date_diff_abs = abs(date_diff_days)
 
     if date_diff_abs > DATE_TOLERANCE_WIDE:
-        return 0, None
+        return 0, None, None
 
     # Merchant matching
     merchant_match = is_merchant_match(receipt_merchant, txn_merchant, txn_description)
@@ -383,7 +412,7 @@ def calculate_match_confidence(
         confidence = min(100, confidence + DATE_PREFERENCE_BEFORE)
         match_method += "_early_receipt"
 
-    return confidence, match_method
+    return confidence, match_method, conversion_rate
 
 
 def is_amount_exact_match(receipt_amount: float, txn_amount: float) -> bool:
@@ -452,6 +481,42 @@ def is_merchant_match(
                 return True
 
     return False
+
+
+def extract_foreign_currency_amount(txn_description: str, receipt_currency: str = "USD") -> tuple[float | None, float | None]:
+    """
+    Extract foreign currency amount and conversion rate from bank transaction description.
+
+    Handles patterns like:
+    - "CARD PAYMENT TO ANTHROPIC ,240.00 USD, RATE 0.7521/GBP ON 27-10-2025"
+    - "CARD PAYMENT TO MERCHANT ,30.00 USD, RATE 0.7406/GBP ON 07-06-2025"
+
+    Args:
+        txn_description: Bank transaction description
+        receipt_currency: Expected currency code (default: USD)
+
+    Returns:
+        Tuple of (foreign_amount, conversion_rate) or (None, None) if not found
+    """
+    if not txn_description:
+        return None, None
+
+    import re
+
+    # Pattern: ",240.00 USD, RATE 0.7521/GBP"
+    # Captures: amount and rate
+    pattern = rf",(\d+\.\d{{2}})\s+{receipt_currency},\s+RATE\s+([\d.]+)/GBP"
+
+    match = re.search(pattern, txn_description, re.IGNORECASE)
+    if match:
+        try:
+            foreign_amount = float(match.group(1))
+            conversion_rate = float(match.group(2))
+            return foreign_amount, conversion_rate
+        except (ValueError, IndexError):
+            return None, None
+
+    return None, None
 
 
 def normalize_bank_merchant(text: str) -> str:
@@ -551,6 +616,8 @@ def save_match(
     confidence: int,
     match_method: str,
     user_confirmed: bool = False,
+    currency_converted: bool = False,
+    conversion_rate: float = None,
 ) -> bool:
     """
     Save a match to the database.
@@ -561,6 +628,8 @@ def save_match(
         confidence: Match confidence score
         match_method: Method used for matching
         user_confirmed: Whether user has confirmed the match
+        currency_converted: Whether currency conversion was used
+        conversion_rate: Exchange rate used (if applicable)
 
     Returns:
         True if saved successfully
@@ -571,6 +640,8 @@ def save_match(
             gmail_receipt_id=receipt_id,
             confidence=confidence,
             match_method=match_method,
+            currency_converted=currency_converted,
+            conversion_rate=conversion_rate,
         )
 
         # Match is now recorded in gmail_transaction_matches table
