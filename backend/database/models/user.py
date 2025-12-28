@@ -23,8 +23,8 @@ class User(Base):
     )
     username = Column(String(100), unique=True)
     password_hash = Column(String(255))
-    is_admin = Column(Boolean, nullable=False, server_default="false")
-    is_active = Column(Boolean, nullable=False, server_default="true")
+    is_admin = Column(Boolean, nullable=False, default=False, server_default="false")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
     last_login_at = Column(DateTime(timezone=False))
 
     def __repr__(self) -> str:
