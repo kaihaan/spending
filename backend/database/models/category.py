@@ -16,6 +16,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    ForeignKey,
     Integer,
     String,
     Text,
@@ -152,3 +153,109 @@ class MatchingJob(Base):
         return (
             f"<MatchingJob(id={self.id}, type={self.job_type}, status={self.status})>"
         )
+
+
+class CustomCategory(Base):
+    """
+    User-created custom categories (promoted or hidden).
+
+    Promoted categories appear as top-level groupings in the UI.
+    Hidden categories are filtered out from displays.
+    """
+
+    __tablename__ = "custom_categories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, default=1, server_default="1")
+    name = Column(String(100), nullable=False)
+    category_type = Column(String(20), nullable=False)  # 'promoted' or 'hidden'
+    display_order = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
+
+    def __repr__(self) -> str:
+        return f"<CustomCategory(id={self.id}, name={self.name}, type={self.category_type})>"
+
+
+class SubcategoryMapping(Base):
+    """
+    Maps subcategories to promoted custom categories.
+
+    Links subcategories from original categorization to user-defined promoted categories.
+    """
+
+    __tablename__ = "subcategory_mappings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    custom_category_id = Column(
+        Integer,
+        ForeignKey("custom_categories.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    subcategory_name = Column(String(255), nullable=False)
+    original_category = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("custom_category_id", "subcategory_name"),)
+
+    def __repr__(self) -> str:
+        return (
+            f"<SubcategoryMapping(id={self.id}, subcategory={self.subcategory_name})>"
+        )
+
+
+class NormalizedCategory(Base):
+    """
+    Normalized canonical categories with metadata.
+
+    System categories cannot be deleted. Active categories appear in LLM prompts.
+    Essential categories are used for Huququllah calculations.
+    """
+
+    __tablename__ = "normalized_categories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    is_system = Column(Boolean, nullable=False, default=False, server_default="false")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    is_essential = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    display_order = Column(Integer, nullable=False, default=0, server_default="0")
+    color = Column(String(30), nullable=True)  # Badge color class
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<NormalizedCategory(id={self.id}, name={self.name})>"
+
+
+class NormalizedSubcategory(Base):
+    """
+    Normalized subcategories linked to parent categories via FK.
+
+    Each subcategory belongs to exactly one parent category.
+    """
+
+    __tablename__ = "normalized_subcategories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    category_id = Column(
+        Integer,
+        ForeignKey("normalized_categories.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    display_order = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("category_id", "name"),)
+
+    def __repr__(self) -> str:
+        return f"<NormalizedSubcategory(id={self.id}, name={self.name})>"

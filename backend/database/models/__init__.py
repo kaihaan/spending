@@ -14,8 +14,12 @@ from .category import (
     Category,
     CategoryKeyword,
     CategoryRule,
+    CustomCategory,
     MatchingJob,
     MerchantNormalization,
+    NormalizedCategory,
+    NormalizedSubcategory,
+    SubcategoryMapping,
 )
 from .enrichment import EnrichmentCache, TransactionEnrichmentSource
 from .gmail import (
@@ -38,8 +42,12 @@ __all__ = [
     "Category",
     "CategoryKeyword",
     "CategoryRule",
+    "CustomCategory",
     "MerchantNormalization",
     "MatchingJob",
+    "NormalizedCategory",
+    "NormalizedSubcategory",
+    "SubcategoryMapping",
     "BankConnection",
     "TrueLayerAccount",
     "TrueLayerTransaction",
