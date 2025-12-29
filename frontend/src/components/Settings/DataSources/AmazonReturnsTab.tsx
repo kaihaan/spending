@@ -5,7 +5,7 @@
  * and a paginated table of returns.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import SourceMetrics from './components/SourceMetrics';
 import DateRangeIndicator from './components/DateRangeIndicator';
@@ -24,6 +24,12 @@ export default function AmazonReturnsTab({ stats, onStatsUpdate }: AmazonReturns
   const [isMatching, setIsMatching] = useState(false);
   const [page, setPage] = useState(1);
   const pageSize = 50;
+
+  // Import state
+  const [showImport, setShowImport] = useState(false);
+  const [fileContent, setFileContent] = useState<string>('');
+  const [selectedFileName, setSelectedFileName] = useState<string>('');
+  const [isImporting, setIsImporting] = useState(false);
 
   const fetchReturns = useCallback(async () => {
     setIsLoading(true);
@@ -57,6 +63,57 @@ export default function AmazonReturnsTab({ stats, onStatsUpdate }: AmazonReturns
     }
   };
 
+  // Handle file selection
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSelectedFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setFileContent(event.target?.result as string);
+    };
+    reader.readAsText(file);
+  };
+
+  // Handle CSV import
+  const handleImport = async () => {
+    if (!fileContent) return;
+
+    try {
+      setIsImporting(true);
+      const response = await axios.post(`${API_URL}/amazon/returns/import`, {
+        csv_content: fileContent,
+        filename: selectedFileName,
+      });
+
+      // Reset import state
+      setShowImport(false);
+      setFileContent('');
+      setSelectedFileName('');
+
+      // Refresh data
+      await fetchReturns();
+      onStatsUpdate();
+      window.dispatchEvent(new Event('transactions-updated'));
+
+      // Show results
+      const data = response.data;
+      const importCount = data.returns_imported ?? 0;
+      const duplicates = data.returns_duplicated ?? 0;
+      const results = data.matching_results;
+
+      alert(
+        `Import Complete!\n\nImported: ${importCount}\nDuplicates: ${duplicates}\n\nMatching:\n- Processed: ${results.total_processed}\n- Matched: ${results.matched}\n- Unmatched: ${results.unmatched}`
+      );
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { error?: string } }; message?: string };
+      alert(`Import failed: ${error.response?.data?.error || error.message}`);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   // Pagination
   const totalPages = Math.ceil(returns.length / pageSize);
   const paginatedReturns = returns.slice((page - 1) * pageSize, page * pageSize);
@@ -68,14 +125,69 @@ export default function AmazonReturnsTab({ stats, onStatsUpdate }: AmazonReturns
         <h2 className="text-xl font-semibold">Amazon Returns</h2>
         <div className="flex gap-2">
           <button
-            className={`btn btn-primary btn-sm ${isMatching ? 'loading' : ''}`}
+            className="btn btn-primary btn-sm"
+            onClick={() => setShowImport(!showImport)}
+          >
+            {showImport ? 'Cancel Import' : 'Import CSV'}
+          </button>
+          <button
+            className={`btn btn-outline btn-sm ${isMatching ? 'loading' : ''}`}
             onClick={handleMatch}
-            disabled={isMatching}
+            disabled={isMatching || returns.length === 0}
           >
             {isMatching ? 'Matching...' : 'Run Matching'}
           </button>
         </div>
       </div>
+
+      {/* Import Section */}
+      {showImport && (
+        <div className="bg-base-200 border-l-4 border-primary p-4 rounded-r-lg">
+          <div className="flex items-center gap-4">
+            <div className="flex-1">
+              <p className="text-sm mb-2">
+                Select an Amazon returns CSV file to import.
+              </p>
+              <input
+                type="file"
+                accept=".csv"
+                className="file-input file-input-bordered file-input-sm w-full max-w-md"
+                onChange={handleFileSelect}
+              />
+              {selectedFileName && (
+                <span className="ml-2 text-sm text-success">{selectedFileName}</span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() => {
+                  setShowImport(false);
+                  setFileContent('');
+                  setSelectedFileName('');
+                }}
+                disabled={isImporting}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-sm btn-primary"
+                onClick={handleImport}
+                disabled={!fileContent || isImporting}
+              >
+                {isImporting ? (
+                  <>
+                    <span className="loading loading-spinner loading-xs"></span>
+                    Importing...
+                  </>
+                ) : (
+                  'Import'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Metrics */}
       <SourceMetrics
@@ -119,7 +231,7 @@ export default function AmazonReturnsTab({ stats, onStatsUpdate }: AmazonReturns
             ) : paginatedReturns.length === 0 ? (
               <tr>
                 <td colSpan={5} className="text-center py-8 opacity-50">
-                  No Amazon returns found
+                  No Amazon returns found. Click "Import CSV" to add returns.
                 </td>
               </tr>
             ) : (
