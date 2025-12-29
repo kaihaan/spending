@@ -190,12 +190,19 @@ services:
       # Gmail Configuration
       GMAIL_BULK_WRITES: ${GMAIL_BULK_WRITES:-true}
       GMAIL_PARALLEL_FETCH: ${GMAIL_PARALLEL_FETCH:-false}
+      # X11 display for browser automation (Apple import)
+      DISPLAY: ${DISPLAY:-:0}
 
     ports:
       - "${BACKEND_PORT:-5000}:5000"
 
     volumes:
       - ./backend:/app
+      # X11 socket for browser GUI (Apple import) - works with WSLg and native Linux
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/wayland-0:/tmp/wayland-0:rw
+      # Playwright browser cache persistence
+      - playwright_browsers:/root/.cache/ms-playwright
 
     depends_on:
       postgres:
@@ -251,6 +258,8 @@ volumes:
   redis_data:
     driver: local
   minio_data:
+    driver: local
+  playwright_browsers:
     driver: local
 
 networks:
