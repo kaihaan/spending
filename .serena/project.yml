@@ -15,6 +15,7 @@
 # Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
 languages:
 - python
+- typescript
 
 # the encoding used by text files in the project
 # For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
@@ -30,12 +31,17 @@ ignore_all_files_in_gitignore: true
 # Added (renamed) on 2025-04-07
 ignored_paths:
   - "venv/**"
+  - "**/venv/**"
   - "**/__pycache__/**"
   - "**/*.pyc"
   - ".pytest_cache/**"
-  - "migrations/__pycache__/**"
+  - "**/.pytest_cache/**"
   - ".ruff_cache/**"
   - "*.egg-info/**"
+  - "node_modules/**"
+  - "**/node_modules/**"
+  - "dist/**"
+  - "**/dist/**"
 
 # whether the project is in read-only mode
 # If set to true, all editing tools will be disabled and attempts to use them will result in an error
@@ -85,42 +91,7 @@ excluded_tools: []
 
 # initial prompt for the project. It will always be given to the LLM upon activating the project
 # (contrary to the memories, which are loaded on demand).
-initial_prompt: |
-  # Personal Spending App - Backend (Python/Flask)
+initial_prompt: ""
 
-  ## Project Context
-  This is a Flask backend for a personal spending analysis application that integrates with:
-  - TrueLayer API (UK bank transactions)
-  - Amazon Selling Partner API (business orders)
-  - Gmail API (receipt parsing)
-  - LLM APIs (transaction enrichment)
-
-  ## Critical References
-  **ALWAYS consult these before database work:**
-  - Database schema: `.claude/docs/database/DATABASE_SCHEMA.md` (AUTHORITATIVE)
-  - Schema enforcement: `.claude/docs/database/SCHEMA_ENFORCEMENT.md`
-  - Architecture: `.claude/docs/architecture/TRUELAYER_INTEGRATION.md`
-
-  ## Tech Stack
-  - Python 3.12+ with Flask 3.0.0
-  - PostgreSQL 16 (Docker, port 5433)
-  - Redis 7 (Docker, port 6380)
-  - Celery 5.5.3 (background tasks)
-  - SQLAlchemy ORM (ongoing migration from raw SQL)
-
-  ## Key Architecture Patterns
-  1. **Database**: PostgreSQL is the primary DB (NOT SQLite)
-  2. **Async Tasks**: Gmail sync, enrichment run in Celery workers
-  3. **File Organization**: Keep files 200-500 lines (see CLAUDE.md for rationale)
-  4. **Code Quality**: Ruff + Black (no unused imports/variables)
-  5. **Semantic Operations**: Use symbolic tools for code manipulation where possible
-
-  ## Common Pitfalls
-  - PostgreSQL uses non-standard port 5433 (NOT 5432)
-  - Celery code changes require rebuild: `docker-compose build celery`
-  - Gmail sync output appears in Celery logs, not Flask terminal
-  - Always check `.env` for actual passwords (don't assume defaults)
-  - Use `python3` NOT `python` in shell commands
-
-project_name: "backend"
+project_name: "spending"
 included_optional_tools: []
