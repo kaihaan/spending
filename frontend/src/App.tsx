@@ -4,11 +4,19 @@ import MainLayout from './components/layouts/MainLayout';
 import FilterDrawer from './components/FilterDrawer';
 import SettingsTabsDrawer from './components/SettingsTabsDrawer';
 import { FilterProvider } from './contexts/FilterContext';
+import { AuthProvider } from './contexts/AuthContext';
+import { BackgroundTaskProvider } from './contexts/BackgroundTaskContext';
+import { ProtectedRoute } from './components/ProtectedRoute';
 import { useScrollVisibility } from './hooks/useScrollVisibility';
 import Dashboard from './pages/Dashboard';
 import Transactions from './pages/Transactions';
 import Huququllah from './pages/Huququllah';
 import Settings from './pages/Settings';
+import Login from './pages/Login';
+import Register from './pages/Register';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import Profile from './pages/Profile';
 import TrueLayerCallbackHandler from './components/TrueLayerCallbackHandler';
 import GmailCallbackHandler from './components/GmailCallbackHandler';
 
@@ -38,16 +46,24 @@ function AppContent() {
       </div>
 
       <Routes>
-        {/* Routes with FilterBar */}
-        <Route element={<MainLayout />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/transactions" element={<Transactions />} />
-          <Route path="/huququllah" element={<Huququllah />} />
-        </Route>
-        {/* Routes without FilterBar */}
-        <Route path="/settings" element={<Settings />} />
+        {/* Public Routes - No authentication required */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+
+        {/* OAuth Callback Routes - Public (users might not be logged in yet) */}
         <Route path="/auth/callback" element={<TrueLayerCallbackHandler />} />
         <Route path="/auth/gmail/callback" element={<GmailCallbackHandler />} />
+
+        {/* Protected Routes - Require authentication */}
+        <Route element={<MainLayout />}>
+          <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/transactions" element={<ProtectedRoute><Transactions /></ProtectedRoute>} />
+          <Route path="/huququllah" element={<ProtectedRoute><Huququllah /></ProtectedRoute>} />
+        </Route>
+        <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+        <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
       </Routes>
     </div>
   );
@@ -55,11 +71,15 @@ function AppContent() {
 
 function App() {
   return (
-    <FilterProvider>
-      <Router>
-        <AppContent />
-      </Router>
-    </FilterProvider>
+    <AuthProvider>
+      <BackgroundTaskProvider>
+        <FilterProvider>
+          <Router>
+            <AppContent />
+          </Router>
+        </FilterProvider>
+      </BackgroundTaskProvider>
+    </AuthProvider>
   );
 }
 

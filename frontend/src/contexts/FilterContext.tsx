@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import apiClient from '../api/client';
 import type { Transaction } from '../types';
 import type {
   TransactionFilters} from '../utils/filterUtils';
@@ -13,8 +13,6 @@ import {
   getUniqueCategories,
   getSubcategoriesForCategory
 } from '../utils/filterUtils';
-
-const API_URL = 'http://localhost:5000/api';
 
 interface FilterContextType {
   // Filter state
@@ -58,7 +56,7 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     try {
       setLoading(true);
       setError(null);
-      const response = await axios.get<Transaction[]>(`${API_URL}/transactions`);
+      const response = await apiClient.get<Transaction[]>('/transactions');
       setTransactions(response.data);
     } catch (err) {
       setError('Failed to load transactions');
