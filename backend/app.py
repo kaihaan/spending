@@ -15,7 +15,13 @@ load_dotenv(dotenv_path=env_path)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend communication
+
+# CORS configuration - must support credentials for session-based auth
+CORS(
+    app,
+    origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    supports_credentials=True,
+)
 
 # ============================================================================
 # SECURITY CONFIGURATION (GCP Deployment)
@@ -25,12 +31,13 @@ CORS(app)  # Enable CORS for frontend communication
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", os.urandom(32).hex())
 
 # Cookie security settings (Fix #7 - SameSite=Strict)
+# NOTE: __Host- prefix requires HTTPS; use regular name in development
+is_production = os.getenv("FLASK_ENV") == "production"
 app.config.update(
-    SESSION_COOKIE_SECURE=os.getenv("FLASK_ENV")
-    == "production",  # HTTPS only in production
+    SESSION_COOKIE_SECURE=is_production,  # HTTPS only in production
     SESSION_COOKIE_HTTPONLY=True,  # No JavaScript access
     SESSION_COOKIE_SAMESITE="Strict",  # Fix #7: Strict (not Lax)
-    SESSION_COOKIE_NAME="__Host-session",  # __Host- prefix for extra security
+    SESSION_COOKIE_NAME="__Host-session" if is_production else "session",
     PERMANENT_SESSION_LIFETIME=3600,  # 1 hour
     SESSION_COOKIE_DOMAIN=None,  # Current domain only
 )
@@ -98,6 +105,67 @@ app.register_blueprint(matching_bp)
 app.register_blueprint(settings_bp)
 app.register_blueprint(migrations_bp)
 app.register_blueprint(utilities_bp)
+
+# ============================================================================
+# AUTHENTICATION ENFORCEMENT (Global Route Protection)
+# ============================================================================
+
+from flask import request as flask_request
+from flask_login import current_user
+
+# Public endpoints that don't require authentication
+PUBLIC_ENDPOINTS = {
+    # Health check
+    "/api/health",
+    # Authentication routes
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
+    "/api/auth/check",
+    # Static files (if any)
+    "/static",
+}
+
+
+@app.before_request
+def require_authentication():
+    """Enforce authentication on all routes except public endpoints.
+
+    This global check ensures that:
+    1. All routes are protected by default (security by default)
+    2. New routes don't need @login_required decorator
+    3. Public routes are explicitly listed (easy to audit)
+
+    Returns:
+        - None if authenticated or accessing public endpoint
+        - 401 Unauthorized if not authenticated and accessing protected route
+    """
+    # Allow OPTIONS requests (CORS preflight)
+    if flask_request.method == "OPTIONS":
+        return None
+
+    # Check if endpoint is public
+    path = flask_request.path
+
+    # Exact match or prefix match for public endpoints
+    is_public = any(
+        path == endpoint or path.startswith(endpoint + "/")
+        for endpoint in PUBLIC_ENDPOINTS
+    )
+
+    if is_public:
+        return None
+
+    # Require authentication for all other routes
+    if not current_user.is_authenticated:
+        return {
+            "error": "Authentication required",
+            "message": "You must be logged in to access this endpoint",
+        }, 401
+
+    return None
+
 
 # ============================================================================
 # APPLICATION STARTUP

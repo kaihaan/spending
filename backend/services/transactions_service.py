@@ -133,24 +133,34 @@ def format_enrichment_sources(sources: list) -> list:
 # ============================================================================
 
 
-def get_all_transactions() -> list:
+def get_all_transactions(user_id: int | None = None) -> list:
     """
-    Get all TrueLayer transactions with enrichment data.
+    Get all TrueLayer transactions with enrichment data for a specific user.
 
     Uses optimized single-query approach with Redis caching.
     Cache TTL: 15 minutes.
 
+    Args:
+        user_id: User ID to filter transactions by. If None, returns empty list
+                 for security (no transactions visible without explicit user context).
+
     Returns:
         List of normalized transactions with enrichment and sources
     """
-    # Check cache first
-    cache_key = "transactions:all"
+    # SECURITY: Require explicit user_id to prevent data leakage
+    if user_id is None:
+        return []
+
+    # Check cache first (user-specific cache key)
+    cache_key = f"transactions:user:{user_id}"
     cached_data = cache_manager.cache_get(cache_key)
     if cached_data is not None:
         return cached_data
 
-    # Cache miss - fetch from database
-    all_transactions = truelayer.get_all_truelayer_transactions_with_enrichment() or []
+    # Cache miss - fetch from database (filtered by user)
+    all_transactions = (
+        truelayer.get_all_truelayer_transactions_with_enrichment(user_id=user_id) or []
+    )
 
     # Batch-fetch enrichment sources for all transactions
     transaction_ids = [t.get("id") for t in all_transactions if t.get("id")]

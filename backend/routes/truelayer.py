@@ -163,8 +163,6 @@ def callback():
         except Exception as discover_error:
             print(f"⚠️  Account discovery failed: {discover_error}")
             # Continue anyway - connection is saved, user can retry later
-            import traceback
-
             traceback.print_exc()
 
         # Clean up OAuth state from database
@@ -363,7 +361,7 @@ def sync_transactions():
     """
     try:
         data = request.json or {}
-        user_id = data.get("user_id")
+        user_id = data.get("user_id", 1)  # Default to user_id=1
         connection_id = data.get("connection_id")
         date_from = data.get("date_from")
         date_to = data.get("date_to")

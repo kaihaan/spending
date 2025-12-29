@@ -12,9 +12,18 @@ from datetime import datetime
 
 from redis import Redis
 
+
 # Initialize Redis client
-# Uses environment variable REDIS_URL or defaults to localhost
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+# Uses REDIS_URL env var, or builds URL from REDIS_HOST/REDIS_PORT
+def _get_redis_url() -> str:
+    if os.getenv("REDIS_URL"):
+        return os.getenv("REDIS_URL")
+    host = os.getenv("REDIS_HOST", "localhost")
+    port = os.getenv("REDIS_PORT", "6380")
+    return f"redis://{host}:{port}/0"
+
+
+REDIS_URL = _get_redis_url()
 redis_client = Redis.from_url(REDIS_URL, decode_responses=False)
 
 

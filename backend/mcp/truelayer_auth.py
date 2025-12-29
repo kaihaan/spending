@@ -8,7 +8,7 @@ Manages token storage, refresh, and encryption.
 import base64
 import os
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import requests
 from cryptography.fernet import Fernet
@@ -85,19 +85,26 @@ def get_authorization_url(user_id: int) -> dict:
 
     with get_session() as session:
         # Upsert OAuth state (on conflict update)
+        # OAuth state expires after 15 minutes for security
+        from datetime import timedelta
+
+        expires_at = datetime.now() + timedelta(minutes=15)
+
         stmt = (
             insert(OAuthState)
             .values(
                 user_id=user_id,
                 state=state,
                 code_verifier=code_verifier,
-                created_at=datetime.now(UTC),
+                expires_at=expires_at,
+                created_at=datetime.now(),
             )
             .on_conflict_do_update(
                 index_elements=["state"],
                 set_={
                     "code_verifier": code_verifier,
-                    "created_at": datetime.now(UTC),
+                    "expires_at": expires_at,
+                    "created_at": datetime.now(),
                 },
             )
         )

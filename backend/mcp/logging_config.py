@@ -15,9 +15,20 @@ import os
 from logging.handlers import RotatingFileHandler
 
 # Log directory from environment or default
-# In Docker: /app/.claude/logs (mounted volume)
-# In local dev: /home/kaihaan/prj/spending/.claude/logs
-LOG_DIR = os.getenv("LOG_DIR", "/app/.claude/logs")
+# Priority: LOG_DIR env var > Docker path > project-relative path
+if os.getenv("LOG_DIR"):
+    LOG_DIR = os.getenv("LOG_DIR")
+elif os.path.exists("/app"):
+    # Docker environment
+    LOG_DIR = "/app/.claude/logs"
+else:
+    # Local development - calculate project root from this file's location
+    # This file is at: backend/mcp/logging_config.py
+    # Project root is: ../../
+    current_file = os.path.abspath(__file__)
+    backend_dir = os.path.dirname(os.path.dirname(current_file))  # backend/
+    project_root = os.path.dirname(backend_dir)  # project root
+    LOG_DIR = os.path.join(project_root, ".claude", "logs")
 
 
 class StructuredFormatter(logging.Formatter):

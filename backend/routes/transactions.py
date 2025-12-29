@@ -7,11 +7,14 @@ Handles all transaction-related endpoints:
 - Enrichment source management
 
 Routes are thin controllers that delegate to transactions_service for business logic.
+
+SECURITY: All routes filter data by current_user to ensure data isolation.
 """
 
 import traceback
 
 from flask import Blueprint, jsonify, request
+from flask_login import current_user
 
 from services import transactions_service
 
@@ -26,15 +29,18 @@ transactions_bp = Blueprint("transactions", __name__, url_prefix="/api/transacti
 @transactions_bp.route("", methods=["GET"])
 def get_transactions():
     """
-    Get all TrueLayer transactions with enrichment data.
+    Get all TrueLayer transactions with enrichment data for the current user.
 
     Uses optimized single-query approach with Redis caching (15 minute TTL).
+    Filters by current_user.id to ensure data isolation.
 
     Returns:
         List of normalized transactions with enrichment and sources
     """
     try:
-        transactions = transactions_service.get_all_transactions()
+        transactions = transactions_service.get_all_transactions(
+            user_id=current_user.id
+        )
         return jsonify(transactions)
 
     except Exception as e:

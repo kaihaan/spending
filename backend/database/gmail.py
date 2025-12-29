@@ -4625,6 +4625,49 @@ def update_user_last_login(user_id: int, timestamp: datetime) -> bool:
         return True
 
 
+def update_user_password(user_id: int, password_hash: str) -> bool:
+    """Update user's password hash.
+
+    Args:
+        user_id: User ID
+        password_hash: New hashed password (pbkdf2:sha256:600000)
+
+    Returns:
+        True if updated successfully, False if user not found
+    """
+    with get_session() as session:
+        user = session.get(User, user_id)
+        if not user:
+            return False
+
+        user.password_hash = password_hash
+        session.commit()
+        return True
+
+
+def update_user_username(user_id: int, username: str) -> bool:
+    """Update user's username.
+
+    Args:
+        user_id: User ID
+        username: New username
+
+    Returns:
+        True if updated successfully, False if user not found
+
+    Raises:
+        Exception: If username already exists for another user
+    """
+    with get_session() as session:
+        user = session.get(User, user_id)
+        if not user:
+            return False
+
+        user.username = username
+        session.commit()
+        return True
+
+
 def log_security_event(
     user_id: int,
     event_type: str,
@@ -4653,7 +4696,7 @@ def log_security_event(
             text("""
                 INSERT INTO security_audit_log
                 (user_id, event_type, success, ip_address, user_agent, metadata)
-                VALUES (:user_id, :event_type, :success, :ip_address, :user_agent, :metadata::jsonb)
+                VALUES (:user_id, :event_type, :success, :ip_address, :user_agent, CAST(:metadata AS jsonb))
                 RETURNING id
             """),
             {

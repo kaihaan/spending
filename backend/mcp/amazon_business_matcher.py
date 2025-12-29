@@ -136,7 +136,7 @@ def find_best_amazon_business_match(transaction: dict, orders: list) -> dict:
         print(f"[Amazon Business Matcher] Failed to parse bank transaction date: {e}")
         return None
 
-    txn_amount = abs(transaction["amount"])
+    txn_amount = float(abs(transaction["amount"]))
     print(
         f"[Amazon Business Matcher]   Bank txn parsed: date={txn_date.date()}, amount=£{txn_amount:.2f}"
     )

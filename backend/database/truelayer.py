@@ -404,8 +404,17 @@ def get_all_truelayer_transactions(account_id=None):
         ]
 
 
-def get_all_truelayer_transactions_with_enrichment(account_id=None):
-    """Get all transactions with enrichment in SINGLE query (eliminates N+1 problem)."""
+def get_all_truelayer_transactions_with_enrichment(account_id=None, user_id=None):
+    """Get all transactions with enrichment in SINGLE query (eliminates N+1 problem).
+
+    Args:
+        account_id: Optional account ID to filter by specific account
+        user_id: Optional user ID to filter transactions by user's accounts only
+                 (SECURITY: always pass user_id when called from authenticated endpoints)
+
+    Returns:
+        List of transaction dicts with enrichment data
+    """
     with get_session() as session:
         # Build query with JOINs and JSONB field extraction
         query = session.query(
@@ -448,6 +457,19 @@ def get_all_truelayer_transactions_with_enrichment(account_id=None):
                 "manual_huququllah_classification"
             ),
         )
+
+        # Filter by user_id (join through account -> connection -> user)
+        if user_id is not None:
+            query = (
+                query.join(
+                    TrueLayerAccount,
+                    TrueLayerTransaction.account_id == TrueLayerAccount.id,
+                )
+                .join(
+                    BankConnection, TrueLayerAccount.connection_id == BankConnection.id
+                )
+                .filter(BankConnection.user_id == user_id)
+            )
 
         if account_id:
             query = query.filter(TrueLayerTransaction.account_id == account_id)

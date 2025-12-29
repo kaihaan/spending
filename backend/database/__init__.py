@@ -215,6 +215,8 @@ from .gmail import (
     update_gmail_tokens,
     update_receipt_llm_status,
     update_user_last_login,
+    update_user_password,
+    update_user_username,
 )
 from .matching import (
     add_category_rule,
@@ -421,6 +423,8 @@ __all__ = [
     "get_user_by_username",
     "get_user_by_email",
     "update_user_last_login",
+    "update_user_password",
+    "update_user_username",
     "log_security_event",
     # TrueLayer operations
     "get_user_connections",
