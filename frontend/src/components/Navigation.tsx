@@ -1,5 +1,7 @@
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
+import BackgroundTaskIndicator from './BackgroundTaskIndicator';
+import { useAuth } from '../contexts/AuthContext';
 
 interface NavLink {
   path: string;
@@ -9,7 +11,33 @@ interface NavLink {
 
 export default function Navigation() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Generate initials from username or email
+  const getInitials = (): string => {
+    if (!user) return '?';
+    if (user.username) {
+      // Split by space for "John Doe" → "JD", or just first char for "john"
+      const parts = user.username.split(' ');
+      if (parts.length > 1) {
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+      }
+      return user.username[0].toUpperCase();
+    }
+    // Fallback to email first char
+    return user.email[0].toUpperCase();
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate('/login', { replace: true });
+    } catch (err) {
+      console.error('Logout failed:', err);
+    }
+  };
 
   const isActive = (path: string) => {
     return location.pathname === path;
@@ -75,8 +103,48 @@ export default function Navigation() {
         </ul>
       </div>
 
-      <div className="navbar-end">
-        <span className="badge badge-success mr-2">Phase 2</span>
+      <div className="navbar-end gap-2">
+        <BackgroundTaskIndicator />
+
+        {/* User Avatar Dropdown */}
+        {user ? (
+          <div className="dropdown dropdown-end">
+            <div
+              tabIndex={0}
+              role="button"
+              className="avatar placeholder cursor-pointer"
+            >
+              <div className="bg-neutral text-neutral-content w-9 rounded-full flex items-center justify-center">
+                <span className="text-sm font-medium">{getInitials()}</span>
+              </div>
+            </div>
+            <ul
+              tabIndex={0}
+              className="dropdown-content menu bg-base-200 rounded-box z-[1] w-52 p-2 shadow-lg mt-2"
+            >
+              <li className="menu-title px-2 py-1">
+                <span className="text-xs text-base-content/70 truncate">
+                  {user.email}
+                </span>
+              </li>
+              <li>
+                <Link to="/profile" className="justify-between">
+                  Profile
+                </Link>
+              </li>
+              <div className="divider my-1"></div>
+              <li>
+                <button onClick={handleLogout} className="text-error">
+                  Logout
+                </button>
+              </li>
+            </ul>
+          </div>
+        ) : (
+          <Link to="/login" className="btn btn-sm btn-ghost">
+            Login
+          </Link>
+        )}
       </div>
     </div>
   );
