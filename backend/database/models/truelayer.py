@@ -125,6 +125,7 @@ class TrueLayerTransaction(Base):
     transaction_category = Column(String, nullable=True)
     merchant_name = Column(String, nullable=True)
     running_balance = Column(Numeric, nullable=True)
+    category_id = Column(Integer, ForeignKey("normalized_categories.id"), nullable=True)
     pre_enrichment_status = Column(
         String(20), nullable=True, default="None", server_default="None"
     )
@@ -145,6 +146,7 @@ class TrueLayerTransaction(Base):
             "normalised_provider_transaction_id",
             unique=True,
         ),
+        Index("idx_truelayer_txn_category", "category_id"),
     )
 
     def __repr__(self) -> str:
