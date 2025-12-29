@@ -266,7 +266,18 @@
       "Bash(.claude/docs/development/DEVELOPMENT_PLAN.md )",
       "Bash(.claude/docs/development/PHASE_1_IMPLEMENTATION_SUMMARY.md )",
       "Bash(.claude/docs/requirements/brief.md)",
-      "Bash(# Remove the embedded git repo\nrm -rf .claude/skills/claude-d3js-skill/.git 2>/dev/null || true\n\n# Stage the docs changes\ngit add \\\\\n  .claude/CLAUDE.md \\\\\n  .claude/settings.local.json \\\\\n  .claude/docs/bugs/ \\\\\n  .claude/docs/requirements/database_migration_skill.md \\\\\n  .claude/docs/requirements/database_planning_skill.md \\\\\n  .claude/docs/requirements/ontology.md \\\\\n  .claude/docs/requirements/serena_prompt.md \\\\\n  .claude/skills/ \\\\\n  backend/database/REFACTORING_STATUS.md \\\\\n  .claude/docs/database/POSTGRES_MIGRATION.md \\\\\n  .claude/docs/development/DEVELOPMENT_PLAN.md \\\\\n  .claude/docs/development/PHASE_1_IMPLEMENTATION_SUMMARY.md \\\\\n  .claude/docs/requirements/brief.md && \\\\\ngit commit -m \"\"$\\(cat <<''EOF''\ndocs: update documentation and add skills\n\nUpdated:\n- CLAUDE.md: Expanded with testing, database, API documentation\n- REFACTORING_STATUS.md: Updated SQLAlchemy migration progress\n\nAdded:\n- .claude/docs/bugs/ for bug tracking\n- .claude/docs/requirements/*.md for new feature specs\n- .claude/skills/ for Claude Code skills \\(d3js, database-migration, testing\\)\n\nRemoved \\(outdated\\):\n- POSTGRES_MIGRATION.md, DEVELOPMENT_PLAN.md, PHASE_1_IMPLEMENTATION_SUMMARY.md, brief.md\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\"\")"
+      "Bash(# Remove the embedded git repo\nrm -rf .claude/skills/claude-d3js-skill/.git 2>/dev/null || true\n\n# Stage the docs changes\ngit add \\\\\n  .claude/CLAUDE.md \\\\\n  .claude/settings.local.json \\\\\n  .claude/docs/bugs/ \\\\\n  .claude/docs/requirements/database_migration_skill.md \\\\\n  .claude/docs/requirements/database_planning_skill.md \\\\\n  .claude/docs/requirements/ontology.md \\\\\n  .claude/docs/requirements/serena_prompt.md \\\\\n  .claude/skills/ \\\\\n  backend/database/REFACTORING_STATUS.md \\\\\n  .claude/docs/database/POSTGRES_MIGRATION.md \\\\\n  .claude/docs/development/DEVELOPMENT_PLAN.md \\\\\n  .claude/docs/development/PHASE_1_IMPLEMENTATION_SUMMARY.md \\\\\n  .claude/docs/requirements/brief.md && \\\\\ngit commit -m \"\"$\\(cat <<''EOF''\ndocs: update documentation and add skills\n\nUpdated:\n- CLAUDE.md: Expanded with testing, database, API documentation\n- REFACTORING_STATUS.md: Updated SQLAlchemy migration progress\n\nAdded:\n- .claude/docs/bugs/ for bug tracking\n- .claude/docs/requirements/*.md for new feature specs\n- .claude/skills/ for Claude Code skills \\(d3js, database-migration, testing\\)\n\nRemoved \\(outdated\\):\n- POSTGRES_MIGRATION.md, DEVELOPMENT_PLAN.md, PHASE_1_IMPLEMENTATION_SUMMARY.md, brief.md\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\"\")",
+      "Bash(backend/database/__init__.py )",
+      "Bash(backend/database/gmail.py )",
+      "Bash(backend/database/truelayer.py )",
+      "Bash(backend/mcp/amazon_business_matcher.py )",
+      "Bash(backend/mcp/logging_config.py )",
+      "Bash(backend/mcp/__init__.py )",
+      "Bash(backend/middleware/rate_limiter.py )",
+      "Bash(backend/requirements-dev.txt )",
+      "Bash(backend/routes/transactions.py )",
+      "Bash(backend/routes/truelayer.py )",
+      "Bash(backend/services/transactions_service.py)"
     ],
     "deny": [],
     "ask": []

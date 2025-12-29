@@ -43,3 +43,6 @@ backend/.claude/
 
 # sample finance data
 sample/
+
+# Serena MCP cache files
+backend/.serena/cache/
