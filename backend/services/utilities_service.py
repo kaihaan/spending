@@ -38,8 +38,7 @@ def get_cache_stats() -> dict:
     Returns:
         Dict with cache hit/miss ratios, key counts, memory usage, etc.
     """
-    stats = cache_manager.get_cache_stats()
-    return stats
+    return cache_manager.get_cache_stats()
 
 
 # ============================================================================
@@ -60,8 +59,7 @@ def get_pre_enrichment_summary() -> dict:
     Returns:
         Dict with counts: {'Apple': N, 'AMZN': N, 'AMZN RTN': N, 'total': N}
     """
-    summary = database.get_identified_summary()
-    return summary
+    return database.get_identified_summary()
 
 
 def backfill_pre_enrichment_status() -> dict:
@@ -191,19 +189,21 @@ def clear_testing_data(data_types: list[str]) -> dict:
     # Execute clearing operations with fail-fast behavior
     cleared_counts = dict.fromkeys(allowed_types.keys(), 0)
 
-    with base.get_db() as conn, conn.cursor() as cursor:
+    from sqlalchemy import text
+
+    with base.get_session() as session:
         for data_type in data_types:
             try:
                 delete_sql = allowed_types[data_type]
-                cursor.execute(delete_sql)
-                row_count = cursor.rowcount
+                result = session.execute(text(delete_sql))
+                row_count = result.rowcount
                 cleared_counts[data_type] = row_count
-                conn.commit()
+                session.commit()
 
             except Exception as e:
                 # Fail-fast: stop on first error
-                conn.rollback()
-                raise ValueError(f"Failed to clear {data_type}: {str(e)}")
+                session.rollback()
+                raise ValueError(f"Failed to clear {data_type}: {str(e)}") from e
 
     # Invalidate caches after clearing data
     cache_manager.cache_invalidate_transactions()
@@ -275,5 +275,4 @@ def get_enrichment_source_details(source_id: int) -> dict:
             return obj.isoformat()
         return obj
 
-    formatted_result = format_dates(result)
-    return formatted_result
+    return format_dates(result)

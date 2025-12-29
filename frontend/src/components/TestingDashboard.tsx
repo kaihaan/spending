@@ -1,7 +1,5 @@
 import { useState } from 'react';
-import axios from 'axios';
-
-const API_URL = 'http://localhost:5000/api';
+import apiClient from '../api/client';
 
 interface DataTypeCheckbox {
   id: string;
@@ -103,8 +101,8 @@ export default function TestingDashboard() {
 
     try {
       const typesParam = selectedTypes.join(',');
-      const response = await axios.post<ClearResponse>(
-        `${API_URL}/testing/clear?types=${typesParam}`
+      const response = await apiClient.post<ClearResponse>(
+        `/testing/clear?types=${typesParam}`
       );
 
       if (response.data.success && response.data.cleared) {

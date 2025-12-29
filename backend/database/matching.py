@@ -8,7 +8,7 @@ Migrated to SQLAlchemy from psycopg2.
 
 from datetime import timedelta
 
-from sqlalchemy import func, text
+from sqlalchemy import Date, func, text
 from sqlalchemy.dialects.postgresql import insert
 
 from .base import get_session
@@ -39,12 +39,8 @@ def get_source_coverage_dates(user_id: int = 1) -> dict:
     with get_session() as session:
         # Get max bank transaction date
         bank_result = session.query(
-            func.max(func.cast(TrueLayerTransaction.timestamp, func.Date)).label(
-                "max_date"
-            ),
-            func.min(func.cast(TrueLayerTransaction.timestamp, func.Date)).label(
-                "min_date"
-            ),
+            func.max(TrueLayerTransaction.timestamp.cast(Date)).label("max_date"),
+            func.min(TrueLayerTransaction.timestamp.cast(Date)).label("min_date"),
             func.count().label("count"),
         ).first()
 
