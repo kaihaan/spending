@@ -4,6 +4,7 @@ Enrichment models for LLM transaction categorization and caching.
 Maps to:
 - transaction_enrichment_sources table - Links transactions to enrichment data sources
 - llm_enrichment_cache table - Caches LLM enrichment results for reuse
+- llm_models table (DEPRECATED) - Configuration for LLM providers
 
 See: .claude/docs/database/DATABASE_SCHEMA.md
 """
@@ -140,3 +141,38 @@ class EnrichmentCache(Base):
 
     def __repr__(self) -> str:
         return f"<EnrichmentCache(id={self.id}, description={self.transaction_description[:30]}...)>"
+
+
+# ============================================================================
+# DEPRECATED TABLES - Kept for Alembic sync only
+# These tables exist in DB but are no longer actively used
+# ============================================================================
+
+
+class LLMModel(Base):
+    """
+    DEPRECATED: LLM model configuration.
+
+    Originally used to track available LLM models.
+    Configuration is now done via environment variables.
+    Kept only for Alembic migration sync.
+    """
+
+    __tablename__ = "llm_models"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String(50), nullable=False)
+    model_name = Column(String(255), nullable=False)
+    display_name = Column(String(255), nullable=True)
+    is_builtin = Column(Boolean, nullable=True, default=True, server_default="true")
+    is_active = Column(Boolean, nullable=True, default=False, server_default="false")
+    created_at = Column(DateTime(timezone=False), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "model_name", name="llm_models_provider_model_name_key"
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<LLMModel(id={self.id}, provider={self.provider}, model={self.model_name})>"

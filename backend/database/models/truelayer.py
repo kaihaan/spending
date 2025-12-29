@@ -14,6 +14,9 @@ Maps to:
 - truelayer_import_jobs table
 - truelayer_import_progress table
 - truelayer_enrichment_jobs table
+- truelayer_connections table (DEPRECATED)
+- truelayer_oauth_state table (DEPRECATED)
+- connection_logs table
 
 See: .claude/docs/database/DATABASE_SCHEMA.md#5-bank_connections
 """
@@ -530,3 +533,80 @@ class TrueLayerEnrichmentJob(Base):
 
     def __repr__(self) -> str:
         return f"<TrueLayerEnrichmentJob(id={self.id}, status={self.job_status}, total={self.total_transactions})>"
+
+
+# ============================================================================
+# DEPRECATED TABLES - Kept for Alembic sync only
+# These tables exist in DB but are no longer actively used
+# ============================================================================
+
+
+class TrueLayerConnection(Base):
+    """
+    DEPRECATED: Legacy TrueLayer connection storage.
+
+    This table is deprecated in favor of bank_connections table.
+    Kept only for Alembic migration sync.
+    """
+
+    __tablename__ = "truelayer_connections"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    provider_id = Column(String(100), nullable=True)
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=True)
+    token_expires_at = Column(DateTime(timezone=False), nullable=True)
+    connection_status = Column(
+        String(50), nullable=True, default="active", server_default="active"
+    )
+    last_synced_at = Column(DateTime(timezone=False), nullable=True)
+    created_at = Column(DateTime(timezone=False), server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<TrueLayerConnection(id={self.id}, user_id={self.user_id}, status={self.connection_status})>"
+
+
+class TrueLayerOAuthState(Base):
+    """
+    DEPRECATED: Legacy OAuth state for TrueLayer connections.
+
+    This table is deprecated in favor of oauth_state table.
+    Kept only for Alembic migration sync.
+    """
+
+    __tablename__ = "truelayer_oauth_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False)
+    state = Column(Text, nullable=False, unique=True)
+    code_verifier = Column(Text, nullable=False)
+    created_at = Column(
+        DateTime(timezone=False), nullable=False, server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return f"<TrueLayerOAuthState(id={self.id}, user_id={self.user_id})>"
+
+
+class ConnectionLog(Base):
+    """
+    Logs for bank connection events.
+
+    Records connection lifecycle events (connect, disconnect, refresh, errors).
+    """
+
+    __tablename__ = "connection_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connection_id = Column(
+        Integer, ForeignKey("bank_connections.id", ondelete="CASCADE"), nullable=True
+    )
+    event_type = Column(String(50), nullable=False)
+    details = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<ConnectionLog(id={self.id}, event_type={self.event_type})>"

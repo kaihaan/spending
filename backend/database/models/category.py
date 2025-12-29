@@ -85,6 +85,12 @@ class CategoryRule(Base):
     usage_count = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=False), server_default=func.now())
 
+    # Foreign keys to normalized category tables
+    category_id = Column(Integer, ForeignKey("normalized_categories.id"), nullable=True)
+    subcategory_id = Column(
+        Integer, ForeignKey("normalized_subcategories.id"), nullable=True
+    )
+
     def __repr__(self) -> str:
         return f"<CategoryRule(id={self.id}, name={self.rule_name}, pattern={self.description_pattern})>"
 

@@ -33,9 +33,44 @@ POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5433"))
 PRODUCTION_DB = os.getenv("POSTGRES_DB", "spending_db")
 TEST_DB = os.getenv("POSTGRES_TEST_DB", "spending_db_test")
 
-# CRITICAL: Set test mode BEFORE importing database modules
+# ============================================================================
+# CRITICAL SAFETY: Set test mode BEFORE ANY database imports
+# ============================================================================
+# These environment variables MUST be set before importing any database modules
+# to ensure the Flask app connects to the test database, not production.
 os.environ["TESTING"] = "true"
 os.environ["POSTGRES_DB"] = TEST_DB
+
+# Verify the environment is correctly set
+assert os.environ.get("TESTING") == "true", "TESTING env var not set!"
+assert os.environ.get("POSTGRES_DB") == TEST_DB, f"POSTGRES_DB should be {TEST_DB}!"
+
+
+def verify_test_database_connection(session) -> None:
+    """Verify we are connected to the TEST database, not production.
+
+    CRITICAL: This function MUST pass before ANY test runs. If it fails,
+    tests could corrupt production data.
+
+    Raises:
+        RuntimeError: If connected to production database
+    """
+    current_db = session.execute(text("SELECT current_database()")).scalar()
+    if current_db == PRODUCTION_DB:
+        raise RuntimeError(
+            f"\n\n"
+            f"╔══════════════════════════════════════════════════════════════════╗\n"
+            f"║ CRITICAL SAFETY VIOLATION: CONNECTED TO PRODUCTION DATABASE!     ║\n"
+            f"╠══════════════════════════════════════════════════════════════════╣\n"
+            f"║ Expected: {TEST_DB:<54} ║\n"
+            f"║ Actual:   {current_db:<54} ║\n"
+            f"║                                                                  ║\n"
+            f"║ Tests MUST NEVER run against the production database.            ║\n"
+            f"║ This prevents accidental data loss or corruption.                ║\n"
+            f"╚══════════════════════════════════════════════════════════════════╝\n"
+        )
+    if current_db != TEST_DB:
+        print(f"⚠️  Warning: Connected to '{current_db}' (expected '{TEST_DB}')")
 
 
 # ============================================================================
@@ -249,8 +284,14 @@ def app() -> Flask:
     - CELERY_ALWAYS_EAGER=True (run tasks synchronously)
     - WTF_CSRF_ENABLED=False (disable CSRF for easier testing)
 
+    CRITICAL SAFETY: Verifies the app is connected to the test database
+    before returning. Raises RuntimeError if connected to production.
+
     Returns:
         Flask: Configured Flask application instance
+
+    Raises:
+        RuntimeError: If the Flask app is connected to production database
     """
     # Import app from app module (relative to backend directory)
     from app import app as flask_app
@@ -260,6 +301,26 @@ def app() -> Flask:
     flask_app.config["CELERY_ALWAYS_EAGER"] = True
     flask_app.config["WTF_CSRF_ENABLED"] = False
     flask_app.config["SERVER_NAME"] = "localhost:5000"
+
+    # CRITICAL: Verify Flask app is connected to test database
+    from database.base import engine
+
+    with engine.connect() as conn:
+        current_db = conn.execute(text("SELECT current_database()")).scalar()
+        if current_db == PRODUCTION_DB:
+            raise RuntimeError(
+                f"\n\n"
+                f"╔══════════════════════════════════════════════════════════════════╗\n"
+                f"║ CRITICAL: Flask app connected to PRODUCTION database!            ║\n"
+                f"╠══════════════════════════════════════════════════════════════════╣\n"
+                f"║ The Flask app's database engine is connected to '{current_db}'.\n"
+                f"║ Tests MUST use '{TEST_DB}' to prevent data corruption.\n"
+                f"║                                                                  ║\n"
+                f"║ Check that TESTING=true and POSTGRES_DB are set BEFORE           ║\n"
+                f"║ importing any database modules.                                  ║\n"
+                f"╚══════════════════════════════════════════════════════════════════╝\n"
+            )
+        print(f"\n✓ Flask app verified: connected to test database '{current_db}'")
 
     return flask_app
 
@@ -311,8 +372,9 @@ def app_context(app: Flask):
 def db_session(test_session_local):
     """Create a fresh database session for each test.
 
-    CRITICAL: Uses TEST database session (not production).
+    CRITICAL SAFETY: Uses TEST database session (not production).
     All test operations are isolated from production data.
+    Verifies connection to test database before yielding.
 
     Provides a database session that is rolled back after the test
     to ensure test isolation.
@@ -323,6 +385,9 @@ def db_session(test_session_local):
     Yields:
         Session: SQLAlchemy database session (connected to TEST database)
 
+    Raises:
+        RuntimeError: If connected to production database
+
     Example:
         def test_create_user(db_session):
             user = User(email="test@example.com")
@@ -331,6 +396,10 @@ def db_session(test_session_local):
             assert user.id is not None
     """
     session = test_session_local()
+
+    # CRITICAL: Verify we're connected to test database
+    verify_test_database_connection(session)
+
     yield session
     session.rollback()
     session.close()

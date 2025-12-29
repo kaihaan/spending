@@ -3,6 +3,9 @@
 SQLAlchemy Base and Engine Configuration
 
 Provides the declarative base for all models and engine factory.
+
+CRITICAL SAFETY: When TESTING=true, this module ONLY connects to the test
+database (spending_db_test). Production database access is blocked during tests.
 """
 
 import logging
@@ -19,6 +22,29 @@ load_dotenv(override=False)
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# CRITICAL: TEST DATABASE SAFETY CHECK
+# ============================================================================
+# Determine if we're in test mode and get the correct database name
+IS_TESTING = os.getenv("TESTING", "").lower() in ("true", "1", "yes")
+PRODUCTION_DB_NAME = "spending_db"
+TEST_DB_NAME = os.getenv("POSTGRES_TEST_DB", "spending_db_test")
+
+# Get the database name from environment
+db_name = os.getenv("POSTGRES_DB", PRODUCTION_DB_NAME)
+
+# SAFETY: If testing, FORCE use of test database
+if IS_TESTING:
+    if db_name == PRODUCTION_DB_NAME:
+        # Environment didn't set test DB - force it
+        db_name = TEST_DB_NAME
+        logger.warning(
+            f"TESTING=true but POSTGRES_DB was production. Forcing test database: {db_name}"
+        )
+    elif db_name != TEST_DB_NAME:
+        # Some other database - allow it but warn
+        logger.warning(f"TESTING=true with custom database: {db_name}")
+
 # Database URL (using URL.create to avoid password exposure in logs)
 DATABASE_URL = URL.create(
     "postgresql",
@@ -26,7 +52,7 @@ DATABASE_URL = URL.create(
     password=os.getenv("POSTGRES_PASSWORD", "spending_password"),
     host=os.getenv("POSTGRES_HOST", "localhost"),
     port=int(os.getenv("POSTGRES_PORT", "5433")),
-    database=os.getenv("POSTGRES_DB", "spending_db"),
+    database=db_name,
 )
 
 # Declarative base for all models

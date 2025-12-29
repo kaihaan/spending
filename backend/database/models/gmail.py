@@ -6,6 +6,14 @@ Maps to:
 - gmail_receipts table
 - gmail_email_content table
 - pdf_attachments table
+- gmail_oauth_state table
+- gmail_sync_jobs table
+- gmail_parse_statistics table
+- gmail_sender_patterns table
+- gmail_transaction_matches table
+- gmail_merchant_aliases table (DEPRECATED)
+- gmail_merchant_statistics table (DEPRECATED)
+- gmail_processing_errors table (DEPRECATED)
 
 See: .claude/docs/database/DATABASE_SCHEMA.md#23-gmail_connections
 """
@@ -114,6 +122,17 @@ class GmailReceipt(Base):
     llm_parsed_at = Column(DateTime(timezone=True), nullable=True)
     body_html = Column(Text, nullable=True)
     body_text = Column(Text, nullable=True)
+
+    # PDF attachment processing fields
+    pdf_processing_status = Column(
+        String(20),
+        nullable=True,
+        default="none",
+        server_default="none",
+        comment="Status of async PDF processing: none, pending, processing, completed, failed, skipped",
+    )
+    pdf_retry_count = Column(Integer, nullable=True, default=0, server_default="0")
+    pdf_last_error = Column(Text, nullable=True)
 
     __table_args__ = (
         Index("idx_gmail_receipts_connection", "connection_id"),
@@ -454,3 +473,157 @@ class GmailMatch(Base):
 
 
 # MatchingJob is imported from .category
+
+
+# ============================================================================
+# DEPRECATED TABLES - Kept for Alembic sync only
+# These tables exist in DB but are no longer actively used
+# ============================================================================
+
+
+class GmailMerchantAlias(Base):
+    """
+    DEPRECATED: Merchant name aliases for matching.
+
+    Maps bank statement names to receipt merchant names.
+    Kept only for Alembic migration sync.
+    """
+
+    __tablename__ = "gmail_merchant_aliases"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bank_name = Column(String(255), nullable=False)
+    receipt_name = Column(String(255), nullable=False)
+    normalized_name = Column(String(255), nullable=False)
+    is_active = Column(Boolean, nullable=True, default=True, server_default="true")
+    usage_count = Column(Integer, nullable=True, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<GmailMerchantAlias(id={self.id}, bank={self.bank_name}, receipt={self.receipt_name})>"
+
+
+class GmailMerchantStatistic(Base):
+    """
+    DEPRECATED: Aggregated statistics for merchant parsing.
+
+    Tracks parsing success rates by merchant and parse method.
+    Kept only for Alembic migration sync.
+    """
+
+    __tablename__ = "gmail_merchant_statistics"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connection_id = Column(
+        Integer,
+        ForeignKey("gmail_connections.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    sender_domain = Column(String(255), nullable=False)
+    merchant_normalized = Column(String(255), nullable=True)
+    parse_method = Column(String(30), nullable=True)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    total_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    parsed_count = Column(Integer, nullable=False, default=0, server_default="0")
+    failed_count = Column(Integer, nullable=False, default=0, server_default="0")
+    merchant_extracted_count = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    brand_extracted_count = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    amount_extracted_count = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    date_extracted_count = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    order_id_extracted_count = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    line_items_extracted_count = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    match_attempted_count = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    match_success_count = Column(Integer, nullable=False, default=0, server_default="0")
+    avg_match_confidence = Column(Numeric(5, 2), nullable=True)
+    avg_parse_duration_ms = Column(Integer, nullable=True)
+    total_llm_cost_cents = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id",
+            "sender_domain",
+            "merchant_normalized",
+            "parse_method",
+            "period_start",
+            name="unique_merchant_stats",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<GmailMerchantStatistic(id={self.id}, domain={self.sender_domain}, method={self.parse_method})>"
+
+
+class GmailProcessingError(Base):
+    """
+    DEPRECATED: Error tracking for Gmail processing.
+
+    Records errors during Gmail sync and parsing.
+    Kept only for Alembic migration sync.
+    """
+
+    __tablename__ = "gmail_processing_errors"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connection_id = Column(
+        Integer,
+        ForeignKey("gmail_connections.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    sync_job_id = Column(
+        Integer,
+        ForeignKey("gmail_sync_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    message_id = Column(String(255), nullable=True)
+    receipt_id = Column(
+        Integer,
+        ForeignKey("gmail_receipts.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    error_stage = Column(String(30), nullable=False)
+    error_type = Column(String(30), nullable=False)
+    error_message = Column(Text, nullable=False)
+    stack_trace = Column(Text, nullable=True)
+    error_context = Column(JSONB, nullable=True)
+    is_retryable = Column(Boolean, nullable=True, default=False, server_default="false")
+    retry_count = Column(Integer, nullable=True, default=0, server_default="0")
+    last_retry_at = Column(DateTime(timezone=True), nullable=True)
+    occurred_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "error_stage IN ('fetch', 'parse', 'vendor_parse', 'schema_parse', "
+            "'pattern_parse', 'llm_parse', 'pdf_parse', 'storage', 'match', 'validation')",
+            name="gmail_processing_errors_error_stage_check",
+        ),
+        CheckConstraint(
+            "error_type IN ('api_error', 'timeout', 'parse_error', 'validation', "
+            "'db_error', 'network', 'rate_limit', 'auth_error', 'unknown')",
+            name="gmail_processing_errors_error_type_check",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<GmailProcessingError(id={self.id}, stage={self.error_stage}, type={self.error_type})>"

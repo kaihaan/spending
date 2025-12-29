@@ -5,11 +5,23 @@ User model for authentication and account management.
 Maps to:
 - users table
 - account_mappings table - User-friendly names for bank accounts
+- user_sessions table - Session management for authenticated users
+- security_audit_log table - Security event tracking
 
 See: .claude/docs/database/DATABASE_SCHEMA.md
 """
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
 from database.base import Base
@@ -59,3 +71,55 @@ class AccountMapping(Base):
 
     def __repr__(self) -> str:
         return f"<AccountMapping(id={self.id}, friendly_name={self.friendly_name})>"
+
+
+class UserSession(Base):
+    """
+    Session management for authenticated users.
+
+    Stores session data with expiration and activity tracking.
+    """
+
+    __tablename__ = "user_sessions"
+
+    id = Column(String(255), primary_key=True)  # UUID or session token
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    session_data = Column(JSONB, nullable=False, server_default="{}")
+    created_at = Column(
+        DateTime(timezone=False), nullable=False, server_default=func.now()
+    )
+    expires_at = Column(DateTime(timezone=False), nullable=False)
+    last_activity_at = Column(
+        DateTime(timezone=False), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = ({"comment": "User sessions for authentication"},)
+
+    def __repr__(self) -> str:
+        return f"<UserSession(id={self.id}, user_id={self.user_id})>"
+
+
+class SecurityAuditLog(Base):
+    """
+    Security event tracking and audit log.
+
+    Records authentication events, permission changes, and security-relevant actions.
+    """
+
+    __tablename__ = "security_audit_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    event_type = Column(String(50), nullable=False)
+    ip_address = Column(String(45))  # IPv6 compatible
+    user_agent = Column(Text)
+    timestamp = Column(
+        DateTime(timezone=False), nullable=False, server_default=func.now()
+    )
+    metadata_ = Column(
+        "metadata", JSONB, server_default="{}"
+    )  # 'metadata' is reserved in SQLAlchemy
+    success = Column(Boolean, nullable=False, server_default="false")
+
+    def __repr__(self) -> str:
+        return f"<SecurityAuditLog(id={self.id}, event_type={self.event_type})>"

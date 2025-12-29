@@ -186,5 +186,5 @@ def test_alembic_version_tracking():
         result = conn.execute(text("SELECT version_num FROM alembic_version"))
         version = result.scalar()
 
-        # Should have our migration version
-        assert version == "4c0e082bb23c"
+        # Should have our migration version (baseline from re-baseline operation)
+        assert version == "b2c6ccfa452a"

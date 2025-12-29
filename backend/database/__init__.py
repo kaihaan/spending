@@ -148,8 +148,9 @@ from .enrichment import (
 from .gmail import (
     cleanup_expired_gmail_oauth_states,
     cleanup_stale_gmail_jobs,
-    confirm_gmail_match,
     # Sync jobs
+    complete_gmail_sync_job,
+    confirm_gmail_match,
     create_gmail_sync_job,
     delete_gmail_connection,
     delete_gmail_match,
@@ -157,6 +158,8 @@ from .gmail import (
     get_amazon_order_for_transaction,
     get_apple_transaction_for_match,
     get_gmail_connection,
+    get_gmail_connection_by_id,
+    get_gmail_email_content,
     get_gmail_error_summary,
     get_gmail_matches,
     get_gmail_matches_for_transaction,
@@ -204,6 +207,7 @@ from .gmail import (
     # OAuth state
     store_gmail_oauth_state,
     update_gmail_connection_status,
+    update_gmail_history_id,
     update_gmail_receipt_from_pdf,
     # Receipt updates
     update_gmail_receipt_parsed,

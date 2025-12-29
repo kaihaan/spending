@@ -1,8 +1,8 @@
 # Database Schema Documentation
 
-**Last Updated:** 2025-12-28
+**Last Updated:** 2025-12-29
 **Database Type:** PostgreSQL (via Docker)
-**ORM:** Direct SQL via `psycopg2` with cursor factory for dict conversion
+**ORM:** SQLAlchemy 2.0 + Alembic migrations (migrated from raw psycopg2)
 
 ## Overview
 
@@ -19,6 +19,37 @@ This document provides a comprehensive reference for the Personal Finance applic
 ---
 
 ## Schema Changes Log
+
+### 2025-12-29: SQLAlchemy Model Completion & Alembic Re-baseline
+- **Change:** Completed SQLAlchemy model coverage for all 54 database tables
+- **Reason:** Schema drift between SQL init scripts, SQLAlchemy models, and Alembic migrations
+- **Models Added:**
+  - `UserSession` - Session management for authenticated users
+  - `SecurityAuditLog` - Security event tracking and audit log
+  - `TrueLayerConnection` - Legacy TrueLayer connection storage (deprecated)
+  - `TrueLayerOAuthState` - Legacy OAuth state for TrueLayer connections (deprecated)
+  - `ConnectionLog` - Logs for bank connection events
+  - `GmailMerchantAlias` - Merchant name aliases for matching (deprecated)
+  - `GmailMerchantStatistic` - Aggregated statistics for merchant parsing (deprecated)
+  - `GmailProcessingError` - Error tracking for Gmail processing (deprecated)
+  - `LLMModel` - LLM model configuration (deprecated)
+- **Models Fixed:**
+  - `CategoryRule` - Added missing `category_id` and `subcategory_id` foreign key columns
+- **Alembic Re-baseline:**
+  - Deleted stale migration `4c0e082bb23c_initial_schema_from_sqlalchemy_models.py`
+  - Created new baseline `b2c6ccfa452a_baseline_from_production_db.py`
+  - Database stamped at `b2c6ccfa452a` (no migration executed)
+  - Future schema changes will generate proper incremental migrations
+- **Deprecated Tables Identified:** 15 tables marked as deprecated based on `pg_stat_user_tables` usage analytics:
+  - Zero activity: `transactions`, `truelayer_connections`, `truelayer_oauth_state`, `gmail_merchant_aliases`, `gmail_merchant_statistics`, `gmail_processing_errors`, `llm_models`
+  - Low activity: `amazon_transaction_matches`, `apple_transaction_matches`
+- **Files Updated:**
+  - `backend/database/models/user.py` - Added UserSession, SecurityAuditLog
+  - `backend/database/models/truelayer.py` - Added TrueLayerConnection, TrueLayerOAuthState, ConnectionLog
+  - `backend/database/models/gmail.py` - Added GmailMerchantAlias, GmailMerchantStatistic, GmailProcessingError
+  - `backend/database/models/enrichment.py` - Added LLMModel
+  - `backend/database/models/category.py` - Added category_id, subcategory_id to CategoryRule
+  - `backend/tests/test_migration_verify.py` - Updated expected Alembic version
 
 ### 2025-12-28: Users Table Documentation Update
 - **Change:** Documented 5 undocumented columns in `users` table (username, password_hash, is_admin, is_active, last_login_at)
@@ -157,6 +188,54 @@ User accounts for the personal finance application.
 - Authentication system assumes optional password (username/password can be NULL for OAuth-only accounts)
 - `is_admin` controls access to admin-only API endpoints
 - `is_active` allows soft-disabling accounts without deletion
+
+---
+
+### 1b. `user_sessions`
+Session management for authenticated users.
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| id | VARCHAR(255) | NO | | Primary key (UUID or session token) |
+| user_id | INTEGER | YES | | FK to `users.id` (CASCADE DELETE) |
+| session_data | JSONB | NO | '{}' | Session metadata |
+| created_at | TIMESTAMP | NO | NOW() | Session creation timestamp |
+| expires_at | TIMESTAMP | NO | | Session expiry time |
+| last_activity_at | TIMESTAMP | NO | NOW() | Last activity timestamp |
+
+**Primary Key:** `id`
+**Foreign Key:** `user_id` → `users.id` (ON DELETE CASCADE)
+**Indexes:**
+- `idx_user_sessions_user_id` (btree on user_id)
+- `idx_user_sessions_expires_at` (btree on expires_at)
+
+**SQLAlchemy Model:** `database/models/user.py` → `UserSession`
+
+---
+
+### 1c. `security_audit_log`
+Security event tracking and audit log for authentication events, permission changes, and security-relevant actions.
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| id | INTEGER | NO | AUTO | Primary key |
+| user_id | INTEGER | YES | | FK to `users.id` |
+| event_type | VARCHAR(50) | NO | | Event type: 'login', 'logout', 'password_change', etc. |
+| ip_address | VARCHAR(45) | YES | | Client IP address (IPv6 compatible) |
+| user_agent | TEXT | YES | | Client user agent string |
+| timestamp | TIMESTAMP | NO | NOW() | Event timestamp |
+| metadata | JSONB | YES | '{}' | Event-specific metadata |
+| success | BOOLEAN | NO | FALSE | Whether event was successful |
+
+**Primary Key:** `id`
+**Foreign Key:** `user_id` → `users.id`
+**Indexes:**
+- `idx_security_audit_user_id` (btree on user_id)
+- `idx_security_audit_timestamp` (btree on timestamp)
+- `idx_security_audit_event_type` (btree on event_type)
+- `idx_security_audit_ip` (btree on ip_address)
+
+**SQLAlchemy Model:** `database/models/user.py` → `SecurityAuditLog`
 
 ---
 
@@ -691,21 +770,47 @@ Incoming webhook events from TrueLayer.
 ### 22. `truelayer_connections` (LEGACY)
 **Status:** DEPRECATED - Use `bank_connections` instead
 
-This table is no longer used. Kept for historical reference. All new code must use `bank_connections`.
+This table is no longer used. Kept for historical reference and Alembic sync. All new code must use `bank_connections`.
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| id | INTEGER | NO | AUTO | Primary key |
+| user_id | INTEGER | NO | | FK to `users.id` (CASCADE DELETE) |
+| provider_id | VARCHAR(100) | YES | | Provider identifier |
+| access_token | TEXT | NO | | **ENCRYPTED** OAuth token |
+| refresh_token | TEXT | YES | | **ENCRYPTED** refresh token |
+| token_expires_at | TIMESTAMP | YES | | Token expiry |
+| connection_status | VARCHAR(50) | YES | 'active' | Connection status |
+| last_synced_at | TIMESTAMP | YES | | Last sync time |
+| created_at | TIMESTAMP | YES | NOW() | Creation timestamp |
+
+**Primary Key:** `id`
+**Foreign Key:** `user_id` → `users.id` (ON DELETE CASCADE)
+**SQLAlchemy Model:** `database/models/truelayer.py` → `TrueLayerConnection` (DEPRECATED)
+
+**DO NOT USE IN NEW CODE** - All references should be migrated to `bank_connections`
+
+---
+
+### 22b. `truelayer_oauth_state` (LEGACY)
+**Status:** DEPRECATED - Use `oauth_state` instead
+
+Legacy OAuth state storage for TrueLayer connections. Kept for Alembic sync only.
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
 | id | INTEGER | NO | AUTO | Primary key |
 | user_id | INTEGER | NO | | FK to `users.id` |
-| provider_id | VARCHAR | YES | | Provider identifier |
-| access_token | TEXT | NO | | **ENCRYPTED** OAuth token |
-| refresh_token | TEXT | YES | | **ENCRYPTED** refresh token |
-| token_expires_at | TIMESTAMP | YES | | Token expiry |
-| connection_status | VARCHAR | YES | 'active' | Connection status |
-| last_synced_at | TIMESTAMP | YES | | Last sync time |
-| created_at | TIMESTAMP | YES | CURRENT_TIMESTAMP | Creation timestamp |
+| state | VARCHAR(100) | NO | | OAuth state token |
+| code_verifier | TEXT | NO | | PKCE code verifier |
+| expires_at | TIMESTAMP | NO | | State expiry time |
+| created_at | TIMESTAMP | YES | NOW() | Creation timestamp |
 
-**DO NOT USE IN NEW CODE** - All references should be migrated to `bank_connections`
+**Primary Key:** `id`
+**Foreign Key:** `user_id` → `users.id`
+**SQLAlchemy Model:** `database/models/truelayer.py` → `TrueLayerOAuthState` (DEPRECATED)
+
+**DO NOT USE IN NEW CODE** - Use `oauth_state` table instead
 
 ---
 
@@ -868,6 +973,130 @@ The Gmail integration uses 4 tables to store OAuth credentials, parsed receipts,
 - Endpoint: `localhost:9000` (host) or `minio:9000` (Docker network)
 - Web Console: `http://localhost:9001`
 - API: S3-compatible (use `minio` Python package)
+
+---
+
+## Deprecated Tables
+
+Tables marked as deprecated based on usage analytics. These exist in the database for historical data and Alembic sync, but should not be used in new code.
+
+### D1. `gmail_merchant_aliases` (DEPRECATED)
+**Status:** DEPRECATED - Zero activity in usage analytics
+
+Merchant name aliases for matching bank transactions to Gmail receipts.
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| id | INTEGER | NO | AUTO | Primary key |
+| connection_id | INTEGER | NO | | FK to `gmail_connections.id` |
+| receipt_merchant_name | VARCHAR(255) | NO | | Merchant name from receipt |
+| bank_description_pattern | VARCHAR(255) | NO | | Pattern to match in bank descriptions |
+| created_at | TIMESTAMP+TZ | YES | NOW() | Creation timestamp |
+
+**Primary Key:** `id`
+**Foreign Key:** `connection_id` → `gmail_connections.id` (ON DELETE CASCADE)
+**Indexes:**
+- `idx_gmail_merchant_aliases_receipt` (btree on receipt_merchant_name)
+- `idx_gmail_merchant_aliases_bank` (btree on bank_description_pattern)
+
+**SQLAlchemy Model:** `database/models/gmail.py` → `GmailMerchantAlias` (DEPRECATED)
+
+---
+
+### D2. `gmail_merchant_statistics` (DEPRECATED)
+**Status:** DEPRECATED - Zero activity in usage analytics
+
+Aggregated statistics for merchant parsing performance.
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| id | INTEGER | NO | AUTO | Primary key |
+| connection_id | INTEGER | NO | | FK to `gmail_connections.id` |
+| merchant_name | VARCHAR(255) | NO | | Merchant name |
+| parse_method | VARCHAR(30) | NO | | Parsing method used |
+| period_start | DATE | NO | | Statistics period start |
+| period_end | DATE | NO | | Statistics period end |
+| receipt_count | INTEGER | NO | 0 | Number of receipts |
+| matched_count | INTEGER | NO | 0 | Number matched to transactions |
+| total_amount | NUMERIC(12,2) | YES | | Total amount parsed |
+| avg_confidence | INTEGER | YES | | Average parse confidence |
+| created_at | TIMESTAMP+TZ | YES | NOW() | Creation timestamp |
+| updated_at | TIMESTAMP+TZ | YES | NOW() | Last update timestamp |
+
+**Primary Key:** `id`
+**Foreign Key:** `connection_id` → `gmail_connections.id` (ON DELETE CASCADE)
+**Unique Constraint:** `(connection_id, merchant_name, parse_method, period_start)`
+**Indexes:**
+- `idx_merchant_stats_connection` (btree on connection_id)
+- `idx_merchant_stats_merchant` (btree on merchant_name)
+- `idx_merchant_stats_method` (btree on parse_method)
+- `idx_merchant_stats_period` (btree on period_start)
+
+**SQLAlchemy Model:** `database/models/gmail.py` → `GmailMerchantStatistic` (DEPRECATED)
+
+---
+
+### D3. `gmail_processing_errors` (DEPRECATED)
+**Status:** DEPRECATED - Zero activity in usage analytics
+
+Error tracking for Gmail processing failures.
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| id | INTEGER | NO | AUTO | Primary key |
+| connection_id | INTEGER | NO | | FK to `gmail_connections.id` |
+| job_id | INTEGER | YES | | FK to `gmail_sync_jobs.id` |
+| message_id | VARCHAR(255) | YES | | Gmail message ID |
+| error_stage | VARCHAR(30) | NO | | Stage: 'fetch', 'parse', 'match', 'enrich' |
+| error_type | VARCHAR(50) | NO | | Error type classification |
+| error_message | TEXT | YES | | Full error message |
+| stack_trace | TEXT | YES | | Stack trace if available |
+| occurred_at | TIMESTAMP+TZ | NO | NOW() | When error occurred |
+| resolved_at | TIMESTAMP+TZ | YES | | When error was resolved |
+| retry_count | INTEGER | NO | 0 | Number of retries |
+
+**Primary Key:** `id`
+**Foreign Keys:**
+- `connection_id` → `gmail_connections.id` (ON DELETE CASCADE)
+- `job_id` → `gmail_sync_jobs.id` (ON DELETE SET NULL)
+**Check Constraints:**
+- `error_stage` IN ('fetch', 'parse', 'match', 'enrich')
+- `error_type` IN ('api_error', 'rate_limit', 'auth_error', 'parse_error', 'validation_error', 'unknown')
+**Indexes:**
+- `idx_errors_connection` (btree on connection_id)
+- `idx_errors_job` (btree on job_id)
+- `idx_errors_stage` (btree on error_stage)
+- `idx_errors_type` (btree on error_type)
+- `idx_errors_occurred` (btree on occurred_at)
+
+**SQLAlchemy Model:** `database/models/gmail.py` → `GmailProcessingError` (DEPRECATED)
+
+---
+
+### D4. `llm_models` (DEPRECATED)
+**Status:** DEPRECATED - LLM configuration now via environment variables
+
+Originally used to track available LLM models for enrichment.
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| id | INTEGER | NO | AUTO | Primary key |
+| provider | VARCHAR(50) | NO | | Provider: 'anthropic', 'openai', 'google', etc. |
+| model_name | VARCHAR(255) | NO | | Model identifier |
+| display_name | VARCHAR(255) | YES | | User-friendly name |
+| is_builtin | BOOLEAN | YES | TRUE | Whether model is a built-in option |
+| is_active | BOOLEAN | YES | FALSE | Whether model is currently active |
+| created_at | TIMESTAMP | YES | NOW() | Creation timestamp |
+
+**Primary Key:** `id`
+**Unique Constraint:** `(provider, model_name)`
+
+**SQLAlchemy Model:** `database/models/enrichment.py` → `LLMModel` (DEPRECATED)
+
+**DO NOT USE** - LLM configuration is now managed via environment variables:
+- `LLM_PROVIDER` - Active provider
+- `LLM_MODEL` - Active model
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc. - API keys
 
 ---
 
@@ -1142,7 +1371,7 @@ docker exec spending-postgres psql -U spending_user -d spending_db -f /path/to/m
 
 ## Maintenance
 
-- **Last Reviewed:** 2025-11-27
+- **Last Reviewed:** 2025-12-29
 - **Maintenance Window:** Weekly (every Monday)
 - **Backup Frequency:** Daily (via Docker volume)
 - **Reindex Frequency:** Monthly
