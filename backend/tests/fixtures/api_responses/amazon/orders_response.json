@@ -1,0 +1,52 @@
+{
+  "payload": {
+    "Orders": [
+      {
+        "AmazonOrderId": "902-1234567-8901234",
+        "PurchaseDate": "2025-01-15T10:30:00Z",
+        "LastUpdateDate": "2025-01-15T10:35:00Z",
+        "OrderStatus": "Shipped",
+        "FulfillmentChannel": "MFN",
+        "SalesChannel": "Amazon.co.uk",
+        "OrderChannel": "Amazon.co.uk",
+        "MarketplaceId": "A1F83G8C2ARO7P",
+        "OrderTotal": {
+          "CurrencyCode": "GBP",
+          "Amount": "45.99"
+        },
+        "NumberOfItemsShipped": 2,
+        "NumberOfItemsUnshipped": 0,
+        "PaymentMethod": "Other",
+        "IsBusinessOrder": false,
+        "IsPrime": true,
+        "IsGlobalExpressEnabled": false,
+        "IsPremiumOrder": false,
+        "EarliestShipDate": "2025-01-15T00:00:00Z",
+        "LatestShipDate": "2025-01-16T23:59:59Z"
+      },
+      {
+        "AmazonOrderId": "902-9876543-2109876",
+        "PurchaseDate": "2025-01-14T16:20:00Z",
+        "LastUpdateDate": "2025-01-14T16:25:00Z",
+        "OrderStatus": "Unshipped",
+        "FulfillmentChannel": "AFN",
+        "SalesChannel": "Amazon.co.uk",
+        "OrderChannel": "Amazon.co.uk",
+        "MarketplaceId": "A1F83G8C2ARO7P",
+        "OrderTotal": {
+          "CurrencyCode": "GBP",
+          "Amount": "23.50"
+        },
+        "NumberOfItemsShipped": 0,
+        "NumberOfItemsUnshipped": 1,
+        "PaymentMethod": "Other",
+        "IsBusinessOrder": true,
+        "IsPrime": false,
+        "IsGlobalExpressEnabled": false,
+        "IsPremiumOrder": false,
+        "EarliestShipDate": "2025-01-16T00:00:00Z",
+        "LatestShipDate": "2025-01-17T23:59:59Z"
+      }
+    ]
+  }
+}

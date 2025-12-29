@@ -1,11 +1,17 @@
 # tests/test_models/test_enrichment.py
+"""Tests for enrichment SQLAlchemy models.
+
+Uses test database from conftest.py with "leave no trace" cleanup pattern.
+All test data is created with unique identifiers and cleaned up after tests.
+"""
+
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from database.base import Base, SessionLocal, engine
 from database.models.enrichment import (
     EnrichmentCache,
     TransactionEnrichmentSource,
@@ -17,100 +23,103 @@ from database.models.truelayer import (
 )
 from database.models.user import User
 
-
-@pytest.fixture
-def db_session():
-    """Create a database session for testing."""
-    # Create tables before each test
-    Base.metadata.create_all(bind=engine)
-
-    # Clean up any existing test data (reverse order due to foreign keys)
-    connection = engine.connect()
-    trans = connection.begin()
-    try:
-        connection.execute(TransactionEnrichmentSource.__table__.delete())
-        connection.execute(EnrichmentCache.__table__.delete())
-        connection.execute(TrueLayerTransaction.__table__.delete())
-        connection.execute(TrueLayerAccount.__table__.delete())
-        connection.execute(BankConnection.__table__.delete())
-        connection.execute(User.__table__.delete())
-        trans.commit()
-    except Exception:
-        trans.rollback()
-    finally:
-        connection.close()
-
-    session = SessionLocal()
-
-    yield session
-
-    # Clean up and close session
-    session.rollback()
-    session.close()
-
-    # Clean up test data
-    connection = engine.connect()
-    trans = connection.begin()
-    try:
-        connection.execute(TransactionEnrichmentSource.__table__.delete())
-        connection.execute(EnrichmentCache.__table__.delete())
-        connection.execute(TrueLayerTransaction.__table__.delete())
-        connection.execute(TrueLayerAccount.__table__.delete())
-        connection.execute(BankConnection.__table__.delete())
-        connection.execute(User.__table__.delete())
-        trans.commit()
-    except Exception:
-        trans.rollback()
-    finally:
-        connection.close()
+# ============================================================================
+# Test Fixtures with Cleanup (Leave No Trace Pattern)
+#
+# Note: Database FK constraints don't have ON DELETE CASCADE, so we must
+# delete in reverse dependency order: child records before parent records.
+# ============================================================================
 
 
 @pytest.fixture
-def user(db_session):
-    """Create a test user."""
-    test_user = User(email="test@example.com")
-    db_session.add(test_user)
+def test_user(db_session):
+    """Create a test user with unique email, cleaned up after test.
+
+    Note: This fixture must be the LAST to yield in the fixture chain
+    so it cleans up FIRST (pytest teardown is LIFO order).
+    """
+    unique_email = f"test_enrichment_{uuid.uuid4().hex[:8]}@example.com"
+    user = User(email=unique_email)
+    db_session.add(user)
     db_session.commit()
-    return test_user
+    user_id = user.id
+
+    yield user
+
+    # Cleanup: User is deleted by dependent fixtures first (LIFO teardown)
+    # Only delete if still exists (might have been deleted by cascade test)
+    try:
+        db_session.rollback()  # Clear any pending state
+        existing_user = db_session.get(User, user_id)
+        if existing_user:
+            db_session.delete(existing_user)
+            db_session.commit()
+    except Exception:
+        db_session.rollback()
 
 
 @pytest.fixture
-def bank_connection(db_session, user):
-    """Create a test bank connection."""
+def bank_connection(db_session, test_user):
+    """Create a test bank connection, explicitly cleaned up before user."""
     connection = BankConnection(
-        user_id=user.id,
-        provider_id="truelayer",
+        user_id=test_user.id,
+        provider_id=f"test_provider_{uuid.uuid4().hex[:8]}",
         provider_name="Test Bank",
         access_token="encrypted_token",
         connection_status="active",
     )
     db_session.add(connection)
     db_session.commit()
-    return connection
+    connection_id = connection.id
+
+    yield connection
+
+    # Cleanup: Delete connection before user cleanup runs
+    try:
+        db_session.rollback()  # Clear any pending state
+        existing = db_session.get(BankConnection, connection_id)
+        if existing:
+            db_session.delete(existing)
+            db_session.commit()
+    except Exception:
+        db_session.rollback()
 
 
 @pytest.fixture
 def truelayer_account(db_session, bank_connection):
-    """Create a test TrueLayer account."""
+    """Create a test TrueLayer account, explicitly cleaned up before connection."""
     account = TrueLayerAccount(
         connection_id=bank_connection.id,
-        account_id="test-account-123",
+        account_id=f"test-account-{uuid.uuid4().hex[:8]}",
         account_type="TRANSACTION",
         display_name="Test Current Account",
         currency="GBP",
     )
     db_session.add(account)
     db_session.commit()
-    return account
+    account_id = account.id
+
+    yield account
+
+    # Cleanup: Delete account before connection cleanup runs
+    try:
+        db_session.rollback()  # Clear any pending state
+        existing = db_session.get(TrueLayerAccount, account_id)
+        if existing:
+            db_session.delete(existing)
+            db_session.commit()
+    except Exception:
+        db_session.rollback()
 
 
 @pytest.fixture
 def truelayer_transaction(db_session, truelayer_account):
-    """Create a test TrueLayer transaction."""
+    """Create a test TrueLayer transaction, explicitly cleaned up before account."""
+    unique_id = uuid.uuid4().hex[:8]
     txn = TrueLayerTransaction(
         account_id=truelayer_account.id,
-        transaction_id="txn-123",
-        normalised_provider_transaction_id="norm-txn-123",
+        transaction_id=f"txn-{unique_id}",
+        normalised_provider_transaction_id=f"norm-txn-{unique_id}",
         timestamp=datetime(2025, 1, 15, 10, 30, 0, tzinfo=UTC),
         description="AMAZON MARKETPLACE",
         amount=Decimal("29.99"),
@@ -119,7 +128,19 @@ def truelayer_transaction(db_session, truelayer_account):
     )
     db_session.add(txn)
     db_session.commit()
-    return txn
+    txn_id = txn.id
+
+    yield txn
+
+    # Cleanup: Delete transaction before account cleanup runs
+    try:
+        db_session.rollback()  # Clear any pending state
+        existing = db_session.get(TrueLayerTransaction, txn_id)
+        if existing:
+            db_session.delete(existing)
+            db_session.commit()
+    except Exception:
+        db_session.rollback()
 
 
 # ============================================================================
@@ -285,54 +306,77 @@ def test_enrichment_source_repr(db_session, truelayer_transaction):
 
 
 # ============================================================================
-# EnrichmentCache Tests
+# EnrichmentCache Tests (with cleanup)
 # ============================================================================
 
 
 def test_create_enrichment_cache(db_session):
     """Test creating an enrichment cache entry."""
+    unique_desc = f"AMAZON MARKETPLACE_{uuid.uuid4().hex[:8]}"
     cache = EnrichmentCache(
-        transaction_description="AMAZON MARKETPLACE",
+        transaction_description=unique_desc,
         transaction_direction="DEBIT",
         enrichment_data='{"category": "Shopping", "merchant": "Amazon"}',
     )
     db_session.add(cache)
     db_session.commit()
 
-    assert cache.id is not None
-    assert cache.transaction_description == "AMAZON MARKETPLACE"
-    assert cache.transaction_direction == "DEBIT"
-    assert cache.enrichment_data == '{"category": "Shopping", "merchant": "Amazon"}'
-    assert cache.cached_at is not None
+    try:
+        assert cache.id is not None
+        assert cache.transaction_description == unique_desc
+        assert cache.transaction_direction == "DEBIT"
+        assert cache.enrichment_data == '{"category": "Shopping", "merchant": "Amazon"}'
+        assert cache.cached_at is not None
+    finally:
+        # Cleanup
+        db_session.delete(cache)
+        db_session.commit()
 
 
 def test_enrichment_cache_unique_constraint(db_session):
     """Test UNIQUE constraint on (description, direction)."""
+    unique_desc = f"STARBUCKS_{uuid.uuid4().hex[:8]}"
+
     # Create first cache entry
     cache1 = EnrichmentCache(
-        transaction_description="STARBUCKS",
+        transaction_description=unique_desc,
         transaction_direction="DEBIT",
         enrichment_data='{"category": "Food & Drink"}',
     )
     db_session.add(cache1)
     db_session.commit()
 
-    # Attempt to create duplicate
-    cache2 = EnrichmentCache(
-        transaction_description="STARBUCKS",  # Same description
-        transaction_direction="DEBIT",  # Same direction
-        enrichment_data='{"category": "Different"}',
-    )
-    db_session.add(cache2)
+    try:
+        # Attempt to create duplicate
+        cache2 = EnrichmentCache(
+            transaction_description=unique_desc,  # Same description
+            transaction_direction="DEBIT",  # Same direction
+            enrichment_data='{"category": "Different"}',
+        )
+        db_session.add(cache2)
 
-    with pytest.raises(IntegrityError):
-        db_session.commit()
+        with pytest.raises(IntegrityError):
+            db_session.commit()
+    finally:
+        # Cleanup - rollback any failed transaction first
+        db_session.rollback()
+        # Re-fetch and delete cache1
+        cache1 = (
+            db_session.query(EnrichmentCache)
+            .filter_by(transaction_description=unique_desc)
+            .first()
+        )
+        if cache1:
+            db_session.delete(cache1)
+            db_session.commit()
 
 
 def test_enrichment_cache_different_directions(db_session):
     """Test same description with different directions is allowed."""
+    unique_desc = f"PAYPAL TRANSFER_{uuid.uuid4().hex[:8]}"
+
     cache1 = EnrichmentCache(
-        transaction_description="PAYPAL TRANSFER",
+        transaction_description=unique_desc,
         transaction_direction="DEBIT",
         enrichment_data='{"category": "Payment"}',
     )
@@ -341,39 +385,55 @@ def test_enrichment_cache_different_directions(db_session):
 
     # Different direction should be allowed
     cache2 = EnrichmentCache(
-        transaction_description="PAYPAL TRANSFER",
+        transaction_description=unique_desc,
         transaction_direction="CREDIT",
         enrichment_data='{"category": "Refund"}',
     )
     db_session.add(cache2)
     db_session.commit()
 
-    assert cache1.id != cache2.id
+    try:
+        assert cache1.id != cache2.id
+    finally:
+        # Cleanup both
+        db_session.delete(cache1)
+        db_session.delete(cache2)
+        db_session.commit()
 
 
 def test_enrichment_cache_nullable_direction(db_session):
     """Test enrichment cache with NULL direction."""
+    unique_desc = f"GENERIC TRANSACTION_{uuid.uuid4().hex[:8]}"
     cache = EnrichmentCache(
-        transaction_description="GENERIC TRANSACTION",
+        transaction_description=unique_desc,
         transaction_direction=None,
         enrichment_data='{"category": "Other"}',
     )
     db_session.add(cache)
     db_session.commit()
 
-    assert cache.transaction_direction is None
+    try:
+        assert cache.transaction_direction is None
+    finally:
+        db_session.delete(cache)
+        db_session.commit()
 
 
 def test_enrichment_cache_repr(db_session):
     """Test __repr__ method."""
+    unique_desc = f"AMAZON_{uuid.uuid4().hex[:8]}"
     cache = EnrichmentCache(
-        transaction_description="AMAZON",
+        transaction_description=unique_desc,
         transaction_direction="DEBIT",
         enrichment_data='{"category": "Shopping"}',
     )
     db_session.add(cache)
     db_session.commit()
 
-    repr_str = repr(cache)
-    assert "EnrichmentCache" in repr_str
-    assert "AMAZON" in repr_str
+    try:
+        repr_str = repr(cache)
+        assert "EnrichmentCache" in repr_str
+        assert unique_desc in repr_str
+    finally:
+        db_session.delete(cache)
+        db_session.commit()

@@ -1,0 +1,34 @@
+{
+  "results": [
+    {
+      "account_id": "acc-test-1234",
+      "account_type": "TRANSACTION",
+      "display_name": "Current Account",
+      "currency": "GBP",
+      "account_number": {
+        "iban": "GB33BUKB20201555555555",
+        "number": "12345678",
+        "sort_code": "20-20-15"
+      },
+      "provider": {
+        "provider_id": "uk-ob-monzo"
+      },
+      "update_timestamp": "2025-01-15T10:30:00Z"
+    },
+    {
+      "account_id": "acc-test-5678",
+      "account_type": "SAVINGS",
+      "display_name": "Savings Account",
+      "currency": "GBP",
+      "account_number": {
+        "number": "87654321",
+        "sort_code": "20-20-15"
+      },
+      "provider": {
+        "provider_id": "uk-ob-monzo"
+      },
+      "update_timestamp": "2025-01-15T10:30:00Z"
+    }
+  ],
+  "status": "Succeeded"
+}

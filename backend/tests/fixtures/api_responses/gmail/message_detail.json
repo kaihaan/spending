@@ -1,0 +1,67 @@
+{
+  "id": "18d1234567890abcd",
+  "threadId": "18d1234567890abcd",
+  "labelIds": ["INBOX", "UNREAD"],
+  "snippet": "Your Amazon Fresh order has been delivered...",
+  "payload": {
+    "partId": "",
+    "mimeType": "multipart/alternative",
+    "filename": "",
+    "headers": [
+      {
+        "name": "From",
+        "value": "Amazon Fresh <order-update@amazon.co.uk>"
+      },
+      {
+        "name": "To",
+        "value": "customer@example.com"
+      },
+      {
+        "name": "Subject",
+        "value": "Your Amazon Fresh delivery from Amazon Fresh has been delivered"
+      },
+      {
+        "name": "Date",
+        "value": "Wed, 15 Jan 2025 10:30:00 +0000"
+      }
+    ],
+    "body": {
+      "size": 0
+    },
+    "parts": [
+      {
+        "partId": "0",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "text/plain; charset=UTF-8"
+          }
+        ],
+        "body": {
+          "size": 250,
+          "data": "WW91ciBBbWF6b24gRnJlc2ggb3JkZXIgaGFzIGJlZW4gZGVsaXZlcmVkLg=="
+        }
+      },
+      {
+        "partId": "1",
+        "mimeType": "text/html",
+        "filename": "",
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "text/html; charset=UTF-8"
+          }
+        ],
+        "body": {
+          "size": 1234,
+          "data": "PGh0bWw+PGJvZHk+PGgxPllvdXIgQW1hem9uIEZyZXNoIG9yZGVyIGhhcyBiZWVuIGRlbGl2ZXJlZDwvaDE+PC9ib2R5PjwvaHRtbD4="
+        }
+      }
+    ]
+  },
+  "sizeEstimate": 1484,
+  "historyId": "123456",
+  "internalDate": "1736936400000"
+}

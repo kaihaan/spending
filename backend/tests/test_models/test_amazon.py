@@ -1,71 +1,31 @@
 # tests/test_models/test_amazon.py
+"""Tests for Amazon SQLAlchemy models.
+
+Uses test database from conftest.py with "leave no trace" cleanup pattern.
+"""
+
+import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from database.base import Base, SessionLocal, engine
 from database.models.amazon import (
     AmazonBusinessConnection,
     AmazonBusinessLineItem,
     AmazonBusinessOrder,
     AmazonOrder,
-    AmazonReturn,
-    TrueLayerAmazonTransactionMatch,
 )
-
-
-@pytest.fixture
-def db_session():
-    # Create tables before each test
-    Base.metadata.create_all(bind=engine)
-
-    # Clean up any existing test data (reverse order due to foreign keys)
-    connection = engine.connect()
-    trans = connection.begin()
-    try:
-        connection.execute(TrueLayerAmazonTransactionMatch.__table__.delete())
-        connection.execute(AmazonBusinessLineItem.__table__.delete())
-        connection.execute(AmazonBusinessOrder.__table__.delete())
-        connection.execute(AmazonBusinessConnection.__table__.delete())
-        connection.execute(AmazonReturn.__table__.delete())
-        connection.execute(AmazonOrder.__table__.delete())
-        trans.commit()
-    except Exception:
-        trans.rollback()
-    finally:
-        connection.close()
-
-    session = SessionLocal()
-
-    yield session
-
-    # Clean up and close session
-    session.rollback()
-    session.close()
-
-    # Clean up test data
-    connection = engine.connect()
-    trans = connection.begin()
-    try:
-        connection.execute(TrueLayerAmazonTransactionMatch.__table__.delete())
-        connection.execute(AmazonBusinessLineItem.__table__.delete())
-        connection.execute(AmazonBusinessOrder.__table__.delete())
-        connection.execute(AmazonBusinessConnection.__table__.delete())
-        connection.execute(AmazonReturn.__table__.delete())
-        connection.execute(AmazonOrder.__table__.delete())
-        trans.commit()
-    except Exception:
-        trans.rollback()
-    finally:
-        connection.close()
 
 
 def test_create_amazon_order(db_session):
     """Test creating an Amazon order."""
+    unique_order_id = (
+        f"{uuid.uuid4().hex[:3]}-{uuid.uuid4().hex[:7]}-{uuid.uuid4().hex[:7]}"
+    )
     order = AmazonOrder(
-        order_id="123-4567890-1234567",
+        order_id=unique_order_id,
         order_date=date(2025, 1, 15),
         website="amazon.co.uk",
         currency="GBP",
@@ -77,16 +37,23 @@ def test_create_amazon_order(db_session):
     db_session.add(order)
     db_session.commit()
 
-    assert order.id is not None
-    assert order.order_id == "123-4567890-1234567"
-    assert order.total_owed == Decimal("49.99")
-    assert order.created_at is not None
+    try:
+        assert order.id is not None
+        assert order.order_id == unique_order_id
+        assert order.total_owed == Decimal("49.99")
+        assert order.created_at is not None
+    finally:
+        db_session.delete(order)
+        db_session.commit()
 
 
 def test_amazon_order_unique_constraint(db_session):
     """Test unique constraint on order_id."""
+    unique_order_id = (
+        f"{uuid.uuid4().hex[:3]}-{uuid.uuid4().hex[:7]}-{uuid.uuid4().hex[:7]}"
+    )
     order1 = AmazonOrder(
-        order_id="123-4567890-1234567",
+        order_id=unique_order_id,
         order_date=date(2025, 1, 15),
         website="amazon.co.uk",
         currency="GBP",
@@ -96,18 +63,27 @@ def test_amazon_order_unique_constraint(db_session):
     db_session.add(order1)
     db_session.commit()
 
-    # Attempt to insert duplicate order_id
-    order2 = AmazonOrder(
-        order_id="123-4567890-1234567",
-        order_date=date(2025, 1, 16),
-        website="amazon.co.uk",
-        currency="GBP",
-        total_owed=Decimal("29.99"),
-        product_names="Other Product",
-    )
-    db_session.add(order2)
-    with pytest.raises(IntegrityError):  # Duplicate order_id
-        db_session.commit()
+    try:
+        # Attempt to insert duplicate order_id
+        order2 = AmazonOrder(
+            order_id=unique_order_id,
+            order_date=date(2025, 1, 16),
+            website="amazon.co.uk",
+            currency="GBP",
+            total_owed=Decimal("29.99"),
+            product_names="Other Product",
+        )
+        db_session.add(order2)
+        with pytest.raises(IntegrityError):  # Duplicate order_id
+            db_session.commit()
+    finally:
+        db_session.rollback()
+        existing = (
+            db_session.query(AmazonOrder).filter_by(order_id=unique_order_id).first()
+        )
+        if existing:
+            db_session.delete(existing)
+            db_session.commit()
 
 
 @pytest.mark.skip(
@@ -121,8 +97,10 @@ def test_create_amazon_return(db_session):
 
 def test_create_amazon_business_connection(db_session):
     """Test creating an Amazon Business connection."""
+    # Use a unique user_id to avoid conflicts with production data
+    unique_user_id = 900000 + (uuid.uuid4().int % 100000)
     connection = AmazonBusinessConnection(
-        user_id=1,
+        user_id=unique_user_id,
         access_token="encrypted_token_data",
         refresh_token="encrypted_refresh_token",
         token_expires_at=datetime(2025, 2, 15, 12, 0, 0, tzinfo=UTC),
@@ -132,18 +110,25 @@ def test_create_amazon_business_connection(db_session):
     db_session.add(connection)
     db_session.commit()
 
-    assert connection.id is not None
-    assert connection.user_id == 1
-    assert connection.region == "UK"
-    assert connection.status == "active"
-    assert connection.created_at is not None
-    assert connection.updated_at is not None
+    try:
+        assert connection.id is not None
+        assert connection.user_id == unique_user_id
+        assert connection.region == "UK"
+        assert connection.status == "active"
+        assert connection.created_at is not None
+        assert connection.updated_at is not None
+    finally:
+        db_session.delete(connection)
+        db_session.commit()
 
 
 def test_create_amazon_business_order(db_session):
     """Test creating an Amazon Business order."""
+    unique_order_id = (
+        f"ABC-{uuid.uuid4().hex[:3].upper()}-{uuid.uuid4().hex[:3].upper()}"
+    )
     order = AmazonBusinessOrder(
-        order_id="ABC-123-XYZ",
+        order_id=unique_order_id,
         order_date=date(2025, 1, 10),
         region="UK",
         order_status="Shipped",
@@ -160,38 +145,61 @@ def test_create_amazon_business_order(db_session):
     db_session.add(order)
     db_session.commit()
 
-    assert order.id is not None
-    assert order.order_id == "ABC-123-XYZ"
-    assert order.net_total == Decimal("125.00")
-    assert order.created_at is not None
+    try:
+        assert order.id is not None
+        assert order.order_id == unique_order_id
+        assert order.net_total == Decimal("125.00")
+        assert order.created_at is not None
+    finally:
+        db_session.delete(order)
+        db_session.commit()
 
 
 def test_amazon_business_order_unique_constraint(db_session):
     """Test unique constraint on business order_id."""
+    unique_order_id = (
+        f"ABC-{uuid.uuid4().hex[:3].upper()}-{uuid.uuid4().hex[:3].upper()}"
+    )
     order1 = AmazonBusinessOrder(
-        order_id="ABC-123-XYZ",
+        order_id=unique_order_id,
         order_date=date(2025, 1, 10),
         net_total=Decimal("125.00"),
     )
     db_session.add(order1)
     db_session.commit()
 
-    # Attempt to insert duplicate order_id
-    order2 = AmazonBusinessOrder(
-        order_id="ABC-123-XYZ",
-        order_date=date(2025, 1, 11),
-        net_total=Decimal("150.00"),
-    )
-    db_session.add(order2)
-    with pytest.raises(IntegrityError):  # Duplicate order_id
-        db_session.commit()
+    try:
+        # Attempt to insert duplicate order_id
+        order2 = AmazonBusinessOrder(
+            order_id=unique_order_id,
+            order_date=date(2025, 1, 11),
+            net_total=Decimal("150.00"),
+        )
+        db_session.add(order2)
+        with pytest.raises(IntegrityError):  # Duplicate order_id
+            db_session.commit()
+    finally:
+        db_session.rollback()
+        existing = (
+            db_session.query(AmazonBusinessOrder)
+            .filter_by(order_id=unique_order_id)
+            .first()
+        )
+        if existing:
+            db_session.delete(existing)
+            db_session.commit()
 
 
 def test_create_amazon_business_line_item(db_session):
     """Test creating an Amazon Business line item."""
+    unique_order_id = (
+        f"ABC-{uuid.uuid4().hex[:3].upper()}-{uuid.uuid4().hex[:3].upper()}"
+    )
+    unique_line_item_id = f"LINE-{uuid.uuid4().hex[:6].upper()}"
+
     # First create a business order
     order = AmazonBusinessOrder(
-        order_id="ABC-123-XYZ",
+        order_id=unique_order_id,
         order_date=date(2025, 1, 10),
         net_total=Decimal("125.00"),
     )
@@ -200,8 +208,8 @@ def test_create_amazon_business_line_item(db_session):
 
     # Now create a line item
     line_item = AmazonBusinessLineItem(
-        order_id="ABC-123-XYZ",
-        line_item_id="LINE-001",
+        order_id=unique_order_id,
+        line_item_id=unique_line_item_id,
         asin="B08XYZBCDE",
         title="Wireless Mouse",
         brand="Logitech",
@@ -214,10 +222,16 @@ def test_create_amazon_business_line_item(db_session):
     db_session.add(line_item)
     db_session.commit()
 
-    assert line_item.id is not None
-    assert line_item.order_id == "ABC-123-XYZ"
-    assert line_item.total_price == Decimal("50.00")
-    assert line_item.created_at is not None
+    try:
+        assert line_item.id is not None
+        assert line_item.order_id == unique_order_id
+        assert line_item.total_price == Decimal("50.00")
+        assert line_item.created_at is not None
+    finally:
+        # Clean up in reverse dependency order
+        db_session.delete(line_item)
+        db_session.delete(order)
+        db_session.commit()
 
 
 @pytest.mark.skip(reason="Requires TrueLayer transaction models (tested in Phase 3)")

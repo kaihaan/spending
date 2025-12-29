@@ -1,59 +1,26 @@
 # tests/test_models/test_apple.py
+"""Tests for Apple SQLAlchemy models.
+
+Uses test database from conftest.py with "leave no trace" cleanup pattern.
+"""
+
+import uuid
 from datetime import date
 from decimal import Decimal
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from database.base import Base, SessionLocal, engine
 from database.models.apple import (
     AppleTransaction,
-    TrueLayerAppleTransactionMatch,
 )
-
-
-@pytest.fixture
-def db_session():
-    # Create tables before each test
-    Base.metadata.create_all(bind=engine)
-
-    # Clean up any existing test data (reverse order due to foreign keys)
-    connection = engine.connect()
-    trans = connection.begin()
-    try:
-        connection.execute(TrueLayerAppleTransactionMatch.__table__.delete())
-        connection.execute(AppleTransaction.__table__.delete())
-        trans.commit()
-    except Exception:
-        trans.rollback()
-    finally:
-        connection.close()
-
-    session = SessionLocal()
-
-    yield session
-
-    # Clean up and close session
-    session.rollback()
-    session.close()
-
-    # Clean up test data
-    connection = engine.connect()
-    trans = connection.begin()
-    try:
-        connection.execute(TrueLayerAppleTransactionMatch.__table__.delete())
-        connection.execute(AppleTransaction.__table__.delete())
-        trans.commit()
-    except Exception:
-        trans.rollback()
-    finally:
-        connection.close()
 
 
 def test_create_apple_transaction(db_session):
     """Test creating an Apple transaction."""
+    unique_order_id = f"MXYZ{uuid.uuid4().hex[:10].upper()}"
     transaction = AppleTransaction(
-        order_id="MXYZ1234567890",
+        order_id=unique_order_id,
         order_date=date(2025, 1, 15),
         total_amount=Decimal("9.99"),
         currency="GBP",
@@ -64,18 +31,23 @@ def test_create_apple_transaction(db_session):
     db_session.add(transaction)
     db_session.commit()
 
-    assert transaction.id is not None
-    assert transaction.order_id == "MXYZ1234567890"
-    assert transaction.total_amount == Decimal("9.99")
-    assert transaction.currency == "GBP"
-    assert transaction.item_count == 2
-    assert transaction.created_at is not None
+    try:
+        assert transaction.id is not None
+        assert transaction.order_id == unique_order_id
+        assert transaction.total_amount == Decimal("9.99")
+        assert transaction.currency == "GBP"
+        assert transaction.item_count == 2
+        assert transaction.created_at is not None
+    finally:
+        db_session.delete(transaction)
+        db_session.commit()
 
 
 def test_apple_transaction_unique_constraint(db_session):
     """Test unique constraint on order_id."""
+    unique_order_id = f"MXYZ{uuid.uuid4().hex[:10].upper()}"
     transaction1 = AppleTransaction(
-        order_id="MXYZ1234567890",
+        order_id=unique_order_id,
         order_date=date(2025, 1, 15),
         total_amount=Decimal("9.99"),
         currency="GBP",
@@ -84,23 +56,36 @@ def test_apple_transaction_unique_constraint(db_session):
     db_session.add(transaction1)
     db_session.commit()
 
-    # Attempt to insert duplicate order_id
-    transaction2 = AppleTransaction(
-        order_id="MXYZ1234567890",
-        order_date=date(2025, 1, 16),
-        total_amount=Decimal("4.99"),
-        currency="GBP",
-        app_names="Other App",
-    )
-    db_session.add(transaction2)
-    with pytest.raises(IntegrityError):  # Duplicate order_id
-        db_session.commit()
+    try:
+        # Attempt to insert duplicate order_id
+        transaction2 = AppleTransaction(
+            order_id=unique_order_id,
+            order_date=date(2025, 1, 16),
+            total_amount=Decimal("4.99"),
+            currency="GBP",
+            app_names="Other App",
+        )
+        db_session.add(transaction2)
+        with pytest.raises(IntegrityError):  # Duplicate order_id
+            db_session.commit()
+    finally:
+        db_session.rollback()
+        # Re-fetch and delete transaction1
+        existing = (
+            db_session.query(AppleTransaction)
+            .filter_by(order_id=unique_order_id)
+            .first()
+        )
+        if existing:
+            db_session.delete(existing)
+            db_session.commit()
 
 
 def test_apple_transaction_defaults(db_session):
     """Test default values for Apple transaction."""
+    unique_order_id = f"MXYZ{uuid.uuid4().hex[:10].upper()}"
     transaction = AppleTransaction(
-        order_id="MXYZ9876543210",
+        order_id=unique_order_id,
         order_date=date(2025, 1, 20),
         total_amount=Decimal("2.99"),
         currency="GBP",
@@ -109,12 +94,16 @@ def test_apple_transaction_defaults(db_session):
     db_session.add(transaction)
     db_session.commit()
 
-    # item_count should default to 1
-    assert transaction.item_count == 1
-    # publishers can be NULL
-    assert transaction.publishers is None
-    # source_file can be NULL
-    assert transaction.source_file is None
+    try:
+        # item_count should default to 1
+        assert transaction.item_count == 1
+        # publishers can be NULL
+        assert transaction.publishers is None
+        # source_file can be NULL
+        assert transaction.source_file is None
+    finally:
+        db_session.delete(transaction)
+        db_session.commit()
 
 
 @pytest.mark.skip(reason="Requires TrueLayer transaction models (tested in Phase 3)")

@@ -1,0 +1,4 @@
+{
+  "error": "provider_too_many_requests",
+  "error_description": "The provider is temporarily rate limiting requests. Please retry after some time."
+}

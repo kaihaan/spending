@@ -1,81 +1,66 @@
 # tests/test_models/test_category.py
-import pytest
+"""Tests for category SQLAlchemy models.
 
-from database.base import Base, SessionLocal, engine
+Uses test database from conftest.py with "leave no trace" cleanup pattern.
+"""
+
+import uuid
+
 from database.models.category import Category, CategoryKeyword
-
-
-@pytest.fixture
-def db_session():
-    # Create tables before each test
-    Base.metadata.create_all(bind=engine)
-
-    # Clean up any existing test data
-    connection = engine.connect()
-    trans = connection.begin()
-    try:
-        connection.execute(CategoryKeyword.__table__.delete())
-        connection.execute(Category.__table__.delete())
-        trans.commit()
-    except Exception:
-        trans.rollback()
-    finally:
-        connection.close()
-
-    session = SessionLocal()
-
-    yield session
-
-    # Clean up and close session
-    session.rollback()
-    session.close()
-
-    # Clean up test data
-    connection = engine.connect()
-    trans = connection.begin()
-    try:
-        connection.execute(CategoryKeyword.__table__.delete())
-        connection.execute(Category.__table__.delete())
-        trans.commit()
-    except Exception:
-        trans.rollback()
-    finally:
-        connection.close()
 
 
 def test_create_category(db_session):
     """Test creating a category."""
+    unique_name = f"Groceries_{uuid.uuid4().hex[:8]}"
     category = Category(
-        name="Groceries", rule_pattern="(?i)(tesco|sainsbury|asda)", ai_suggested=False
+        name=unique_name, rule_pattern="(?i)(tesco|sainsbury|asda)", ai_suggested=False
     )
     db_session.add(category)
     db_session.commit()
 
-    assert category.id is not None
-    assert category.name == "Groceries"
-    assert category.rule_pattern is not None
+    try:
+        assert category.id is not None
+        assert category.name == unique_name
+        assert category.rule_pattern is not None
+    finally:
+        db_session.delete(category)
+        db_session.commit()
 
 
 def test_create_category_keyword(db_session):
     """Test creating a category keyword."""
-    keyword = CategoryKeyword(category_name="Groceries", keyword="tesco")
+    unique_category = f"Groceries_{uuid.uuid4().hex[:8]}"
+    keyword = CategoryKeyword(category_name=unique_category, keyword="tesco")
     db_session.add(keyword)
     db_session.commit()
 
-    assert keyword.id is not None
-    assert keyword.category_name == "Groceries"
-    assert keyword.keyword == "tesco"
-    assert keyword.created_at is not None
+    try:
+        assert keyword.id is not None
+        assert keyword.category_name == unique_category
+        assert keyword.keyword == "tesco"
+        assert keyword.created_at is not None
+    finally:
+        db_session.delete(keyword)
+        db_session.commit()
 
 
 def test_category_keywords_relationship(db_session):
     """Test relationship between Category and CategoryKeyword."""
-    category = Category(name="Groceries")
-    keyword1 = CategoryKeyword(category_name="Groceries", keyword="tesco")
-    keyword2 = CategoryKeyword(category_name="Groceries", keyword="sainsbury")
+    unique_name = f"Groceries_{uuid.uuid4().hex[:8]}"
+    category = Category(name=unique_name)
+    keyword1 = CategoryKeyword(category_name=unique_name, keyword="tesco")
+    keyword2 = CategoryKeyword(category_name=unique_name, keyword="sainsbury")
 
     db_session.add_all([category, keyword1, keyword2])
     db_session.commit()
 
-    # Test relationship (if we add one later)
-    assert category.id is not None
+    try:
+        assert category.id is not None
+        assert keyword1.id is not None
+        assert keyword2.id is not None
+    finally:
+        # Clean up in reverse dependency order
+        db_session.delete(keyword1)
+        db_session.delete(keyword2)
+        db_session.delete(category)
+        db_session.commit()

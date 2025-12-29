@@ -1,0 +1,60 @@
+{
+  "results": [
+    {
+      "transaction_id": "txn-test-001",
+      "normalised_provider_transaction_id": "norm-001",
+      "timestamp": "2025-01-15T14:30:00Z",
+      "description": "TESCO STORES 1234",
+      "amount": -45.67,
+      "currency": "GBP",
+      "transaction_type": "DEBIT",
+      "transaction_category": "PURCHASE",
+      "transaction_classification": [
+        "Shopping",
+        "Groceries"
+      ],
+      "merchant_name": "Tesco",
+      "running_balance": {
+        "amount": 1234.56,
+        "currency": "GBP"
+      }
+    },
+    {
+      "transaction_id": "txn-test-002",
+      "normalised_provider_transaction_id": "norm-002",
+      "timestamp": "2025-01-14T09:15:00Z",
+      "description": "AMAZON EU",
+      "amount": -23.99,
+      "currency": "GBP",
+      "transaction_type": "DEBIT",
+      "transaction_category": "PURCHASE",
+      "transaction_classification": [
+        "Shopping",
+        "General"
+      ],
+      "merchant_name": "Amazon",
+      "running_balance": {
+        "amount": 1280.23,
+        "currency": "GBP"
+      }
+    },
+    {
+      "transaction_id": "txn-test-003",
+      "normalised_provider_transaction_id": "norm-003",
+      "timestamp": "2025-01-13T16:45:00Z",
+      "description": "SALARY PAYMENT",
+      "amount": 2500.00,
+      "currency": "GBP",
+      "transaction_type": "CREDIT",
+      "transaction_category": "INCOME",
+      "running_balance": {
+        "amount": 1304.22,
+        "currency": "GBP"
+      }
+    }
+  ],
+  "paging": {
+    "next": "https://api.truelayer.com/data/v1/accounts/acc-test-1234/transactions?cursor=next_page_token_abc123"
+  },
+  "status": "Succeeded"
+}
