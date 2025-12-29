@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { ImportWizard } from './TrueLayer/ImportWizard';
+import { useBackgroundTasks } from '../contexts/BackgroundTaskContext';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -43,6 +44,7 @@ export default function TrueLayerIntegration() {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [showImportWizard, setShowImportWizard] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<TrueLayerConnection | null>(null);
+  const { registerTask } = useBackgroundTasks();
 
   // Date range for sync (90 days back by default)
   const [syncDateFrom, setSyncDateFrom] = useState(() => {
@@ -147,6 +149,10 @@ export default function TrueLayerIntegration() {
         status: 'queued',
       });
 
+      // Find connection name for the task label
+      const connection = connections.find((c) => c.id === connectionId);
+      const connectionName = connection?.provider_name || `Bank ${connectionId}`;
+
       // Use async mode
       const response = await axios.post(`${API_URL}/truelayer/sync?async=true`, {
         connection_id: connectionId,
@@ -156,7 +162,10 @@ export default function TrueLayerIntegration() {
 
       const { job_id } = response.data;
 
-      // Start polling for progress
+      // Register task with global context for navbar indicator
+      registerTask(job_id, 'sync', `Sync ${connectionName}`);
+
+      // Start polling for progress (local UI)
       pollJobStatus(job_id, connectionId);
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to sync transactions');
