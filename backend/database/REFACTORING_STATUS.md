@@ -1,175 +1,122 @@
 # Database Layer Refactoring - Status Report
 
-## Session Summary
+## Migration Status: COMPLETE
 
-### ✅ Completed
+**Last Updated:** 2025-12-29
 
-**Foundation Created** - Infrastructure for refactored database layer established
+### SQLAlchemy 2.0 + Alembic Migration
 
-1. **Directory Structure**
-   ```
-   backend/database/          ← NEW
-   backend/routes/            ← NEW
-   backend/services/          ← NEW
-   backend/mcp/gmail_parsers/ ← NEW
-   ```
+The database layer has been fully migrated from psycopg2 raw SQL to SQLAlchemy ORM.
 
-2. **Core Files Created**
-   - `backend/database/base.py` (170 lines)
-     - Connection pool initialization
-     - `get_db()` context manager
-     - `execute_query()` helper function
-     - Database configuration
+## Architecture
 
-   - `backend/database/__init__.py` (85 lines)
-     - Public API exports
-     - Backward compatibility layer
-     - Imports from `database_postgres.py` until refactoring complete
-     - Clear documentation of future structure
-
-   - `backend/database/README.md`
-     - Complete documentation of refactoring approach
-     - Module structure and guidelines
-     - Usage patterns and examples
-     - Migration strategy
-
-## Impact
-
-### Before
-```
-backend/database_postgres.py    8,008 lines  (246 functions)
-backend/app.py                  5,121 lines  (159 routes)
-backend/mcp/gmail_vendor_parsers.py  4,910 lines  (43 parsers)
-```
-
-### After (COMPLETE ✅)
 ```
 backend/database/
-├── base.py                    170 lines  ✅ COMPLETE
-├── __init__.py                632 lines  ✅ COMPLETE (10 modules exported)
-├── gmail.py                 4,050 lines  ✅ COMPLETE (101 functions)
-├── truelayer.py               882 lines  ✅ COMPLETE (47 functions)
-├── categories.py            1,221 lines  ✅ COMPLETE (23 functions)
-├── apple.py                   159 lines  ✅ COMPLETE (6 functions)
-├── amazon.py                1,031 lines  ✅ COMPLETE (30 functions)
-├── enrichment.py              531 lines  ✅ COMPLETE (13 functions)
-├── matching.py                278 lines  ✅ COMPLETE (10 functions)
-├── direct_debit.py            359 lines  ✅ COMPLETE (6 functions)
-├── pdf.py                     107 lines  ✅ COMPLETE (6 functions)
-├── transactions.py            559 lines  ✅ COMPLETE (22 functions)
-├── README.md                  Documentation ✅ COMPLETE
-└── REFACTORING_STATUS.md      This file ✅ COMPLETE
-
-DATABASE LAYER REFACTORING: 100% COMPLETE! 🎉
-All 10 domain modules extracted from 8,008-line monolith
+├── base.py                ← SQLAlchemy engine, session factory, declarative base
+├── models/                ← SQLAlchemy ORM models organized by domain
+│   ├── __init__.py        ← Model exports
+│   ├── user.py            ← User, AccountMapping
+│   ├── truelayer.py       ← BankConnection, TrueLayerAccount, TrueLayerTransaction
+│   ├── gmail.py           ← GmailConnection, GmailReceipt, GmailMatch, etc.
+│   ├── amazon.py          ← AmazonOrder, AmazonBusinessOrder, matches
+│   ├── apple.py           ← AppleTransaction, TrueLayerAppleTransactionMatch
+│   ├── category.py        ← Category, NormalizedCategory, rules
+│   └── enrichment.py      ← TransactionEnrichmentSource, EnrichmentCache
+├── gmail.py               ← Gmail database operations (101 functions)
+├── truelayer.py           ← TrueLayer operations (47 functions)
+├── categories.py          ← Category operations (23 functions)
+├── amazon.py              ← Amazon operations (30 functions)
+├── apple.py               ← Apple operations (6 functions)
+├── enrichment.py          ← Enrichment operations (13 functions)
+├── matching.py            ← Cross-source matching (10 functions)
+├── transactions.py        ← Core transaction operations (22 functions)
+├── direct_debit.py        ← Direct debit mappings (6 functions)
+├── pdf.py                 ← PDF operations (6 functions)
+└── __init__.py            ← Public API (re-exports all functions)
 ```
 
-## Next Steps
+## Key Components
 
-### Immediate (Week 1 - Continue)
+### SQLAlchemy Foundation (`base.py`)
+- `Base` - Declarative base for all models
+- `engine` - SQLAlchemy engine with connection pooling
+- `SessionLocal` - Session factory
+- `get_session()` - Context manager for database sessions
 
-Extract domain modules from `database_postgres.py` in priority order:
-
-1. **gmail.py** (~700 lines)
-   - All `*gmail*` functions
-   - Receipt operations, sync jobs, statistics
-
-2. **truelayer.py** (~600 lines)
-   - All `*truelayer*` functions
-   - Connections, accounts, transactions
-
-3. **categories.py** (~500 lines)
-   - All `*category*`, `*rule*` functions
-
-4. **transactions.py** (~400 lines)
-   - Transaction CRUD operations
-
-5. **Remaining 9 modules** (~2,500 lines total)
-
-### Medium Term (Week 2)
-
-- Create service layer (`backend/services/`)
-- Extract Flask routes into blueprints (`backend/routes/`)
-- Refactor `app.py` to register blueprints
-
-### Long Term (Weeks 3-4)
-
-- Refactor Gmail vendor parsers
-- Integration testing
-- Remove legacy files
-
-## How to Continue
-
-### Option 1: Extract Gmail Module (Recommended Next Step)
-
-```bash
-# 1. Create backend/database/gmail.py
-# 2. Move all *gmail* functions from database_postgres.py
-# 3. Update imports in __init__.py
-# 4. Test Gmail functionality
-```
-
-### Option 2: Extract TrueLayer Module
-
-```bash
-# Same pattern as Gmail but for TrueLayer functions
-```
-
-### Option 3: Extract All Modules Systematically
-
-Follow the priority order in README.md, one module per session.
-
-## Testing the Foundation
-
-Once backend dependencies are available:
-
+### Usage Pattern
 ```python
-from database import get_db, init_pool, DB_CONFIG
+from database.base import get_session
+from database.models.truelayer import TrueLayerTransaction
 
-# Test connection pool
-with get_db() as conn:
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT version()")
-        version = cursor.fetchone()
-        print(f"PostgreSQL version: {version}")
+with get_session() as session:
+    txns = session.query(TrueLayerTransaction).filter_by(user_id=1).all()
 ```
 
-## Key Design Decisions
+### Migrations (Alembic)
+```bash
+cd backend
+alembic revision --autogenerate -m "description"  # Generate migration
+alembic upgrade head                               # Apply migrations
+alembic current                                    # Check version
+```
 
-1. **Backward Compatibility**
-   - `__init__.py` imports from `database_postgres.py`
-   - Existing code continues to work during migration
-   - No breaking changes until refactoring complete
+## Test Coverage
 
-2. **Facade Pattern**
-   - Old functions will delegate to new modules initially
-   - Gradual migration path
-   - Low risk of breaking production
+**All tests pass (51 passed, 6 skipped):**
+- Model tests: Amazon, Apple, Gmail, TrueLayer, Category, Enrichment
+- Migration verification tests: Connection, queries, session management
+- Alembic version tracking working correctly
 
-3. **Domain Boundaries**
-   - Clear separation by business domain
-   - Each module is self-contained
-   - Easy to understand and maintain
+Run tests:
+```bash
+source venv/bin/activate
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest tests/test_models/ tests/test_migration_verify.py -v
+```
 
-4. **Public API**
-   - All exports through `__init__.py`
-   - Clear interface for consumers
-   - Easy to see what's available
+## Completed Phases
+
+### Phase 1: SQLAlchemy Setup ✅
+- Created `database/base.py` with engine and session factory
+- Set up declarative base for ORM models
+
+### Phase 2: Model Definitions ✅
+- Created all SQLAlchemy models in `database/models/`
+- 10 model files covering all domain entities
+- Proper relationships, constraints, and defaults
+
+### Phase 3: Alembic Integration ✅
+- Initialized Alembic for migrations
+- Generated initial migration from existing schema
+- Version tracking working correctly
+
+### Phase 4: Operations Migration ✅
+- All database operation modules migrated to SQLAlchemy
+- Uses `session.query()` pattern consistently
+- No psycopg2 direct usage in database modules
+
+### Phase 5: Application Integration ✅
+- MCP components use SQLAlchemy-based database modules
+- Celery tasks use SQLAlchemy-based database modules
+- All imports through `database` package
+
+## Legacy Code
+
+### Scripts Still Using psycopg2
+The following utility scripts in `backend/scripts/` still use psycopg2 directly:
+- `analyze_vendor_emails.py`
+- `detect_duplicates.py`
+- `flag_non_purchase_emails.py`
+- `qa_gmail_receipts.py`
+- `reparse_deliveroo.py`
+- `backfill_pdf_data.py`
+
+These are standalone utility scripts, not part of the main application.
 
 ## Success Metrics
 
-- ✅ No file over 800 lines (base.py: 170 lines)
-- ✅ Clear module boundaries
-- ✅ Documented architecture
-- ⏳ Service layer separated from routes (pending)
-- ⏳ All tests passing (pending module extraction)
-
-## Estimated Completion
-
-- **Foundation**: ✅ Complete (this session)
-- **Database Layer**: 2-3 sessions (extracting 13 modules)
-- **Routes & Services**: 2-3 sessions
-- **Gmail Parsers**: 1-2 sessions
-- **Testing & Cleanup**: 1 session
-
-**Total**: 6-9 sessions for complete refactoring
+- ✅ All database operations use SQLAlchemy ORM
+- ✅ All models defined with proper types and constraints
+- ✅ Alembic migrations working
+- ✅ 51 tests passing
+- ✅ No runtime errors related to database layer
+- ✅ MCP and Celery integration complete

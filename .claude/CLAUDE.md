@@ -80,7 +80,10 @@ When **generating Python code**:
 | PostgreSQL | 16 (Docker) |
 | Redis | 7 (Docker) |
 | Celery | 5.5.3 |
-| psycopg2 | 2.9.9 |
+| SQLAlchemy | 2.0+ (ORM) |
+| Alembic | 1.15.2 (migrations) |
+| psycopg2 | 2.9.9 (legacy adapter) |
+| pytest | 9.0.2 |
 | pandas | 2.1.4 |
 
 ### LLM Providers
@@ -96,6 +99,60 @@ Anthropic (Claude), OpenAI, Google (Gemini), DeepSeek, Ollama (local)
 | `categorizer` | Rule-based and AI classification |
 | `llm_enricher` | Transaction metadata enrichment |
 | `merchant_normalizer` | Merchant name normalisation |
+
+### Database Layer (SQLAlchemy + Alembic)
+
+**ORM Architecture:**
+- **SQLAlchemy 2.0** for database models and queries (migrating from raw psycopg2)
+- **Alembic** for schema migrations
+- Models in `backend/database/models/` organized by domain (truelayer, amazon, gmail, etc.)
+- Base declarative class: `backend/database/base.py`
+
+**Key Files:**
+- `backend/database/base.py` - Engine, session factory, declarative base
+- `backend/alembic/` - Migration scripts
+- `backend/alembic.ini` - Alembic configuration
+
+**Usage:**
+```python
+from database.base import get_session
+from database.models.truelayer import TrueLayerTransaction
+
+with get_session() as session:
+    txns = session.query(TrueLayerTransaction).filter_by(user_id=1).all()
+```
+
+**Migrations:**
+```bash
+cd backend
+alembic revision --autogenerate -m "description"  # Generate migration
+alembic upgrade head                               # Apply migrations
+alembic current                                    # Check current version
+```
+
+### Testing
+
+**Test Structure:**
+- Location: `backend/tests/`
+- Framework: pytest 9.0.2
+- Test database: Uses PostgreSQL Docker instance (auto-cleanup fixtures)
+
+**Running Tests:**
+```bash
+source backend/venv/bin/activate
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest          # All tests
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest -v       # Verbose
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest tests/test_models/  # Specific dir
+```
+
+**Test Categories:**
+- `tests/test_models/` - SQLAlchemy model tests (User, TrueLayer, Amazon, Gmail, etc.)
+- `tests/test_migration_verify.py` - Database migration verification
+
+**Writing Tests:**
+- Use fixtures for database session setup/cleanup
+- Follow existing patterns in `tests/test_models/test_*.py`
+- Test model creation, relationships, and constraints
 
 ---
 
@@ -415,6 +472,226 @@ docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
 
 ---
 
+## Testing Infrastructure
+
+**CRITICAL: Always use test database when testing**
+
+### Test vs Production Databases
+
+| Database | Purpose | Port | Persistence | Usage |
+|----------|---------|------|-------------|-------|
+| `spending_db` | **Production/Development** | 5433 | Permanent | Live data, manual testing ONLY |
+| `spending_db_test` | **Testing** | 5432 | **Persistent** | Automated tests, safe to modify |
+
+**Golden Rule:** If you're testing → use pytest with `spending_db_test`
+
+**Database Persistence:**
+- Test database persists between test runs (NOT recreated each time)
+- Speeds up test iterations and allows data inspection
+- To reset: `DROP DATABASE spending_db_test;` then run pytest again
+- First test run creates database from production template
+
+### Running Tests
+
+**ALWAYS use pytest for testing:**
+
+```bash
+# Run all tests
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest
+
+# Run specific test file
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest backend/tests/test_auth.py
+
+# Run specific test function
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest backend/tests/test_auth.py::test_user_registration
+
+# Run with verbose output
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest -v
+
+# Run with output capture disabled (see print statements)
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest -s
+
+# Run and stop on first failure
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest -x
+```
+
+**Test Database Reset:**
+
+```bash
+# Reset test database to fresh state (recreate from production)
+PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5433 -U spending_user -d postgres -c "DROP DATABASE IF EXISTS spending_db_test;"
+
+# Next pytest run will recreate from production template
+PYTHONPATH=/home/kaihaan/prj/spending/backend pytest
+```
+
+**Test Database Setup (Automatic):**
+- `conftest.py` creates `spending_db_test` only if it doesn't exist
+- Cloned from `spending_db` template for identical schema
+- All fixtures use test database connection
+- Safety checks prevent production database modification
+- Database persists between test runs for faster iteration
+
+### When to Use Testing Framework
+
+**✅ ALWAYS use pytest when:**
+- User says "test" or "run tests"
+- Implementing new features (test after code changes)
+- Fixing bugs (verify fix with tests)
+- Modifying database schema (test migrations)
+- Making API changes (test endpoints)
+- Testing multi-user scenarios
+
+**❌ NEVER use manual curl/psql testing when:**
+- Testing multi-user data isolation (use pytest fixtures)
+- Testing database operations (use test database)
+- Verifying authentication flow (use pytest client)
+- Running automated tests (use pytest)
+
+**✓ Manual testing is OK for:**
+- Quick smoke tests in development
+- Debugging specific API issues with real data
+- OAuth callback flows requiring browser
+- One-off exploratory testing
+
+### Test Safety Checklist
+
+Before any database operation during testing:
+- [ ] Using `spending_db_test` (port 5432), NOT `spending_db` (port 5433)
+- [ ] Using pytest framework, NOT manual curl
+- [ ] Test fixtures handle setup/teardown
+- [ ] Test data is isolated (no hardcoded user_id=1)
+
+### Common Testing Patterns
+
+**1. API Endpoint Testing:**
+```python
+def test_register_user(client):
+    """Test user registration endpoint."""
+    response = client.post('/api/auth/register', json={
+        'email': 'test@example.com',
+        'password': 'testpass123',
+        'username': 'testuser'
+    })
+    assert response.status_code == 201
+    assert 'user' in response.json
+```
+
+**2. Multi-User Data Isolation:**
+```python
+def test_data_isolation(client, db):
+    """Verify users only see their own data."""
+    # Create user1
+    user1_resp = client.post('/api/auth/register', json={
+        'email': 'user1@test.com',
+        'password': 'password123',
+        'username': 'user1'
+    })
+
+    # Add transactions for user1 (via API or direct DB)
+    # ...
+
+    # Logout
+    client.post('/api/auth/logout')
+
+    # Create user2
+    user2_resp = client.post('/api/auth/register', json={
+        'email': 'user2@test.com',
+        'password': 'password123',
+        'username': 'user2'
+    })
+
+    # Login as user2 (auto-login after registration)
+    # Verify user2 sees ZERO data from user1
+    response = client.get('/api/transactions')
+    assert len(response.json['transactions']) == 0
+```
+
+**3. Database Operations:**
+```python
+def test_create_user(db):
+    """Test user creation in database."""
+    from backend.database import create_user
+
+    user_id = create_user(
+        db=db,
+        email='test@example.com',
+        password='testpass123',
+        username='testuser'
+    )
+    assert user_id is not None
+
+    # Verify user was created
+    from sqlalchemy import text
+    result = db.execute(text("SELECT * FROM users WHERE id = :user_id"),
+                        {"user_id": user_id})
+    user = result.fetchone()
+    assert user is not None
+    assert user.email == 'test@example.com'
+```
+
+**4. Persistent Test Data Pattern:**
+```python
+def test_with_persistent_data(client, db):
+    """Test using persistent test database data.
+
+    Since test database persists between runs, we can:
+    1. Check if test data already exists
+    2. Create it if needed
+    3. Use it for testing
+    """
+    from sqlalchemy import text
+
+    # Check if test user exists
+    result = db.execute(text("SELECT id FROM users WHERE email = 'testuser@test.com'"))
+    user = result.fetchone()
+
+    if user is None:
+        # Create test user (only first run)
+        user_resp = client.post('/api/auth/register', json={
+            'email': 'testuser@test.com',
+            'password': 'testpass123',
+            'username': 'testuser'
+        })
+        user_id = user_resp.json['user']['id']
+    else:
+        user_id = user.id
+
+    # Use test user for testing
+    # ...
+```
+
+### Test Coverage
+
+Current test coverage:
+- Authentication: `backend/tests/test_auth.py` (to be created)
+- TrueLayer: `backend/tests/test_truelayer_*.py`
+- Gmail: `backend/tests/test_gmail.py`
+- Amazon: `backend/tests/test_amazon.py`
+- Database: `backend/tests/test_database.py`
+
+After implementing new features, add corresponding tests following existing patterns.
+
+### Test Data Management
+
+**Persistent Database Advantages:**
+- Faster test iterations (no DB recreation)
+- Can inspect test data between runs
+- Reuse test data across runs (e.g., test users)
+
+**Persistent Database Considerations:**
+- Test data accumulates over time
+- May need periodic cleanup
+- Reset database if tests become inconsistent
+
+**When to Reset Test Database:**
+- Production schema changed (migrations run)
+- Test data became inconsistent or corrupted
+- Need fresh baseline from production
+- Tests failing due to data pollution
+
+---
+
 ## Coding Guidance
 
 1. **Python Development**: ALWAYS activate the virtual environment before running Python:
@@ -462,8 +739,7 @@ docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
    - [TrueLayer Rate Limits Support Article](https://support.truelayer.com/hc/en-us/articles/360003994498-What-rate-limits-apply-to-the-Data-API)
    - Data API spec: `.claude/docs/api/True Layer API/Data API V1.json` (429 response definitions)
 
-
-5. **Docker Services (CRITICAL)**
+4. **Docker Services (CRITICAL)**
    All services run in Docker containers - `pkill` commands do NOT work:
    | Service | Container | Port |
    |---------|-----------|------|
@@ -561,28 +837,39 @@ docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
 
 ## Documentation Structure
 
+**Reference Documentation** (`.claude/docs/`):
 ```
 .claude/docs/
 ├── database/
 │   ├── DATABASE_SCHEMA.md        ← AUTHORITATIVE schema reference
 │   ├── SCHEMA_ENFORCEMENT.md     ← Code patterns & rules
-│   ├── SCHEMA_CRITICAL_FIXES.md  ← Past bugs to avoid
-│   └── POSTGRES_MIGRATION.md
+│   └── SCHEMA_CRITICAL_FIXES.md  ← Past bugs to avoid
 ├── api/
 │   ├── True Layer API/           ← TrueLayer JSON specs
 │   ├── TRUELAYER_CARD_API_GUIDE.md
 │   └── BANK_INTEGRATION_TROUBLESHOOTING.md
 ├── requirements/
 │   ├── _TEMPLATE.md              ← Template for new features
-│   ├── brief.md                  ← Project brief
-│   └── enrichment.md             ← Enrichment feature spec
+│   ├── testing-dashboard-requirements.md
+│   ├── gmail.md
+│   └── enrichment.md             ← Feature specifications
 ├── architecture/
 │   ├── TRUELAYER_INTEGRATION.md  ← Integration architecture
-│   └── TRUELAYER_*.md            ← Other architecture docs
-└── development/
-    └── setup/
-        └── QUICK_START_POSTGRES.md
+│   └── TRUELAYER_*.md            ← Component maps, workflows
+├── bugs/
+│   └── BUG_TRACKER.md            ← Discovered bugs with dates, severity, status
+└── deployment/
+    └── PRODUCTION_DEPLOYMENT_PLAN.md
 ```
+
+**Implementation Plans** (`docs/plans/`):
+- Active implementation plans with step-by-step execution instructions
+- Example: `docs/plans/2025-12-28-sqlalchemy-alembic-migration.md`
+
+**Bug Tracking** (`.claude/docs/bugs/BUG_TRACKER.md`):
+- Centralized bug documentation with severity, status, and fix requirements
+- All discovered bugs should be documented here with date/time
+- Format: BUG-XXX with full reproduction steps and impact analysis
 
 ---
 
@@ -628,6 +915,12 @@ Core endpoints:
 - [ ] Review `.claude/docs/database/SCHEMA_CRITICAL_FIXES.md` for past bugs
 - [ ] Verify column names match documentation exactly
 
+### Before ANY Database Schema Change:
+- [ ] Invoke database-migration skill
+- [ ] Complete Pre-Migration Checklist (Phase 0)
+- [ ] Follow 5-phase workflow (Generate → Rollback → Tests → Docs → Validate)
+- [ ] Verify all 6 critical bugs prevented (dict/scalar, JSON, typos, timezone, imports, tokens)
+
 ### Before ANY TrueLayer Work:
 - [ ] Read `.claude/docs/architecture/TRUELAYER_INTEGRATION.md`
 - [ ] Check relevant JSON spec in `.claude/docs/api/True Layer API/`
@@ -640,6 +933,7 @@ Core endpoints:
 - [ ] Only then begin implementation
 
 ### After Completing Work:
+- [ ] Run tests: `PYTHONPATH=/home/kaihaan/prj/spending/backend pytest`
 - [ ] Update relevant documentation if schema/API changed
 - [ ] Add entry to schema change log if applicable
 - [ ] Verify code matches documentation
@@ -674,12 +968,18 @@ Built with **TypeScript** + React + Vite + Tailwind CSS v4 + daisyUI.
 ```
 /backend/
   /mcp/            MCP components (TrueLayer, LLM providers, matchers)
+  /database/       SQLAlchemy models organized by domain
+    /models/       (truelayer, amazon, gmail, apple, category, enrichment, user)
+    base.py        Engine, session factory, declarative base
+  /alembic/        Alembic migration scripts
+  /tests/          pytest test suite
+    /test_models/  Model tests by domain
   /tasks/          Celery background tasks
-  /config/         Configuration modules
-  /migrations/     Database migrations
+  /mcp_server/     MCP server for Claude Code integration
   app.py           Main Flask application
   celery_app.py    Celery worker configuration
-  database_postgres.py  PostgreSQL adapter
+  database_postgres.py  PostgreSQL adapter (legacy, being replaced by SQLAlchemy)
+  alembic.ini      Alembic configuration
 /frontend/
   /src/
     /components/   Reusable UI components
@@ -688,8 +988,10 @@ Built with **TypeScript** + React + Vite + Tailwind CSS v4 + daisyUI.
     /utils/        Utility functions
     /charts/       D3 visualisation components
 /postgres/
-  /init/           Database initialisation scripts
+  /init/           Database initialisation SQL scripts
+/docs/
+  /plans/          Active implementation plans
 /.claude/
-  /docs/           All documentation (AUTHORITATIVE)
+  /docs/           Reference documentation (AUTHORITATIVE)
   CLAUDE.md        This file
 ```
