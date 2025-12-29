@@ -13,6 +13,7 @@ See: .claude/docs/database/DATABASE_SCHEMA.md#12-amazon_orders
 """
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -91,6 +92,15 @@ class AmazonBusinessConnection(Base):
     status = Column(
         String(20), nullable=True, default="active", server_default="active"
     )
+    # SP-API specific fields (added in migration 08)
+    is_sandbox = Column(Boolean, nullable=True, default=True, server_default="true")
+    marketplace_id = Column(
+        String(20),
+        nullable=True,
+        default="A1F83G8C2ARO7P",
+        server_default="A1F83G8C2ARO7P",
+    )
+    last_synced_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -161,7 +171,7 @@ class AmazonBusinessLineItem(Base):
 
 
 class TrueLayerAmazonTransactionMatch(Base):
-    """Linking TrueLayer transactions to Amazon orders."""
+    """Linking TrueLayer transactions to Amazon orders (legacy consumer orders)."""
 
     __tablename__ = "truelayer_amazon_transaction_matches"
 
@@ -180,3 +190,27 @@ class TrueLayerAmazonTransactionMatch(Base):
 
     def __repr__(self) -> str:
         return f"<TrueLayerAmazonTransactionMatch(id={self.id}, truelayer_id={self.truelayer_transaction_id}, amazon_id={self.amazon_order_id})>"
+
+
+class TrueLayerAmazonBusinessMatch(Base):
+    """Linking TrueLayer transactions to Amazon Business orders (SP-API)."""
+
+    __tablename__ = "truelayer_amazon_business_matches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    truelayer_transaction_id = Column(
+        Integer, ForeignKey("truelayer_transactions.id"), nullable=False, unique=True
+    )
+    amazon_business_order_id = Column(
+        Integer, ForeignKey("amazon_business_orders.id"), nullable=False
+    )
+    match_confidence = Column(Integer, nullable=False)
+    matched_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_ab_matches_transaction", "truelayer_transaction_id"),
+        Index("idx_ab_matches_order", "amazon_business_order_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<TrueLayerAmazonBusinessMatch(id={self.id}, truelayer_id={self.truelayer_transaction_id}, amazon_order_id={self.amazon_business_order_id})>"

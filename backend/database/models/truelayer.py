@@ -295,7 +295,7 @@ class TrueLayerCardTransaction(Base):
     merchant_name = Column(String(255), nullable=True)
     running_balance = Column(Numeric, nullable=True)
     metadata_ = Column(
-        "metadata", Text, nullable=True
+        Text, name="metadata", nullable=True
     )  # Use metadata_ in Python, metadata in DB (TEXT not JSONB)
     created_at = Column(
         DateTime(timezone=False), server_default=func.current_timestamp()
