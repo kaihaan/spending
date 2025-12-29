@@ -340,7 +340,7 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
                     })}
                   </td>
                   <td className="text-right font-mono">
-                    £{order.total_amount.toFixed(2)}
+                    £{Number(order.total_amount).toFixed(2)}
                   </td>
                   <td>
                     <span className="badge badge-ghost badge-sm">

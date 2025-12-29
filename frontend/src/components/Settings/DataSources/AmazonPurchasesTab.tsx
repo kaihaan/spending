@@ -249,7 +249,7 @@ export default function AmazonPurchasesTab({ stats, onStatsUpdate }: AmazonPurch
                     {order.product_names}
                   </td>
                   <td className="text-right font-mono">
-                    £{order.total_owed.toFixed(2)}
+                    £{Number(order.total_owed).toFixed(2)}
                   </td>
                   <td>
                     {order.matched_transaction_id ? (

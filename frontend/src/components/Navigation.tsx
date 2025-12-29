@@ -2,6 +2,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import BackgroundTaskIndicator from './BackgroundTaskIndicator';
 import { useAuth } from '../contexts/AuthContext';
+import AboutModal from './AboutModal';
 
 interface NavLink {
   path: string;
@@ -14,6 +15,7 @@ export default function Navigation() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
 
   // Generate initials from username or email
   const getInitials = (): string => {
@@ -132,6 +134,11 @@ export default function Navigation() {
                   Profile
                 </Link>
               </li>
+              <li>
+                <button onClick={() => setShowAbout(true)}>
+                  About
+                </button>
+              </li>
               <div className="divider my-1"></div>
               <li>
                 <button onClick={handleLogout} className="text-error">
@@ -146,6 +153,9 @@ export default function Navigation() {
           </Link>
         )}
       </div>
+
+      {/* About Modal */}
+      <AboutModal isOpen={showAbout} onClose={() => setShowAbout(false)} />
     </div>
   );
 }

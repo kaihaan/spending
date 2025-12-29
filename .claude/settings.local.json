@@ -277,9 +277,59 @@
       "Bash(backend/requirements-dev.txt )",
       "Bash(backend/routes/transactions.py )",
       "Bash(backend/routes/truelayer.py )",
-      "Bash(backend/services/transactions_service.py)"
+      "Bash(backend/services/transactions_service.py)",
+      "Bash(PYTHONPATH=/home/kaihaan/prj/spending/backend python3:*)",
+      "mcp__context7__query-docs",
+      "Bash(npm run test:run:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(./node_modules/.bin/tsc:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx playwright:*)",
+      "Bash(npm run e2e:install:*)",
+      "Bash(npm run e2e:*)",
+      "Bash(vitest.config.ts )",
+      "Bash(playwright.config.ts )",
+      "Bash(src/test/ )",
+      "Bash(src/utils/filterUtils.test.ts )",
+      "Bash(src/pages/Login.test.tsx )",
+      "Bash(e2e/ )",
+      "Bash(package.json )",
+      "Bash(package-lock.json )",
+      "Bash(tsconfig.json )",
+      "Bash(.gitignore)",
+      "Bash(frontend/src/components/Settings/DataSources/AmazonPurchasesTab.tsx )",
+      "Bash(frontend/src/components/Settings/DataSources/AmazonReturnsTab.tsx )",
+      "Bash(frontend/src/components/Settings/DataSources/AppleAppStoreTab.tsx )",
+      "Bash(frontend/src/components/Settings/DataSources/AmazonBusinessTab.tsx )",
+      "Bash(frontend/src/components/Settings/DataSources/GmailReceiptsTab.tsx)",
+      "Bash(xhost:*)",
+      "Bash(for f in /home/kaihaan/prj/spending/postgres/init/*.sql)",
+      "mcp__serena__replace_symbol_body",
+      "Bash(.claude/docs/database/DATABASE_SCHEMA.md )",
+      "Bash(backend/alembic/versions/4c0e082bb23c_initial_schema_from_sqlalchemy_models.py )",
+      "Bash(backend/alembic/versions/b2c6ccfa452a_baseline_from_production_db.py )",
+      "Bash(backend/database/base.py )",
+      "Bash(backend/database/models/category.py )",
+      "Bash(backend/database/models/enrichment.py )",
+      "Bash(backend/database/models/gmail.py )",
+      "Bash(backend/database/models/user.py )",
+      "Bash(backend/tests/test_migration_verify.py)"
     ],
     "deny": [],
     "ask": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/block-ddl-commands.py",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
   }
 }

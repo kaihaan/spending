@@ -476,12 +476,58 @@ docker exec spending-postgres pg_dump -U spending_user spending_db > backup.sql
 
 **CRITICAL: Always use test database when testing**
 
+### ⛔ MANDATORY: Test Database Safety (DO NOT SKIP)
+
+**THIS IS NON-NEGOTIABLE. Tests MUST NEVER touch the production database (`spending_db`).**
+
+The codebase has multiple safety layers to prevent this, but understanding them is essential:
+
+**Safety Layer 1: Environment Variable (`TESTING=true`)**
+- pytest's `conftest.py` sets `TESTING=true` before any database operations
+- This environment variable triggers automatic database routing
+
+**Safety Layer 2: Automatic Database Routing (`database/base.py`)**
+```python
+# If TESTING=true, the system FORCES connection to spending_db_test
+# Even if POSTGRES_DB is set to spending_db, it will be overridden
+IS_TESTING = os.getenv("TESTING", "").lower() in ("true", "1", "yes")
+if IS_TESTING and db_name == "spending_db":
+    db_name = "spending_db_test"  # FORCE test database
+```
+
+**Safety Layer 3: Runtime Verification (`conftest.py`)**
+```python
+# Every test fixture verifies the connected database
+def verify_test_database_connection(session):
+    current_db = session.execute(text("SELECT current_database()")).scalar()
+    if current_db == "spending_db":
+        raise RuntimeError("CRITICAL: Connected to production database!")
+```
+
+**What Happens If Safety Fails:**
+- Tests will FAIL IMMEDIATELY with a big visual error box
+- No data operations will proceed
+- The error message explicitly states the violation
+
+**When Writing New Tests:**
+1. ALWAYS use fixtures from `conftest.py` (`client`, `db_session`, `app`)
+2. NEVER create your own database connections
+3. NEVER hardcode database names or connection strings
+4. NEVER bypass the fixture system
+
+**When Modifying Database Code:**
+1. NEVER remove or weaken the `IS_TESTING` check in `database/base.py`
+2. NEVER remove verification calls in `conftest.py`
+3. If adding new database modules, copy the safety pattern from `base.py`
+
 ### Test vs Production Databases
 
 | Database | Purpose | Port | Persistence | Usage |
 |----------|---------|------|-------------|-------|
 | `spending_db` | **Production/Development** | 5433 | Permanent | Live data, manual testing ONLY |
-| `spending_db_test` | **Testing** | 5432 | **Persistent** | Automated tests, safe to modify |
+| `spending_db_test` | **Testing** | 5433 | **Persistent** | Automated tests, safe to modify |
+
+**Note:** Both databases run on the same PostgreSQL server (port 5433). Differentiation is by database NAME, not port.
 
 **Golden Rule:** If you're testing → use pytest with `spending_db_test`
 
@@ -556,11 +602,17 @@ PYTHONPATH=/home/kaihaan/prj/spending/backend pytest
 
 ### Test Safety Checklist
 
-Before any database operation during testing:
-- [ ] Using `spending_db_test` (port 5432), NOT `spending_db` (port 5433)
-- [ ] Using pytest framework, NOT manual curl
-- [ ] Test fixtures handle setup/teardown
-- [ ] Test data is isolated (no hardcoded user_id=1)
+**⚠️ BEFORE any database operation during testing:**
+- [ ] Running via `pytest` command (NOT manual scripts)
+- [ ] `TESTING=true` is set (automatic when using pytest)
+- [ ] Using fixtures from `conftest.py` (`client`, `db_session`, `app`)
+- [ ] NOT creating manual database connections
+- [ ] Test data uses unique identifiers (NOT hardcoded `user_id=1`)
+- [ ] Verified connection to `spending_db_test` (safety checks do this automatically)
+
+**🚨 IF SAFETY IS VIOLATED:**
+Production data could be corrupted, deleted, or exposed. This is UNRECOVERABLE without backups.
+The safety mechanisms exist precisely because this mistake is easy to make and catastrophic.
 
 ### Common Testing Patterns
 

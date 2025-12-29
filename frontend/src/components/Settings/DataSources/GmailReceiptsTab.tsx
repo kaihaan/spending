@@ -490,7 +490,7 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
                   </td>
                   <td className="text-right font-mono">
                     {receipt.total_amount !== null ? (
-                      `£${receipt.total_amount.toFixed(2)}`
+                      `£${Number(receipt.total_amount).toFixed(2)}`
                     ) : (
                       <span className="opacity-50">-</span>
                     )}

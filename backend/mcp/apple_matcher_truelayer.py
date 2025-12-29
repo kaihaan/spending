@@ -149,8 +149,8 @@ def find_best_apple_match(transaction, apple_transactions):
         if date_diff_days > 3:
             continue
 
-        # Amount match
-        if abs(txn_amount - abs(apple["total_amount"])) > 0.01:
+        # Amount match (convert Decimal to float for comparison)
+        if abs(txn_amount - float(abs(apple["total_amount"]))) > 0.01:
             continue
 
         # Calculate confidence
@@ -179,7 +179,7 @@ def find_best_apple_match(transaction, apple_transactions):
         print("[Apple Matcher]   No candidates found. Sample Apple transactions:")
         for apple in apple_transactions[:3]:  # Show first 3
             print(
-                f"[Apple Matcher]     Apple: date={apple.get('order_date')}, amount=£{apple.get('total_amount'):.2f}, app={apple.get('app_names', '')[:30]}"
+                f"[Apple Matcher]     Apple: date={apple.get('order_date')}, amount=£{float(apple.get('total_amount', 0)):.2f}, app={apple.get('app_names', '')[:30]}"
             )
         return None
 

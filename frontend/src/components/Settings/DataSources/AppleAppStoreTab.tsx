@@ -301,7 +301,7 @@ export default function AppleAppStoreTab({ stats, onStatsUpdate }: AppleAppStore
                     {txn.publishers || 'Unknown'}
                   </td>
                   <td className="text-right font-mono">
-                    £{txn.total_amount.toFixed(2)}
+                    £{Number(txn.total_amount).toFixed(2)}
                   </td>
                   <td className="text-center">
                     <span className="badge badge-ghost badge-sm">{txn.item_count}</span>

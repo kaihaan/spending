@@ -246,7 +246,7 @@ export default function AmazonReturnsTab({ stats, onStatsUpdate }: AmazonReturns
                     })}
                   </td>
                   <td className="text-right font-mono text-success">
-                    £{ret.amount_refunded.toFixed(2)}
+                    £{Number(ret.amount_refunded).toFixed(2)}
                   </td>
                   <td>
                     <span className="badge badge-ghost badge-sm">
