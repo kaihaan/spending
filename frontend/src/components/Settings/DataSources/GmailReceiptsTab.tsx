@@ -7,17 +7,31 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../../api/client';
-import SourceMetrics from './components/SourceMetrics';
-import DateRangeIndicator from './components/DateRangeIndicator';
 import { GmailDateRangeSelector, getDefaultDateRange } from '../../GmailDateRangeSelector';
 import { GmailSyncProgressBar } from '../../GmailSyncProgressBar';
 import type { GmailStats, GmailReceipt, GmailConnection } from './types';
+
+/** Format date string to readable format like "01 Jan 2025" */
+function formatDateRange(dateString: string): string {
+  const date = new Date(dateString);
+  return date.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
 
 const API_URL = 'http://localhost:5000/api'; // Keep for OAuth redirect URLs
 
 interface GmailReceiptsTabProps {
   stats: GmailStats | null;
   onStatsUpdate: () => void;
+}
+
+interface BankStats {
+  min_date: string | null;
+  max_date: string | null;
+  transaction_count: number;
 }
 
 export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceiptsTabProps) {
@@ -30,6 +44,9 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
   // Connection state
   const [connection, setConnection] = useState<GmailConnection | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(true);
+
+  // Bank stats for overlap calculation
+  const [bankStats, setBankStats] = useState<BankStats | null>(null);
 
   // Sync state
   const [showSync, setShowSync] = useState(false);
@@ -74,10 +91,44 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
     }
   }, []);
 
+  const fetchBankStats = useCallback(async () => {
+    try {
+      const response = await apiClient.get<BankStats>('/truelayer/statistics');
+      setBankStats(response.data);
+    } catch (error) {
+      console.error('Failed to fetch bank stats:', error);
+      setBankStats(null);
+    }
+  }, []);
+
   useEffect(() => {
     fetchReceipts();
     fetchConnection();
-  }, [fetchReceipts, fetchConnection]);
+    fetchBankStats();
+  }, [fetchReceipts, fetchConnection, fetchBankStats]);
+
+  // Calculate overlap between Gmail receipts and bank transactions
+  const getOverlapDateRange = (): { start: string; end: string } | null => {
+    if (!stats?.min_receipt_date || !stats?.max_receipt_date) return null;
+    if (!bankStats?.min_date || !bankStats?.max_date) return null;
+
+    const gmailStart = new Date(stats.min_receipt_date);
+    const gmailEnd = new Date(stats.max_receipt_date);
+    const bankStart = new Date(bankStats.min_date);
+    const bankEnd = new Date(bankStats.max_date);
+
+    // Calculate overlap: max of starts, min of ends
+    const overlapStart = gmailStart > bankStart ? gmailStart : bankStart;
+    const overlapEnd = gmailEnd < bankEnd ? gmailEnd : bankEnd;
+
+    // If no overlap, return null
+    if (overlapStart > overlapEnd) return null;
+
+    return {
+      start: overlapStart.toISOString(),
+      end: overlapEnd.toISOString(),
+    };
+  };
 
   // Check for saved Gmail sync job on mount and resume if still active
   useEffect(() => {
@@ -392,47 +443,83 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
         </div>
       )}
 
-      {/* Metrics - two rows for Gmail (includes parsing status) */}
-      <div className="space-y-4">
-        <SourceMetrics
-          total={stats?.total_receipts ?? 0}
-          matched={stats?.matched_receipts ?? 0}
-          unmatched={(stats?.total_receipts ?? 0) - (stats?.matched_receipts ?? 0)}
-          isLoading={!stats}
-          labels={{ total: 'Receipts', matched: 'Matched', unmatched: 'Unmatched' }}
-        />
-
-        {/* Parsing Status Row */}
-        {stats && (
-          <div className="grid grid-cols-3 gap-4">
-            <div className="stat bg-base-200 rounded-lg">
-              <div className="stat-title">Parsed</div>
-              <div className="stat-value text-xl text-success">
-                {stats.parsed_receipts.toLocaleString()}
+      {/* Overview Panel */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Metrics - 2x2 grid */}
+        <div className="bg-base-200 rounded-lg p-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-4">
+              <div>
+                <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Receipts</div>
+                {!stats ? (
+                  <div className="animate-pulse h-5 bg-base-300 rounded w-24" />
+                ) : (
+                  <div className="font-medium text-2xl">{stats.total_receipts.toLocaleString()}</div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Matched</div>
+                {!stats ? (
+                  <div className="animate-pulse h-5 bg-base-300 rounded w-24" />
+                ) : (
+                  <div className="font-medium text-2xl text-success">{stats.matched_receipts.toLocaleString()}</div>
+                )}
               </div>
             </div>
-            <div className="stat bg-base-200 rounded-lg">
-              <div className="stat-title">Pending</div>
-              <div className="stat-value text-xl text-info">
-                {stats.pending_receipts.toLocaleString()}
+            <div className="space-y-4">
+              <div>
+                <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Parsed</div>
+                {!stats ? (
+                  <div className="animate-pulse h-5 bg-base-300 rounded w-24" />
+                ) : (
+                  <div className="font-medium text-2xl text-success">{stats.parsed_receipts.toLocaleString()}</div>
+                )}
               </div>
-            </div>
-            <div className="stat bg-base-200 rounded-lg">
-              <div className="stat-title">Failed</div>
-              <div className="stat-value text-xl text-error">
-                {stats.failed_receipts.toLocaleString()}
+              <div>
+                <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Unmatched</div>
+                {!stats ? (
+                  <div className="animate-pulse h-5 bg-base-300 rounded w-24" />
+                ) : (
+                  <div className="font-medium text-2xl text-warning">
+                    {((stats.total_receipts ?? 0) - (stats.matched_receipts ?? 0)).toLocaleString()}
+                  </div>
+                )}
               </div>
             </div>
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* Date Range */}
-      <DateRangeIndicator
-        minDate={stats?.min_receipt_date ?? null}
-        maxDate={stats?.max_receipt_date ?? null}
-        isLoading={!stats}
-      />
+        {/* Date Ranges - stacked vertically */}
+        <div className="bg-base-200 rounded-lg p-4 space-y-4">
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Receipts Date Range</div>
+            {!stats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-48" />
+            ) : stats.min_receipt_date && stats.max_receipt_date ? (
+              <div className="font-medium">
+                {formatDateRange(stats.min_receipt_date)} — {formatDateRange(stats.max_receipt_date)}
+              </div>
+            ) : (
+              <div className="text-base-content/50">No data</div>
+            )}
+          </div>
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Bank Overlap</div>
+            {!stats || !bankStats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-48" />
+            ) : (() => {
+              const overlap = getOverlapDateRange();
+              return overlap ? (
+                <div className="font-medium">
+                  {formatDateRange(overlap.start)} — {formatDateRange(overlap.end)}
+                </div>
+              ) : (
+                <div className="text-base-content/50">No overlap</div>
+              );
+            })()}
+          </div>
+        </div>
+      </div>
 
       {/* Receipts Table */}
       <div className="overflow-x-auto">

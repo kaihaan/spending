@@ -7,13 +7,26 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../../api/client';
-import SourceMetrics from './components/SourceMetrics';
-import DateRangeIndicator from './components/DateRangeIndicator';
 import type { AmazonBusinessStats, AmazonBusinessOrder, AmazonBusinessConnection } from './types';
+
+/** Format date string to readable format like "01 Jan 2025" */
+function formatDateRange(dateString: string): string {
+  const date = new Date(dateString);
+  return date.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
 
 interface AmazonBusinessTabProps {
   stats: AmazonBusinessStats | null;
   onStatsUpdate: () => void;
+}
+
+interface BankStats {
+  min_date: string | null;
+  max_date: string | null;
 }
 
 export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusinessTabProps) {
@@ -26,6 +39,9 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
   // Connection state
   const [connection, setConnection] = useState<AmazonBusinessConnection | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(true);
+
+  // Bank stats for overlap calculation
+  const [bankStats, setBankStats] = useState<BankStats | null>(null);
 
   // Import state
   const [showImport, setShowImport] = useState(false);
@@ -62,10 +78,39 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
     }
   }, []);
 
+  const fetchBankStats = useCallback(async () => {
+    try {
+      const response = await apiClient.get<BankStats>('/truelayer/statistics');
+      setBankStats(response.data);
+    } catch (error) {
+      console.error('Failed to fetch bank stats:', error);
+      setBankStats(null);
+    }
+  }, []);
+
   useEffect(() => {
     fetchOrders();
     fetchConnection();
-  }, [fetchOrders, fetchConnection]);
+    fetchBankStats();
+  }, [fetchOrders, fetchConnection, fetchBankStats]);
+
+  // Calculate overlap between orders and bank transactions
+  const getOverlapDateRange = (): { start: string; end: string } | null => {
+    if (!stats?.min_order_date || !stats?.max_order_date) return null;
+    if (!bankStats?.min_date || !bankStats?.max_date) return null;
+
+    const ordersStart = new Date(stats.min_order_date);
+    const ordersEnd = new Date(stats.max_order_date);
+    const bankStart = new Date(bankStats.min_date);
+    const bankEnd = new Date(bankStats.max_date);
+
+    const overlapStart = ordersStart > bankStart ? ordersStart : bankStart;
+    const overlapEnd = ordersEnd < bankEnd ? ordersEnd : bankEnd;
+
+    if (overlapStart > overlapEnd) return null;
+
+    return { start: overlapStart.toISOString(), end: overlapEnd.toISOString() };
+  };
 
   // Set default date range when opening import
   useEffect(() => {
@@ -279,21 +324,59 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
         </div>
       )}
 
-      {/* Metrics */}
-      <SourceMetrics
-        total={stats?.total_orders ?? 0}
-        matched={stats?.total_matched ?? 0}
-        unmatched={stats?.total_unmatched ?? 0}
-        isLoading={!stats}
-        labels={{ total: 'Orders', matched: 'Matched', unmatched: 'Unmatched' }}
-      />
+      {/* Overview Panel */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Orders & Matched - stacked vertically */}
+        <div className="bg-base-200 rounded-lg p-4 space-y-4">
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Orders</div>
+            {!stats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-24" />
+            ) : (
+              <div className="font-medium text-2xl">{stats.total_orders.toLocaleString()}</div>
+            )}
+          </div>
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Matched</div>
+            {!stats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-24" />
+            ) : (
+              <div className="font-medium text-2xl text-success">{stats.total_matched.toLocaleString()}</div>
+            )}
+          </div>
+        </div>
 
-      {/* Date Range */}
-      <DateRangeIndicator
-        minDate={stats?.min_order_date ?? null}
-        maxDate={stats?.max_order_date ?? null}
-        isLoading={!stats}
-      />
+        {/* Date Range - stacked vertically */}
+        <div className="bg-base-200 rounded-lg p-4 space-y-4">
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Orders Date Range</div>
+            {!stats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-48" />
+            ) : stats.min_order_date && stats.max_order_date ? (
+              <div className="font-medium">
+                {formatDateRange(stats.min_order_date)} — {formatDateRange(stats.max_order_date)}
+              </div>
+            ) : (
+              <div className="text-base-content/50">No data</div>
+            )}
+          </div>
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Bank Overlap</div>
+            {!stats || !bankStats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-48" />
+            ) : (() => {
+              const overlap = getOverlapDateRange();
+              return overlap ? (
+                <div className="font-medium">
+                  {formatDateRange(overlap.start)} — {formatDateRange(overlap.end)}
+                </div>
+              ) : (
+                <div className="text-base-content/50">No overlap</div>
+              );
+            })()}
+          </div>
+        </div>
+      </div>
 
       {/* Orders Table */}
       <div className="overflow-x-auto">

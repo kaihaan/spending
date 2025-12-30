@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 
-type TabType = 'bank' | 'enrichment' | 'data-sources' | 'developer' | 'categories' | 'direct-debits' | 'rules' | 'theme' | 'gmail-merchants' | 'gmail-llm-queue';
+type TabType = 'bank' | 'enrichment' | 'data-sources' | 'developer' | 'categories' | 'direct-debits' | 'theme' | 'gmail-merchants' | 'gmail-llm-queue';
 
-const VALID_TABS: TabType[] = ['bank', 'enrichment', 'data-sources', 'developer', 'categories', 'direct-debits', 'rules', 'theme', 'gmail-merchants', 'gmail-llm-queue'];
+const VALID_TABS: TabType[] = ['bank', 'enrichment', 'data-sources', 'developer', 'categories', 'direct-debits', 'theme', 'gmail-merchants', 'gmail-llm-queue'];
 const SETTINGS_TAB_KEY = 'settings-active-tab';
 
 /**
@@ -92,13 +92,6 @@ export default function SettingsTabsDrawer() {
             onClick={() => handleTabChange('direct-debits')}
           >
             Direct Debits
-          </button>
-          <button
-            role="tab"
-            className={`tab ${activeTab === 'rules' ? 'tab-active' : ''}`}
-            onClick={() => handleTabChange('rules')}
-          >
-            Rules
           </button>
           <button
             role="tab"

@@ -1,7 +1,7 @@
 /**
  * SourceMetrics Component
  *
- * Displays metrics cards for a data source: Total, Matched, Unmatched, Match %.
+ * Displays metrics cards for a data source: Total, Matched, Unmatched.
  * Used in individual source detail tabs.
  */
 
@@ -24,8 +24,6 @@ export default function SourceMetrics({
   isLoading = false,
   labels = {},
 }: SourceMetricsProps) {
-  const matchPercentage = total > 0 ? Math.round((matched / total) * 100) : 0;
-
   const {
     total: totalLabel = 'Total',
     matched: matchedLabel = 'Matched',
@@ -34,8 +32,8 @@ export default function SourceMetrics({
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[1, 2, 3, 4].map((i) => (
+      <div className="grid grid-cols-3 gap-4">
+        {[1, 2, 3].map((i) => (
           <div key={i} className="stat bg-base-200 rounded-lg animate-pulse">
             <div className="stat-title h-4 bg-base-300 rounded w-16 mb-2" />
             <div className="stat-value h-8 bg-base-300 rounded w-20" />
@@ -46,7 +44,7 @@ export default function SourceMetrics({
   }
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div className="grid grid-cols-3 gap-4">
       <div className="stat bg-base-200 rounded-lg">
         <div className="stat-title">{totalLabel}</div>
         <div className="stat-value text-2xl">{total.toLocaleString()}</div>
@@ -60,20 +58,6 @@ export default function SourceMetrics({
       <div className="stat bg-base-200 rounded-lg">
         <div className="stat-title">{unmatchedLabel}</div>
         <div className="stat-value text-2xl text-warning">{unmatched.toLocaleString()}</div>
-      </div>
-
-      <div className="stat bg-base-200 rounded-lg">
-        <div className="stat-title">Match %</div>
-        <div className={`stat-value text-2xl ${matchPercentage >= 90 ? 'text-success' : matchPercentage >= 70 ? 'text-warning' : 'text-error'}`}>
-          {matchPercentage}%
-        </div>
-        <div className="stat-desc">
-          <progress
-            className={`progress w-full ${matchPercentage >= 90 ? 'progress-success' : matchPercentage >= 70 ? 'progress-warning' : 'progress-error'}`}
-            value={matchPercentage}
-            max="100"
-          />
-        </div>
       </div>
     </div>
   );

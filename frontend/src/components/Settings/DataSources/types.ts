@@ -15,7 +15,9 @@ export type SourceTabId =
   | 'returns'
   | 'business'
   | 'apple'
-  | 'gmail';
+  | 'gmail'
+  | 'digital'
+  | 'matches';
 
 export interface SourceTab {
   id: SourceTabId;
@@ -34,6 +36,10 @@ export interface AmazonStats {
   total_unmatched: number;
   min_order_date: string | null;
   max_order_date: string | null;
+  min_bank_date: string | null;
+  max_bank_date: string | null;
+  overlap_start: string | null;
+  overlap_end: string | null;
 }
 
 export interface ReturnsStats {
@@ -68,6 +74,18 @@ export interface GmailStats {
   failed_receipts: number;
   min_receipt_date: string | null;
   max_receipt_date: string | null;
+}
+
+export interface AmazonDigitalStats {
+  total_orders: number;
+  matched_orders: number;
+  unmatched_orders: number;
+  min_order_date: string | null;
+  max_order_date: string | null;
+  min_bank_date: string | null;
+  max_bank_date: string | null;
+  overlap_start: string | null;
+  overlap_end: string | null;
 }
 
 // =============================================================================
@@ -124,6 +142,25 @@ export interface GmailReceipt {
   receipt_date: string | null;
   parsing_status: string;
   matched_transaction_id: number | null;
+}
+
+export interface AmazonDigitalOrder {
+  id: number;
+  asin: string;
+  product_name: string;
+  order_id: string;
+  digital_order_item_id: string;
+  order_date: string;
+  fulfilled_date: string | null;
+  price: number;
+  price_tax: number | null;
+  currency: string;
+  publisher: string | null;
+  seller_of_record: string | null;
+  marketplace: string | null;
+  source_file: string | null;
+  matched_transaction_id: number | null;
+  created_at: string | null;
 }
 
 // =============================================================================

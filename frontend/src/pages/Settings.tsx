@@ -5,14 +5,13 @@ import DataSources from '../components/Settings/DataSources';
 import DeveloperTab from '../components/Settings/DeveloperTab';
 import CategoriesTab from '../components/Settings/CategoriesTab';
 import DirectDebitsTab from '../components/Settings/DirectDebitsTab';
-import RulesTab from '../components/Settings/RulesTab';
 import ThemeTab from '../components/Settings/ThemeTab';
 import GmailMerchantsTab from '../components/Settings/GmailMerchantsTab';
 import GmailLLMQueueTab from '../components/Settings/GmailLLMQueueTab';
 
-type TabType = 'bank' | 'enrichment' | 'data-sources' | 'developer' | 'categories' | 'direct-debits' | 'rules' | 'theme' | 'gmail-merchants' | 'gmail-llm-queue';
+type TabType = 'bank' | 'enrichment' | 'data-sources' | 'developer' | 'categories' | 'direct-debits' | 'theme' | 'gmail-merchants' | 'gmail-llm-queue';
 
-const VALID_TABS: TabType[] = ['bank', 'enrichment', 'data-sources', 'developer', 'categories', 'direct-debits', 'rules', 'theme', 'gmail-merchants', 'gmail-llm-queue'];
+const VALID_TABS: TabType[] = ['bank', 'enrichment', 'data-sources', 'developer', 'categories', 'direct-debits', 'theme', 'gmail-merchants', 'gmail-llm-queue'];
 const SETTINGS_TAB_KEY = 'settings-active-tab';
 
 /**
@@ -58,6 +57,11 @@ export default function Settings() {
     return mainTab === 'data-sources' ? subTab : undefined;
   });
 
+  // Persist active tab to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem(SETTINGS_TAB_KEY, activeTab);
+  }, [activeTab]);
+
   useEffect(() => {
     // Sync hash on mount if needed
     if (!window.location.hash) {
@@ -93,7 +97,6 @@ export default function Settings() {
       {activeTab === 'developer' && <DeveloperTab />}
       {activeTab === 'categories' && <CategoriesTab />}
       {activeTab === 'direct-debits' && <DirectDebitsTab />}
-      {activeTab === 'rules' && <RulesTab />}
       {activeTab === 'gmail-merchants' && <GmailMerchantsTab />}
       {activeTab === 'gmail-llm-queue' && <GmailLLMQueueTab />}
       {activeTab === 'theme' && <ThemeTab />}

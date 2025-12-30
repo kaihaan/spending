@@ -7,9 +7,17 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../../api/client';
-import SourceMetrics from './components/SourceMetrics';
-import DateRangeIndicator from './components/DateRangeIndicator';
 import type { AmazonStats, AmazonOrder } from './types';
+
+/** Format date string to readable format like "01 Jan 2025" */
+function formatDateRange(dateString: string): string {
+  const date = new Date(dateString);
+  return date.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
 
 interface AmazonPurchasesTabProps {
   stats: AmazonStats | null;
@@ -187,21 +195,56 @@ export default function AmazonPurchasesTab({ stats, onStatsUpdate }: AmazonPurch
         </div>
       )}
 
-      {/* Metrics */}
-      <SourceMetrics
-        total={stats?.total_orders ?? 0}
-        matched={stats?.total_matched ?? 0}
-        unmatched={stats?.total_unmatched ?? 0}
-        isLoading={!stats}
-        labels={{ total: 'Orders', matched: 'Matched', unmatched: 'Unmatched' }}
-      />
+      {/* Metrics and Date Ranges */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Orders & Matched - stacked vertically */}
+        <div className="bg-base-200 rounded-lg p-4 space-y-4">
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Orders</div>
+            {!stats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-24" />
+            ) : (
+              <div className="font-medium text-2xl">{stats.total_orders.toLocaleString()}</div>
+            )}
+          </div>
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Matched</div>
+            {!stats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-24" />
+            ) : (
+              <div className="font-medium text-2xl text-success">{stats.total_matched.toLocaleString()}</div>
+            )}
+          </div>
+        </div>
 
-      {/* Date Range */}
-      <DateRangeIndicator
-        minDate={stats?.min_order_date ?? null}
-        maxDate={stats?.max_order_date ?? null}
-        isLoading={!stats}
-      />
+        {/* Date Ranges - stacked vertically in one box */}
+        <div className="bg-base-200 rounded-lg p-4 space-y-4">
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Amazon Imports</div>
+            {!stats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-48" />
+            ) : stats.min_order_date && stats.max_order_date ? (
+              <div className="font-medium">
+                {formatDateRange(stats.min_order_date)} — {formatDateRange(stats.max_order_date)}
+              </div>
+            ) : (
+              <div className="text-base-content/50">No data</div>
+            )}
+          </div>
+          <div>
+            <div className="text-xs text-base-content/60 uppercase tracking-wide mb-1">Bank Overlap</div>
+            {!stats ? (
+              <div className="animate-pulse h-5 bg-base-300 rounded w-48" />
+            ) : stats.overlap_start && stats.overlap_end ? (
+              <div className="font-medium text-success">
+                {formatDateRange(stats.overlap_start)} — {formatDateRange(stats.overlap_end)}
+              </div>
+            ) : (
+              <div className="text-warning">No overlap with bank data</div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Orders Table */}
       <div className="overflow-x-auto">
