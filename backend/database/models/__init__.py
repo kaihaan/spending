@@ -5,6 +5,7 @@ from .amazon import (
     AmazonBusinessConnection,
     AmazonBusinessLineItem,
     AmazonBusinessOrder,
+    AmazonDigitalOrder,
     AmazonOrder,
     AmazonReturn,
     TrueLayerAmazonTransactionMatch,
@@ -21,7 +22,12 @@ from .category import (
     NormalizedSubcategory,
     SubcategoryMapping,
 )
-from .enrichment import EnrichmentCache, TransactionEnrichmentSource
+from .enrichment import (
+    EnrichmentCache,
+    LLMEnrichmentResult,
+    RuleEnrichmentResult,
+    TransactionEnrichmentSource,
+)
 from .gmail import (
     GmailConnection,
     GmailEmailContent,
@@ -70,6 +76,7 @@ __all__ = [
     "TrueLayerEnrichmentJob",
     "AmazonOrder",
     "AmazonReturn",
+    "AmazonDigitalOrder",
     "AmazonBusinessConnection",
     "AmazonBusinessOrder",
     "AmazonBusinessLineItem",
@@ -82,4 +89,6 @@ __all__ = [
     "PDFAttachment",
     "TransactionEnrichmentSource",
     "EnrichmentCache",
+    "RuleEnrichmentResult",
+    "LLMEnrichmentResult",
 ]

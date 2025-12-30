@@ -13,12 +13,12 @@ Modules:
 """
 
 import contextlib
-import json
 
 import cache_manager
 from sqlalchemy import func, text
 
 from .base import get_session
+from .enrichment import save_rule_enrichment
 from .models.category import (
     Category,
     CategoryRule,
@@ -27,6 +27,11 @@ from .models.category import (
     NormalizedCategory,
     NormalizedSubcategory,
     SubcategoryMapping,
+)
+from .models.enrichment import (
+    LLMEnrichmentResult,
+    RuleEnrichmentResult,
+    TransactionEnrichmentSource,
 )
 from .models.truelayer import TrueLayerTransaction
 
@@ -108,21 +113,45 @@ def get_category_spending_summary(date_from=None, date_to=None):
 
 
 def get_subcategory_spending(category_name, date_from=None, date_to=None):
-    """Get subcategories within a category with spending totals."""
+    """Get subcategories within a category with spending totals.
+
+    Reads subcategory data from dedicated enrichment tables with COALESCE
+    priority: Rule > LLM > External.
+    """
     with get_session() as session:
-        # Build query with JSONB extraction for subcategory
+        # Build subquery to get subcategory from enrichment tables (coalesced)
+        # We use a CASE expression to prioritize: Rule > LLM > External
         subcategory_expr = func.coalesce(
-            TrueLayerTransaction.metadata["enrichment"]["subcategory"].astext,
+            RuleEnrichmentResult.subcategory,
+            LLMEnrichmentResult.subcategory,
+            TransactionEnrichmentSource.subcategory,
             "Unknown",
         ).label("name")
 
-        query = session.query(
-            subcategory_expr,
-            func.sum(TrueLayerTransaction.amount).label("total_spend"),
-            func.count().label("transaction_count"),
-        ).filter(
-            TrueLayerTransaction.transaction_type == "DEBIT",
-            TrueLayerTransaction.transaction_category == category_name,
+        query = (
+            session.query(
+                subcategory_expr,
+                func.sum(TrueLayerTransaction.amount).label("total_spend"),
+                func.count().label("transaction_count"),
+            )
+            .outerjoin(
+                RuleEnrichmentResult,
+                TrueLayerTransaction.id
+                == RuleEnrichmentResult.truelayer_transaction_id,
+            )
+            .outerjoin(
+                LLMEnrichmentResult,
+                TrueLayerTransaction.id == LLMEnrichmentResult.truelayer_transaction_id,
+            )
+            .outerjoin(
+                TransactionEnrichmentSource,
+                TrueLayerTransaction.id
+                == TransactionEnrichmentSource.truelayer_transaction_id,
+            )
+            .filter(
+                TrueLayerTransaction.transaction_type == "DEBIT",
+                TrueLayerTransaction.transaction_category == category_name,
+            )
         )
 
         if date_from:
@@ -131,7 +160,12 @@ def get_subcategory_spending(category_name, date_from=None, date_to=None):
             query = query.filter(TrueLayerTransaction.timestamp <= date_to)
 
         query = query.group_by(
-            TrueLayerTransaction.metadata["enrichment"]["subcategory"].astext
+            func.coalesce(
+                RuleEnrichmentResult.subcategory,
+                LLMEnrichmentResult.subcategory,
+                TransactionEnrichmentSource.subcategory,
+                "Unknown",
+            )
         ).order_by(text("total_spend DESC"))
 
         results = query.all()
@@ -157,6 +191,9 @@ def get_subcategory_spending(category_name, date_from=None, date_to=None):
 def create_promoted_category(name, subcategories, user_id=1):
     """
     Create a promoted category from subcategories and update all matching transactions.
+
+    Updates transaction_category and primary_category in enrichment tables
+    for transactions with matching subcategories.
 
     Args:
         name: Name of the new category
@@ -191,32 +228,65 @@ def create_promoted_category(name, subcategories, user_id=1):
                 session.add(mapping)
                 subcategory_names.append(sub["name"])
 
-            # Update all transactions with matching subcategories
+            transactions_updated = 0
+
             if subcategory_names:
-                # Use raw SQL for JSONB_SET operation
-                result = session.execute(
-                    text(
-                        """
-                        UPDATE truelayer_transactions
-                        SET
-                            transaction_category = :name,
-                            metadata = jsonb_set(
-                                COALESCE(metadata, '{}'::jsonb),
-                                '{enrichment,primary_category}',
-                                :name_json::jsonb
-                            )
-                        WHERE metadata->'enrichment'->>'subcategory' = ANY(:subcategories)
-                    """
-                    ),
-                    {
-                        "name": name,
-                        "name_json": json.dumps(name),
-                        "subcategories": subcategory_names,
-                    },
+                # Find transaction IDs with matching subcategories in enrichment tables
+                # Check all three enrichment tables
+
+                # Rule enrichment
+                rule_txn_ids = (
+                    session.query(RuleEnrichmentResult.truelayer_transaction_id)
+                    .filter(RuleEnrichmentResult.subcategory.in_(subcategory_names))
+                    .all()
                 )
-                transactions_updated = result.rowcount
-            else:
-                transactions_updated = 0
+
+                # LLM enrichment
+                llm_txn_ids = (
+                    session.query(LLMEnrichmentResult.truelayer_transaction_id)
+                    .filter(LLMEnrichmentResult.subcategory.in_(subcategory_names))
+                    .all()
+                )
+
+                # External enrichment
+                ext_txn_ids = (
+                    session.query(TransactionEnrichmentSource.truelayer_transaction_id)
+                    .filter(
+                        TransactionEnrichmentSource.subcategory.in_(subcategory_names)
+                    )
+                    .all()
+                )
+
+                # Combine all transaction IDs
+                all_txn_ids = set()
+                all_txn_ids.update(t[0] for t in rule_txn_ids)
+                all_txn_ids.update(t[0] for t in llm_txn_ids)
+                all_txn_ids.update(t[0] for t in ext_txn_ids)
+
+                if all_txn_ids:
+                    txn_id_list = list(all_txn_ids)
+
+                    # Update transaction_category on TrueLayerTransaction
+                    session.query(TrueLayerTransaction).filter(
+                        TrueLayerTransaction.id.in_(txn_id_list)
+                    ).update({"transaction_category": name}, synchronize_session=False)
+
+                    # Update primary_category in enrichment tables
+                    session.query(RuleEnrichmentResult).filter(
+                        RuleEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                    ).update({"primary_category": name}, synchronize_session=False)
+
+                    session.query(LLMEnrichmentResult).filter(
+                        LLMEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                    ).update({"primary_category": name}, synchronize_session=False)
+
+                    session.query(TransactionEnrichmentSource).filter(
+                        TransactionEnrichmentSource.truelayer_transaction_id.in_(
+                            txn_id_list
+                        )
+                    ).update({"primary_category": name}, synchronize_session=False)
+
+                    transactions_updated = len(all_txn_ids)
 
             session.commit()
 
@@ -236,6 +306,9 @@ def create_promoted_category(name, subcategories, user_id=1):
 def hide_category(name, user_id=1):
     """
     Hide a category and reset its transactions for re-enrichment.
+
+    Deletes enrichment data from dedicated enrichment tables for transactions
+    in this category, allowing them to be re-enriched.
 
     Args:
         name: Name of the category to hide
@@ -260,21 +333,36 @@ def hide_category(name, user_id=1):
         result = session.execute(stmt)
         category_id = result.scalar_one()
 
-        # Reset all transactions with this category for re-enrichment
-        # Use text() for JSONB deletion operator
-        result = session.execute(
-            text(
-                """
-                UPDATE truelayer_transactions
-                SET
-                    transaction_category = NULL,
-                    metadata = metadata - 'enrichment'
-                WHERE transaction_category = :name
-            """
-            ),
-            {"name": name},
+        # Get transaction IDs with this category
+        transaction_ids = (
+            session.query(TrueLayerTransaction.id)
+            .filter(TrueLayerTransaction.transaction_category == name)
+            .all()
         )
-        transactions_reset = result.rowcount
+        transaction_ids = [t[0] for t in transaction_ids]
+
+        if transaction_ids:
+            # Delete from all enrichment tables for these transactions
+            session.query(RuleEnrichmentResult).filter(
+                RuleEnrichmentResult.truelayer_transaction_id.in_(transaction_ids)
+            ).delete(synchronize_session=False)
+
+            session.query(LLMEnrichmentResult).filter(
+                LLMEnrichmentResult.truelayer_transaction_id.in_(transaction_ids)
+            ).delete(synchronize_session=False)
+
+            session.query(TransactionEnrichmentSource).filter(
+                TransactionEnrichmentSource.truelayer_transaction_id.in_(
+                    transaction_ids
+                )
+            ).delete(synchronize_session=False)
+
+            # Reset transaction_category to NULL
+            session.query(TrueLayerTransaction).filter(
+                TrueLayerTransaction.id.in_(transaction_ids)
+            ).update({"transaction_category": None}, synchronize_session=False)
+
+        transactions_reset = len(transaction_ids)
 
         session.commit()
 
@@ -459,14 +547,9 @@ def get_rules_statistics() -> dict:
             session.query(func.count()).select_from(TrueLayerTransaction).scalar()
         )
 
+        # Count transactions with rule-based enrichment from dedicated table
         covered_transactions = (
-            session.query(func.count())
-            .select_from(TrueLayerTransaction)
-            .filter(
-                TrueLayerTransaction.metadata["enrichment"]["enrichment_source"].astext
-                == "rule"
-            )
-            .scalar()
+            session.query(func.count()).select_from(RuleEnrichmentResult).scalar()
         )
 
         coverage_percentage = (
@@ -486,10 +569,10 @@ def get_rules_statistics() -> dict:
         rules_by_category = {row.category: row.count for row in rules_by_category_query}
 
         # Rules by source (combine both tables)
-        category_sources = session.query(CategoryRule.source).filter(
+        category_sources = session.query(CategoryRule.source.label("source")).filter(
             CategoryRule.is_active.is_(True)
         )
-        merchant_sources = session.query(MerchantNormalization.source)
+        merchant_sources = session.query(MerchantNormalization.source.label("source"))
 
         combined_sources = union_all(category_sources, merchant_sources).subquery()
 
@@ -504,13 +587,13 @@ def get_rules_statistics() -> dict:
         # Top used rules (combine category rules and merchant normalizations)
         category_rules_query = session.query(
             CategoryRule.rule_name.label("name"),
-            CategoryRule.usage_count,
+            CategoryRule.usage_count.label("usage_count"),
             literal("category").label("type"),
         ).filter(CategoryRule.is_active.is_(True))
 
         merchant_rules_query = session.query(
             MerchantNormalization.pattern.label("name"),
-            MerchantNormalization.usage_count,
+            MerchantNormalization.usage_count.label("usage_count"),
             literal("merchant").label("type"),
         )
 
@@ -831,19 +914,25 @@ def apply_all_rules_to_transactions() -> dict:
             )
 
             if result and result.get("primary_category"):
-                # Update the transaction with rule-based enrichment
-                metadata = txn.metadata or {}
-                metadata["enrichment"] = result
+                # Determine rule_type from llm_model field
+                llm_model = result.get("llm_model", "consistency_rule")
+                if llm_model == "direct_debit_rule":
+                    rule_type = "direct_debit"
+                else:
+                    rule_type = "category_rule"
 
-                session.execute(
-                    text(
-                        """
-                        UPDATE truelayer_transactions
-                        SET metadata = :metadata
-                        WHERE id = :txn_id
-                    """
-                    ),
-                    {"metadata": json.dumps(metadata), "txn_id": txn.id},
+                # Save to dedicated rule_enrichment_results table
+                save_rule_enrichment(
+                    transaction_id=txn.id,
+                    primary_category=result.get("primary_category"),
+                    rule_type=rule_type,
+                    subcategory=result.get("subcategory"),
+                    essential_discretionary=result.get("essential_discretionary"),
+                    merchant_clean_name=result.get("merchant_clean_name"),
+                    merchant_type=result.get("merchant_type"),
+                    matched_rule_name=result.get("matched_rule"),
+                    matched_merchant_name=result.get("matched_merchant"),
+                    confidence_score=result.get("confidence_score", 1.0),
                 )
 
                 updated_count += 1
@@ -1217,20 +1306,29 @@ def update_normalized_category(
             )
             transactions_updated = result.rowcount
 
-            # Update JSONB metadata
-            session.execute(
-                text("""
-                    UPDATE truelayer_transactions
-                    SET metadata = jsonb_set(
-                        metadata,
-                        '{enrichment,primary_category}',
-                        :new_name_json::jsonb
-                    )
-                    WHERE category_id = :category_id
-                      AND metadata->'enrichment' IS NOT NULL
-                """),
-                {"new_name_json": json.dumps(new_name), "category_id": category_id},
+            # Update primary_category in enrichment tables
+            # Get transaction IDs for this category
+            txn_ids = (
+                session.query(TrueLayerTransaction.id)
+                .filter(TrueLayerTransaction.category_id == category_id)
+                .all()
             )
+            txn_id_list = [t[0] for t in txn_ids]
+
+            if txn_id_list:
+                session.query(RuleEnrichmentResult).filter(
+                    RuleEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                ).update({"primary_category": new_name}, synchronize_session=False)
+
+                session.query(LLMEnrichmentResult).filter(
+                    LLMEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                ).update({"primary_category": new_name}, synchronize_session=False)
+
+                session.query(TransactionEnrichmentSource).filter(
+                    TransactionEnrichmentSource.truelayer_transaction_id.in_(
+                        txn_id_list
+                    )
+                ).update({"primary_category": new_name}, synchronize_session=False)
 
             # Update category_rules VARCHAR
             result = session.execute(
@@ -1603,25 +1701,32 @@ def update_normalized_subcategory(
 
         transactions_updated = 0
 
-        # If name changed, cascade updates to JSONB metadata
+        # If name changed, cascade updates to enrichment tables
         if name is not None and name != old_name:
-            result = session.execute(
-                text("""
-                    UPDATE truelayer_transactions
-                    SET metadata = jsonb_set(
-                        metadata,
-                        '{enrichment,subcategory}',
-                        :new_name_json::jsonb
-                    )
-                    WHERE subcategory_id = :subcategory_id
-                      AND metadata->'enrichment' IS NOT NULL
-                """),
-                {
-                    "new_name_json": json.dumps(new_name),
-                    "subcategory_id": subcategory_id,
-                },
+            # Get transaction IDs for this subcategory
+            txn_ids = (
+                session.query(TrueLayerTransaction.id)
+                .filter(TrueLayerTransaction.subcategory_id == subcategory_id)
+                .all()
             )
-            transactions_updated = result.rowcount
+            txn_id_list = [t[0] for t in txn_ids]
+
+            if txn_id_list:
+                session.query(RuleEnrichmentResult).filter(
+                    RuleEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                ).update({"subcategory": new_name}, synchronize_session=False)
+
+                session.query(LLMEnrichmentResult).filter(
+                    LLMEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                ).update({"subcategory": new_name}, synchronize_session=False)
+
+                session.query(TransactionEnrichmentSource).filter(
+                    TransactionEnrichmentSource.truelayer_transaction_id.in_(
+                        txn_id_list
+                    )
+                ).update({"subcategory": new_name}, synchronize_session=False)
+
+            transactions_updated = len(txn_id_list)
 
         session.commit()
 

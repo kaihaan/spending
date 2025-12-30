@@ -17,10 +17,15 @@ NOTE: Some functions reference tables without models (cards, webhooks, oauth_sta
 
 from datetime import UTC
 
-from sqlalchemy import and_, cast, func, literal_column
-from sqlalchemy.dialects.postgresql import TIMESTAMP, insert
+from sqlalchemy import and_, case, func, literal_column, select
+from sqlalchemy.dialects.postgresql import insert
 
 from .base import get_session
+from .models.enrichment import (
+    LLMEnrichmentResult,
+    RuleEnrichmentResult,
+    TransactionEnrichmentSource,
+)
 from .models.truelayer import (
     BankConnection,
     TrueLayerAccount,
@@ -404,8 +409,138 @@ def get_all_truelayer_transactions(account_id=None):
         ]
 
 
+def get_raw_transactions_paginated(
+    user_id: int, page: int = 1, page_size: int = 50
+) -> dict:
+    """Get raw TrueLayer transactions with pagination for a specific user.
+
+    Args:
+        user_id: The user ID to filter transactions by
+        page: Page number (1-indexed)
+        page_size: Number of transactions per page
+
+    Returns:
+        Dict with transactions list, total count, and pagination info
+    """
+    with get_session() as session:
+        # Get user's account IDs via bank connections
+        account_ids_subq = (
+            session.query(TrueLayerAccount.id)
+            .join(BankConnection, TrueLayerAccount.connection_id == BankConnection.id)
+            .filter(BankConnection.user_id == user_id)
+            .subquery()
+        )
+        account_ids = select(account_ids_subq.c.id)
+
+        # Count total transactions
+        total = (
+            session.query(func.count(TrueLayerTransaction.id))
+            .filter(TrueLayerTransaction.account_id.in_(account_ids))
+            .scalar()
+            or 0
+        )
+
+        # Get page of transactions
+        offset = (page - 1) * page_size
+        transactions = (
+            session.query(TrueLayerTransaction)
+            .filter(TrueLayerTransaction.account_id.in_(account_ids))
+            .order_by(TrueLayerTransaction.timestamp.desc())
+            .offset(offset)
+            .limit(page_size)
+            .all()
+        )
+
+        return {
+            "transactions": [
+                {
+                    "id": t.id,
+                    "transaction_id": t.transaction_id,
+                    "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+                    "description": t.description,
+                    "amount": float(t.amount) if t.amount else 0,
+                    "currency": t.currency,
+                    "transaction_type": t.transaction_type,
+                    "transaction_category": t.transaction_category,
+                    "merchant_name": t.merchant_name,
+                    "running_balance": (
+                        float(t.running_balance) if t.running_balance else None
+                    ),
+                }
+                for t in transactions
+            ],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+        }
+
+
+def get_bank_statistics(user_id: int) -> dict:
+    """Get bank transaction statistics for a user.
+
+    Returns total credits (in), total debits (out), and date range.
+
+    Args:
+        user_id: The user ID to get statistics for
+
+    Returns:
+        Dict with total_in, total_out, min_date, max_date, transaction_count
+    """
+    with get_session() as session:
+        # Get user's account IDs via bank connections
+        account_ids_subq = (
+            session.query(TrueLayerAccount.id)
+            .join(BankConnection, TrueLayerAccount.connection_id == BankConnection.id)
+            .filter(BankConnection.user_id == user_id)
+            .subquery()
+        )
+        account_ids = select(account_ids_subq.c.id)
+
+        # Get statistics in a single query
+        stats = (
+            session.query(
+                func.count(TrueLayerTransaction.id).label("count"),
+                func.sum(
+                    case(
+                        (
+                            TrueLayerTransaction.transaction_type == "CREDIT",
+                            TrueLayerTransaction.amount,
+                        ),
+                        else_=0,
+                    )
+                ).label("total_in"),
+                func.sum(
+                    case(
+                        (
+                            TrueLayerTransaction.transaction_type == "DEBIT",
+                            func.abs(TrueLayerTransaction.amount),
+                        ),
+                        else_=0,
+                    )
+                ).label("total_out"),
+                func.min(TrueLayerTransaction.timestamp).label("min_date"),
+                func.max(TrueLayerTransaction.timestamp).label("max_date"),
+            )
+            .filter(TrueLayerTransaction.account_id.in_(account_ids))
+            .first()
+        )
+
+        return {
+            "transaction_count": stats.count or 0,
+            "total_in": float(stats.total_in) if stats.total_in else 0.0,
+            "total_out": float(stats.total_out) if stats.total_out else 0.0,
+            "min_date": stats.min_date.isoformat() if stats.min_date else None,
+            "max_date": stats.max_date.isoformat() if stats.max_date else None,
+        }
+
+
 def get_all_truelayer_transactions_with_enrichment(account_id=None, user_id=None):
     """Get all transactions with enrichment in SINGLE query (eliminates N+1 problem).
+
+    Uses LEFT JOINs with dedicated enrichment tables (rule_enrichment_results,
+    llm_enrichment_results, transaction_enrichment_sources) and COALESCE to
+    combine values with priority: Rule > LLM > External.
 
     Args:
         account_id: Optional account ID to filter by specific account
@@ -416,46 +551,64 @@ def get_all_truelayer_transactions_with_enrichment(account_id=None, user_id=None
         List of transaction dicts with enrichment data
     """
     with get_session() as session:
-        # Build query with JOINs and JSONB field extraction
-        query = session.query(
-            TrueLayerTransaction,
-            # Extract enrichment fields from JSONB using text()
-            literal_column("metadata->'enrichment'->>'primary_category'").label(
-                "enrichment_primary_category"
-            ),
-            literal_column("metadata->'enrichment'->>'subcategory'").label(
-                "enrichment_subcategory"
-            ),
-            literal_column("metadata->'enrichment'->>'merchant_clean_name'").label(
-                "enrichment_merchant_clean_name"
-            ),
-            literal_column("metadata->'enrichment'->>'merchant_type'").label(
-                "enrichment_merchant_type"
-            ),
-            literal_column("metadata->'enrichment'->>'essential_discretionary'").label(
-                "enrichment_essential_discretionary"
-            ),
-            literal_column("metadata->'enrichment'->>'payment_method'").label(
-                "enrichment_payment_method"
-            ),
-            literal_column("metadata->'enrichment'->>'payment_method_subtype'").label(
-                "enrichment_payment_method_subtype"
-            ),
-            literal_column("metadata->'enrichment'->>'confidence_score'").label(
-                "enrichment_confidence_score"
-            ),
-            literal_column("metadata->'enrichment'->>'llm_provider'").label(
-                "enrichment_llm_provider"
-            ),
-            literal_column("metadata->'enrichment'->>'llm_model'").label(
-                "enrichment_llm_model"
-            ),
-            cast(
-                literal_column("metadata->'enrichment'->>'enriched_at'"), TIMESTAMP
-            ).label("enrichment_enriched_at"),
-            literal_column("metadata->>'huququllah_classification'").label(
-                "manual_huququllah_classification"
-            ),
+        # Build query with LEFT OUTER JOINs to enrichment tables
+        query = (
+            session.query(
+                TrueLayerTransaction,
+                # Rule enrichment fields (highest priority)
+                RuleEnrichmentResult.primary_category.label("rule_primary_category"),
+                RuleEnrichmentResult.subcategory.label("rule_subcategory"),
+                RuleEnrichmentResult.merchant_clean_name.label(
+                    "rule_merchant_clean_name"
+                ),
+                RuleEnrichmentResult.merchant_type.label("rule_merchant_type"),
+                RuleEnrichmentResult.essential_discretionary.label(
+                    "rule_essential_discretionary"
+                ),
+                RuleEnrichmentResult.confidence_score.label("rule_confidence_score"),
+                RuleEnrichmentResult.rule_type.label("rule_type"),
+                RuleEnrichmentResult.created_at.label("rule_enriched_at"),
+                # LLM enrichment fields (second priority)
+                LLMEnrichmentResult.primary_category.label("llm_primary_category"),
+                LLMEnrichmentResult.subcategory.label("llm_subcategory"),
+                LLMEnrichmentResult.merchant_clean_name.label(
+                    "llm_merchant_clean_name"
+                ),
+                LLMEnrichmentResult.merchant_type.label("llm_merchant_type"),
+                LLMEnrichmentResult.essential_discretionary.label(
+                    "llm_essential_discretionary"
+                ),
+                LLMEnrichmentResult.payment_method.label("llm_payment_method"),
+                LLMEnrichmentResult.payment_method_subtype.label(
+                    "llm_payment_method_subtype"
+                ),
+                LLMEnrichmentResult.confidence_score.label("llm_confidence_score"),
+                LLMEnrichmentResult.llm_provider.label("llm_provider"),
+                LLMEnrichmentResult.llm_model.label("llm_model"),
+                LLMEnrichmentResult.created_at.label("llm_enriched_at"),
+                # External enrichment fields (order/receipt matching - no category data)
+                TransactionEnrichmentSource.source_type.label("external_source_type"),
+                TransactionEnrichmentSource.description.label("external_description"),
+                TransactionEnrichmentSource.created_at.label("external_enriched_at"),
+                # Manual huququllah classification from metadata
+                literal_column("metadata->>'huququllah_classification'").label(
+                    "manual_huququllah_classification"
+                ),
+            )
+            .outerjoin(
+                RuleEnrichmentResult,
+                TrueLayerTransaction.id
+                == RuleEnrichmentResult.truelayer_transaction_id,
+            )
+            .outerjoin(
+                LLMEnrichmentResult,
+                TrueLayerTransaction.id == LLMEnrichmentResult.truelayer_transaction_id,
+            )
+            .outerjoin(
+                TransactionEnrichmentSource,
+                TrueLayerTransaction.id
+                == TransactionEnrichmentSource.truelayer_transaction_id,
+            )
         )
 
         # Filter by user_id (join through account -> connection -> user)
@@ -476,7 +629,7 @@ def get_all_truelayer_transactions_with_enrichment(account_id=None, user_id=None
 
         results = query.order_by(TrueLayerTransaction.timestamp.desc()).all()
 
-        # Convert to dictionaries
+        # Convert to dictionaries with COALESCE logic (Rule > LLM > External)
         return [
             {
                 "id": r.TrueLayerTransaction.id,
@@ -497,20 +650,37 @@ def get_all_truelayer_transactions_with_enrichment(account_id=None, user_id=None
                 "enrichment_required": r.TrueLayerTransaction.enrichment_required
                 if hasattr(r.TrueLayerTransaction, "enrichment_required")
                 else None,
-                "category": r.enrichment_primary_category,  # Use enrichment data
-                "subcategory": r.enrichment_subcategory,  # Use enrichment data
-                "enrichment_primary_category": r.enrichment_primary_category,
-                "enrichment_subcategory": r.enrichment_subcategory,
-                "enrichment_merchant_clean_name": r.enrichment_merchant_clean_name,
-                "enrichment_merchant_type": r.enrichment_merchant_type,
-                "enrichment_essential_discretionary": r.enrichment_essential_discretionary,
-                "enrichment_payment_method": r.enrichment_payment_method,
-                "enrichment_payment_method_subtype": r.enrichment_payment_method_subtype,
-                "enrichment_confidence_score": r.enrichment_confidence_score,
-                "enrichment_llm_provider": r.enrichment_llm_provider,
-                "enrichment_llm_model": r.enrichment_llm_model,
-                "enrichment_enriched_at": r.enrichment_enriched_at,
+                # Coalesce: Rule > LLM (external sources don't provide category data)
+                "category": r.rule_primary_category or r.llm_primary_category,
+                "subcategory": r.rule_subcategory or r.llm_subcategory,
+                "enrichment_primary_category": r.rule_primary_category
+                or r.llm_primary_category,
+                "enrichment_subcategory": r.rule_subcategory or r.llm_subcategory,
+                "enrichment_merchant_clean_name": r.rule_merchant_clean_name
+                or r.llm_merchant_clean_name,
+                "enrichment_merchant_type": r.rule_merchant_type or r.llm_merchant_type,
+                "enrichment_essential_discretionary": r.rule_essential_discretionary
+                or r.llm_essential_discretionary,
+                "enrichment_payment_method": r.llm_payment_method,
+                "enrichment_payment_method_subtype": r.llm_payment_method_subtype,
+                "enrichment_confidence_score": str(
+                    r.rule_confidence_score or r.llm_confidence_score or ""
+                )
+                or None,
+                "enrichment_llm_provider": r.llm_provider,
+                "enrichment_llm_model": r.llm_model,
+                "enrichment_enriched_at": r.rule_enriched_at
+                or r.llm_enriched_at
+                or r.external_enriched_at,
                 "manual_huququllah_classification": r.manual_huququllah_classification,
+                # Additional source info
+                "enrichment_source": "rule"
+                if r.rule_primary_category
+                else ("llm" if r.llm_primary_category else None),
+                "rule_type": r.rule_type,
+                # External source info (order/receipt matching)
+                "external_source_type": r.external_source_type,
+                "external_description": r.external_description,
             }
             for r in results
         ]
@@ -1511,11 +1681,26 @@ def update_enrichment_job(
 
 
 def get_unenriched_truelayer_transactions():
-    """Get all TrueLayer transactions without enrichment."""
+    """Get all TrueLayer transactions without enrichment.
+
+    Checks dedicated enrichment tables (rule_enrichment_results,
+    llm_enrichment_results, transaction_enrichment_sources) to determine
+    if a transaction has been enriched.
+    """
     with get_session() as session:
+        # Get IDs that have enrichment in any table
+        rule_ids = session.query(RuleEnrichmentResult.truelayer_transaction_id)
+        llm_ids = session.query(LLMEnrichmentResult.truelayer_transaction_id)
+        external_ids = session.query(
+            TransactionEnrichmentSource.truelayer_transaction_id
+        )
+
+        # Union all enriched IDs
+        enriched_ids = rule_ids.union(llm_ids).union(external_ids)
+
         transactions = (
             session.query(TrueLayerTransaction)
-            .filter(literal_column("metadata->'enrichment' IS NULL"))
+            .filter(~TrueLayerTransaction.id.in_(enriched_ids))
             .order_by(TrueLayerTransaction.timestamp.desc())
             .all()
         )
@@ -1542,90 +1727,45 @@ def get_unenriched_truelayer_transactions():
 
 
 def get_transaction_enrichment(transaction_id):
-    """Get enrichment data for a specific transaction from TrueLayer metadata JSONB."""
-    with get_session() as session:
-        # Query with JSONB field extraction
-        result = (
-            session.query(
-                literal_column("metadata->'enrichment'->>'primary_category'").label(
-                    "primary_category"
-                ),
-                literal_column("metadata->'enrichment'->>'subcategory'").label(
-                    "subcategory"
-                ),
-                literal_column("metadata->'enrichment'->>'merchant_clean_name'").label(
-                    "merchant_clean_name"
-                ),
-                literal_column("metadata->'enrichment'->>'merchant_type'").label(
-                    "merchant_type"
-                ),
-                literal_column(
-                    "metadata->'enrichment'->>'essential_discretionary'"
-                ).label("essential_discretionary"),
-                literal_column("metadata->'enrichment'->>'payment_method'").label(
-                    "payment_method"
-                ),
-                literal_column(
-                    "metadata->'enrichment'->>'payment_method_subtype'"
-                ).label("payment_method_subtype"),
-                literal_column("metadata->'enrichment'->>'confidence_score'").label(
-                    "confidence_score"
-                ),
-                literal_column("metadata->'enrichment'->>'llm_provider'").label(
-                    "llm_provider"
-                ),
-                literal_column("metadata->'enrichment'->>'llm_model'").label(
-                    "llm_model"
-                ),
-                cast(
-                    literal_column("metadata->'enrichment'->>'enriched_at'"), TIMESTAMP
-                ).label("enriched_at"),
-            )
-            .select_from(TrueLayerTransaction)
-            .filter(
-                and_(
-                    TrueLayerTransaction.id == transaction_id,
-                    literal_column("metadata->>'enrichment' IS NOT NULL"),
-                )
-            )
-            .first()
-        )
+    """Get enrichment data for a specific transaction.
 
-        if not result:
-            return None
+    Queries the dedicated enrichment tables (rule_enrichment_results,
+    llm_enrichment_results, transaction_enrichment_sources) and combines
+    them with priority: Rule > LLM > External.
 
-        enrichment_dict = {
-            "primary_category": result.primary_category,
-            "subcategory": result.subcategory,
-            "merchant_clean_name": result.merchant_clean_name,
-            "merchant_type": result.merchant_type,
-            "essential_discretionary": result.essential_discretionary,
-            "payment_method": result.payment_method,
-            "payment_method_subtype": result.payment_method_subtype,
-            "confidence_score": result.confidence_score,
-            "llm_provider": result.llm_provider,
-            "llm_model": result.llm_model,
-            "enriched_at": result.enriched_at,
-        }
+    Delegates to get_combined_enrichment() for consistent enrichment lookup.
+    """
+    from .enrichment import get_combined_enrichment
 
-        # Convert confidence_score to float if it exists
-        if enrichment_dict.get("confidence_score"):
-            try:
-                enrichment_dict["confidence_score"] = float(
-                    enrichment_dict["confidence_score"]
-                )
-            except (ValueError, TypeError):
-                enrichment_dict["confidence_score"] = None
-
-        return enrichment_dict
+    return get_combined_enrichment(transaction_id)
 
 
 def count_enriched_truelayer_transactions():
-    """Count TrueLayer transactions that have been enriched."""
+    """Count TrueLayer transactions that have been enriched.
+
+    Counts transactions that have entries in any of:
+    - rule_enrichment_results (category rules, merchant rules, direct debit)
+    - llm_enrichment_results (LLM-based categorization)
+    - transaction_enrichment_sources (external sources: Amazon, Apple, Gmail)
+    """
     with get_session() as session:
+        # Get IDs enriched by rules
+        rule_ids = session.query(RuleEnrichmentResult.truelayer_transaction_id)
+
+        # Get IDs enriched by LLM
+        llm_ids = session.query(LLMEnrichmentResult.truelayer_transaction_id)
+
+        # Get IDs enriched by external sources
+        external_ids = session.query(
+            TransactionEnrichmentSource.truelayer_transaction_id
+        )
+
+        # Count distinct transactions with any enrichment
         count = (
-            session.query(func.count(TrueLayerTransaction.id))
-            .filter(literal_column("metadata->'enrichment' IS NOT NULL"))
+            session.query(func.count(TrueLayerTransaction.id.distinct()))
+            .filter(
+                TrueLayerTransaction.id.in_(rule_ids.union(llm_ids).union(external_ids))
+            )
             .scalar()
         )
         return count if count is not None else 0

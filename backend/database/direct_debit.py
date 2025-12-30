@@ -10,6 +10,7 @@ Migrated to SQLAlchemy from psycopg2.
 from sqlalchemy import func
 
 from .base import get_session
+from .enrichment import get_combined_enrichment, save_rule_enrichment
 from .models.category import MerchantNormalization
 from .models.truelayer import TrueLayerTransaction
 
@@ -63,12 +64,13 @@ def get_direct_debit_payees() -> list:
             if payee:
                 payee_upper = payee.upper().strip()
 
-                # Extract enrichment data from JSONB metadata
+                # Get enrichment data from dedicated tables
                 category = None
                 subcategory = None
-                if txn.metadata and "enrichment" in txn.metadata:
-                    category = txn.metadata["enrichment"].get("primary_category")
-                    subcategory = txn.metadata["enrichment"].get("subcategory")
+                enrichment = get_combined_enrichment(txn.id)
+                if enrichment:
+                    category = enrichment.get("primary_category")
+                    subcategory = enrichment.get("subcategory")
 
                 if payee_upper not in payee_data:
                     payee_data[payee_upper] = {
@@ -329,26 +331,21 @@ def apply_direct_debit_mappings() -> dict:
             if payee and payee.upper() in mappings:
                 mapping = mappings[payee.upper()]
 
-                # Build enrichment data
-                metadata = txn.metadata or {}
-                enrichment = metadata.get("enrichment", {})
-                enrichment.update(
-                    {
-                        "primary_category": mapping["default_category"],
-                        "subcategory": mapping[
-                            "normalized_name"
-                        ],  # Use merchant as subcategory
-                        "merchant_clean_name": mapping["normalized_name"],
-                        "merchant_type": mapping.get("merchant_type"),
-                        "confidence_score": 1.0,
-                        "llm_model": "direct_debit_rule",
-                        "enrichment_source": "rule",
-                    }
+                # Save to dedicated rule_enrichment_results table
+                save_rule_enrichment(
+                    transaction_id=txn.id,
+                    primary_category=mapping["default_category"],
+                    rule_type="direct_debit",
+                    subcategory=mapping[
+                        "normalized_name"
+                    ],  # Use merchant as subcategory
+                    merchant_clean_name=mapping["normalized_name"],
+                    merchant_type=mapping.get("merchant_type"),
+                    matched_merchant_id=mapping.get("id"),
+                    matched_merchant_name=mapping["normalized_name"],
+                    confidence_score=1.0,
                 )
-                metadata["enrichment"] = enrichment
 
-                # Update transaction metadata
-                txn.metadata = metadata
                 updated_ids.append(txn.id)
 
         session.commit()

@@ -13,6 +13,11 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from .base import get_session
+from .enrichment import (
+    get_combined_enrichment,
+    is_transaction_enriched_new,
+    save_llm_enrichment,
+)
 from .models.category import Category, CategoryKeyword
 from .models.enrichment import EnrichmentCache
 from .models.truelayer import TrueLayerTransaction
@@ -73,27 +78,12 @@ def update_transaction_with_enrichment(
         # Extract category from enrichment
         primary_category = enrichment_data.get("primary_category", "Other")
 
-        # Build enrichment metadata
-        enrichment_metadata = {
-            "primary_category": enrichment_data.get("primary_category", "Other"),
-            "subcategory": enrichment_data.get("subcategory"),
-            "merchant_clean_name": enrichment_data.get("merchant_clean_name"),
-            "merchant_type": enrichment_data.get("merchant_type"),
-            "essential_discretionary": enrichment_data.get("essential_discretionary"),
-            "payment_method": enrichment_data.get("payment_method"),
-            "payment_method_subtype": enrichment_data.get("payment_method_subtype"),
-            "confidence_score": enrichment_data.get("confidence_score"),
-            "llm_provider": enrichment_source,
-            "llm_model": enrichment_data.get("llm_model", "unknown"),
-            "enriched_at": "now()",
-        }
-
         # Get transaction
         txn = session.get(TrueLayerTransaction, transaction_id)
         if not txn:
             return False
 
-        # Update transaction
+        # Update transaction core fields
         txn.transaction_category = primary_category
         txn.enrichment_required = False
 
@@ -102,40 +92,43 @@ def update_transaction_with_enrichment(
         if merchant_clean_name:
             txn.merchant_name = merchant_clean_name
 
-        # Update metadata
-        if not txn.metadata:
-            txn.metadata = {}
-        txn.metadata["enrichment"] = enrichment_metadata
-
         session.commit()
-        return True
+
+    # Save LLM enrichment to dedicated table (outside session to avoid nesting)
+    save_llm_enrichment(
+        transaction_id=transaction_id,
+        primary_category=primary_category,
+        llm_provider=enrichment_source,
+        llm_model=enrichment_data.get("llm_model", "unknown"),
+        subcategory=enrichment_data.get("subcategory"),
+        essential_discretionary=enrichment_data.get("essential_discretionary"),
+        merchant_clean_name=merchant_clean_name,
+        merchant_type=enrichment_data.get("merchant_type"),
+        payment_method=enrichment_data.get("payment_method"),
+        payment_method_subtype=enrichment_data.get("payment_method_subtype"),
+        confidence_score=enrichment_data.get("confidence_score"),
+        enrichment_source=enrichment_source,
+    )
+
+    return True
 
 
 def is_transaction_enriched(transaction_id):
     """
     Check if a transaction has enrichment data.
-    Checks both TrueLayer transactions (metadata.enrichment) and legacy transactions.
+
+    Checks the dedicated enrichment tables:
+    - rule_enrichment_results (category rules, merchant rules, direct debit)
+    - llm_enrichment_results (LLM-based categorization)
+    - transaction_enrichment_sources (external sources: Amazon, Apple, Gmail)
 
     Args:
         transaction_id: ID of the transaction
 
     Returns:
-        bool: True if transaction has enrichment data
+        bool: True if transaction has enrichment data from any source
     """
-    with get_session() as session:
-        # Check if TrueLayer transaction with enrichment
-        # Must check for primary_category specifically, not just enrichment object existence
-        # (empty enrichment objects {} should not count as enriched)
-        txn = (
-            session.query(TrueLayerTransaction)
-            .filter(
-                TrueLayerTransaction.id == transaction_id,
-                TrueLayerTransaction.metadata["enrichment"]["primary_category"].astext
-                != None,  # noqa: E711
-            )
-            .first()
-        )
-        return txn is not None
+    return is_transaction_enriched_new(transaction_id)
 
 
 def get_enrichment_from_cache(description, direction):
@@ -496,14 +489,16 @@ def get_huququllah_summary(date_from=None, date_to=None):
         unclassified_count = 0
 
         for txn in txns:
-            # Get classification from metadata or enrichment
+            # Get classification from metadata (user override) or enrichment tables
             classification = None
             if txn.metadata:
                 classification = txn.metadata.get("huququllah_classification")
-                if not classification and "enrichment" in txn.metadata:
-                    essential_discretionary = txn.metadata["enrichment"].get(
-                        "essential_discretionary"
-                    )
+
+            # If no user override, check enrichment tables
+            if not classification:
+                enrichment = get_combined_enrichment(txn.id)
+                if enrichment:
+                    essential_discretionary = enrichment.get("essential_discretionary")
                     if essential_discretionary:
                         classification = essential_discretionary.lower()
 
@@ -531,14 +526,16 @@ def get_transaction_by_id(transaction_id):
         if not txn:
             return None
 
-        # Compute huququllah_classification
+        # Compute huququllah_classification from metadata (user override) or enrichment tables
         classification = None
         if txn.metadata:
             classification = txn.metadata.get("huququllah_classification")
-            if not classification and "enrichment" in txn.metadata:
-                essential_discretionary = txn.metadata["enrichment"].get(
-                    "essential_discretionary"
-                )
+
+        # If no user override, check enrichment tables
+        if not classification:
+            enrichment = get_combined_enrichment(txn.id)
+            if enrichment:
+                essential_discretionary = enrichment.get("essential_discretionary")
                 if essential_discretionary:
                     classification = essential_discretionary.lower()
 
@@ -565,14 +562,16 @@ def get_all_transactions():
 
         results = []
         for txn in txns:
-            # Compute huququllah_classification
+            # Compute huququllah_classification from metadata (user override) or enrichment tables
             classification = None
             if txn.metadata:
                 classification = txn.metadata.get("huququllah_classification")
-                if not classification and "enrichment" in txn.metadata:
-                    essential_discretionary = txn.metadata["enrichment"].get(
-                        "essential_discretionary"
-                    )
+
+            # If no user override, check enrichment tables
+            if not classification:
+                enrichment = get_combined_enrichment(txn.id)
+                if enrichment:
+                    essential_discretionary = enrichment.get("essential_discretionary")
                     if essential_discretionary:
                         classification = essential_discretionary.lower()
 

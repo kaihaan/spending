@@ -26,12 +26,17 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
 from .base import get_session
+from .enrichment import save_rule_enrichment
 from .models.category import (
     MatchingJob,
     NormalizedCategory,
     NormalizedSubcategory,
 )
-from .models.enrichment import TransactionEnrichmentSource
+from .models.enrichment import (
+    LLMEnrichmentResult,
+    RuleEnrichmentResult,
+    TransactionEnrichmentSource,
+)
 from .models.gmail import (
     GmailConnection,
     GmailEmailContent,
@@ -591,7 +596,10 @@ def get_receipt_with_email_content(receipt_id: int) -> dict:
 
         receipt = result[0]
         return {
-            **{col: getattr(receipt, col) for col in receipt.__table__.columns},
+            **{
+                col.name: getattr(receipt, col.name)
+                for col in receipt.__table__.columns
+            },
             "body_html": result[1],
             "body_text": result[2],
             "from_header": result[3],
@@ -728,7 +736,8 @@ def get_gmail_receipt_by_id(receipt_id: int) -> dict:
 
         receipt_obj = result[0]
         receipt = {
-            col: getattr(receipt_obj, col) for col in receipt_obj.__table__.columns
+            col.name: getattr(receipt_obj, col.name)
+            for col in receipt_obj.__table__.columns
         }
         receipt.update(
             {
@@ -795,7 +804,10 @@ def get_unmatched_gmail_receipts(user_id: int, limit: int = 100) -> list:
             .all()
         )
 
-        return [{col: getattr(r, col) for col in r.__table__.columns} for r in receipts]
+        return [
+            {col.name: getattr(r, col.name) for col in r.__table__.columns}
+            for r in receipts
+        ]
 
 
 def soft_delete_gmail_receipt(receipt_id: int) -> bool:
@@ -2808,6 +2820,8 @@ def get_direct_debit_payees() -> list:
     Uses the pattern extractor to parse payee names from transaction descriptions.
     Groups by payee and includes transaction counts and current enrichment status.
 
+    Reads enrichment from dedicated enrichment tables.
+
     Returns:
         List of payee dictionaries with:
         - payee: Extracted payee name
@@ -2822,6 +2836,7 @@ def get_direct_debit_payees() -> list:
         extract_variables,
     )
 
+    from .enrichment import get_combined_enrichment
     from .models.categories import MerchantNormalization
 
     with get_session() as session:
@@ -2830,7 +2845,6 @@ def get_direct_debit_payees() -> list:
             session.query(
                 TrueLayerTransaction.id,
                 TrueLayerTransaction.description,
-                TrueLayerTransaction.metadata,
             )
             .filter(TrueLayerTransaction.description.like("DIRECT DEBIT PAYMENT TO%"))
             .order_by(TrueLayerTransaction.timestamp.desc())
@@ -2840,12 +2854,10 @@ def get_direct_debit_payees() -> list:
         # Group by extracted payee
         payee_data = {}
         for txn in transactions:
-            # Extract enrichment from metadata JSONB
-            metadata = txn.metadata or {}
-            enrichment = metadata.get("enrichment", {})
+            # Get enrichment from dedicated tables
+            enrichment = get_combined_enrichment(txn.id) or {}
             category = enrichment.get("primary_category")
             subcategory = enrichment.get("subcategory")
-            enrichment.get("merchant_clean_name")
 
             extracted = extract_variables(txn.description)
             payee = extracted.get("payee")
@@ -3122,29 +3134,21 @@ def apply_direct_debit_mappings() -> dict:
             if payee and payee.upper() in mappings:
                 mapping = mappings[payee.upper()]
 
-                # Get transaction object for update
-                txn_obj = session.get(TrueLayerTransaction, txn.id)
-
-                # Build enrichment data
-                metadata = txn_obj.metadata or {}
-                enrichment = metadata.get("enrichment", {})
-                enrichment.update(
-                    {
-                        "primary_category": mapping["default_category"],
-                        "subcategory": mapping[
-                            "normalized_name"
-                        ],  # Use merchant as subcategory
-                        "merchant_clean_name": mapping["normalized_name"],
-                        "merchant_type": mapping.get("merchant_type"),
-                        "confidence_score": 1.0,
-                        "llm_model": "direct_debit_rule",
-                        "enrichment_source": "rule",
-                    }
+                # Save to dedicated rule_enrichment_results table
+                save_rule_enrichment(
+                    transaction_id=txn.id,
+                    primary_category=mapping["default_category"],
+                    rule_type="direct_debit",
+                    subcategory=mapping[
+                        "normalized_name"
+                    ],  # Use merchant as subcategory
+                    merchant_clean_name=mapping["normalized_name"],
+                    merchant_type=mapping.get("merchant_type"),
+                    matched_merchant_id=mapping.get("id"),
+                    matched_merchant_name=mapping["normalized_name"],
+                    confidence_score=1.0,
                 )
-                metadata["enrichment"] = enrichment
 
-                # Update transaction
-                txn_obj.metadata = metadata
                 updated_ids.append(txn.id)
 
         session.commit()
@@ -3349,15 +3353,9 @@ def get_rules_statistics() -> dict:
             session.query(func.count()).select_from(TrueLayerTransaction).scalar()
         )
 
-        # Count transactions where metadata->enrichment->enrichment_source = 'rule'
+        # Count transactions with entries in rule_enrichment_results table
         covered_transactions = (
-            session.query(func.count())
-            .select_from(TrueLayerTransaction)
-            .filter(
-                TrueLayerTransaction.metadata["enrichment"]["enrichment_source"].astext
-                == "rule"
-            )
-            .scalar()
+            session.query(func.count()).select_from(RuleEnrichmentResult).scalar()
         )
 
         coverage_percentage = (
@@ -3619,11 +3617,11 @@ def apply_all_rules_to_transactions() -> dict:
 
         # Convert to dicts for consistency engine
         category_rules_dicts = [
-            {col: getattr(r, col) for col in r.__table__.columns}
+            {col.name: getattr(r, col.name) for col in r.__table__.columns}
             for r in category_rules
         ]
         merchant_norm_dicts = [
-            {col: getattr(m, col) for col in m.__table__.columns}
+            {col.name: getattr(m, col.name) for col in m.__table__.columns}
             for m in merchant_normalizations
         ]
 
@@ -3648,11 +3646,27 @@ def apply_all_rules_to_transactions() -> dict:
             )
 
             if result and result.get("primary_category"):
-                # Update the transaction with rule-based enrichment
-                metadata = txn.metadata or {}
-                metadata["enrichment"] = result
+                # Determine rule_type from llm_model field
+                llm_model = result.get("llm_model", "consistency_rule")
+                if llm_model == "direct_debit_rule":
+                    rule_type = "direct_debit"
+                else:
+                    rule_type = "category_rule"
 
-                txn.metadata = metadata
+                # Save to dedicated rule_enrichment_results table
+                save_rule_enrichment(
+                    transaction_id=txn.id,
+                    primary_category=result.get("primary_category"),
+                    rule_type=rule_type,
+                    subcategory=result.get("subcategory"),
+                    essential_discretionary=result.get("essential_discretionary"),
+                    merchant_clean_name=result.get("merchant_clean_name"),
+                    merchant_type=result.get("merchant_type"),
+                    matched_rule_name=result.get("matched_rule"),
+                    matched_merchant_name=result.get("matched_merchant"),
+                    confidence_score=result.get("confidence_score", 1.0),
+                )
+
                 updated_count += 1
 
                 # Track rule hits
@@ -3718,7 +3732,10 @@ def get_normalized_categories(active_only: bool = False, include_counts: bool = 
             NormalizedCategory.display_order,
             NormalizedCategory.name,
         ).all()
-        return [{col: getattr(r, col) for col in r.__table__.columns} for r in results]
+        return [
+            {col.name: getattr(r, col.name) for col in r.__table__.columns}
+            for r in results
+        ]
 
 
 def get_normalized_category_by_id(category_id: int):
@@ -3781,7 +3798,10 @@ def get_normalized_category_by_name(name: str):
         )
 
         if category:
-            return {col: getattr(category, col) for col in category.__table__.columns}
+            return {
+                col.name: getattr(category, col.name)
+                for col in category.__table__.columns
+            }
         return None
 
 
@@ -3818,7 +3838,7 @@ def create_normalized_category(
             session.commit()
 
             return {
-                col: getattr(new_category, col)
+                col.name: getattr(new_category, col.name)
                 for col in new_category.__table__.columns
             }
         except IntegrityError:
@@ -3869,7 +3889,8 @@ def update_normalized_category(
         ):
             return {
                 "category": {
-                    col: getattr(current, col) for col in current.__table__.columns
+                    col.name: getattr(current, col.name)
+                    for col in current.__table__.columns
                 },
                 "transactions_updated": 0,
                 "rules_updated": 0,
@@ -3889,20 +3910,28 @@ def update_normalized_category(
                 .update({"transaction_category": new_name})
             )
 
-            # Update JSONB metadata using raw SQL
-            session.execute(
-                text("""
-                    UPDATE truelayer_transactions
-                    SET metadata = jsonb_set(
-                        metadata,
-                        '{enrichment,primary_category}',
-                        :new_name::jsonb
-                    )
-                    WHERE category_id = :category_id
-                      AND metadata->'enrichment' IS NOT NULL
-                """),
-                {"new_name": json.dumps(new_name), "category_id": category_id},
+            # Update primary_category in enrichment tables
+            txn_ids = (
+                session.query(TrueLayerTransaction.id)
+                .filter(TrueLayerTransaction.category_id == category_id)
+                .all()
             )
+            txn_id_list = [t[0] for t in txn_ids]
+
+            if txn_id_list:
+                session.query(RuleEnrichmentResult).filter(
+                    RuleEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                ).update({"primary_category": new_name}, synchronize_session=False)
+
+                session.query(LLMEnrichmentResult).filter(
+                    LLMEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                ).update({"primary_category": new_name}, synchronize_session=False)
+
+                session.query(TransactionEnrichmentSource).filter(
+                    TransactionEnrichmentSource.truelayer_transaction_id.in_(
+                        txn_id_list
+                    )
+                ).update({"primary_category": new_name}, synchronize_session=False)
 
             # Update category_rules VARCHAR
             rules_updated = (
@@ -3923,7 +3952,8 @@ def update_normalized_category(
 
         return {
             "category": {
-                col: getattr(current, col) for col in current.__table__.columns
+                col.name: getattr(current, col.name)
+                for col in current.__table__.columns
             },
             "transactions_updated": transactions_updated,
             "rules_updated": rules_updated,
@@ -4057,7 +4087,10 @@ def get_normalized_subcategories(category_id: int = None, include_counts: bool =
         results = query.all()
         return [
             {
-                **{col: getattr(subcat, col) for col in subcat.__table__.columns},
+                **{
+                    col.name: getattr(subcat, col.name)
+                    for col in subcat.__table__.columns
+                },
                 "category_name": cat_name,
             }
             for subcat, cat_name in results
@@ -4127,7 +4160,8 @@ def create_normalized_subcategory(category_id: int, name: str, description: str 
             category = session.get(NormalizedCategory, category_id)
 
             subcat_dict = {
-                col: getattr(new_subcat, col) for col in new_subcat.__table__.columns
+                col.name: getattr(new_subcat, col.name)
+                for col in new_subcat.__table__.columns
             }
             subcat_dict["category_name"] = category.name if category else None
 
@@ -4189,7 +4223,10 @@ def update_normalized_subcategory(
         ):
             return {
                 "subcategory": {
-                    **{col: getattr(current, col) for col in current.__table__.columns},
+                    **{
+                        col.name: getattr(current, col.name)
+                        for col in current.__table__.columns
+                    },
                     "category_name": old_category_name,
                 },
                 "transactions_updated": 0,
@@ -4201,27 +4238,32 @@ def update_normalized_subcategory(
 
         transactions_updated = 0
 
-        # If name changed, cascade updates to JSONB metadata
+        # If name changed, cascade updates to enrichment tables
         if name is not None and name != old_name:
-            session.execute(
-                text("""
-                    UPDATE truelayer_transactions
-                    SET metadata = jsonb_set(
-                        metadata,
-                        '{enrichment,subcategory}',
-                        :new_name::jsonb
-                    )
-                    WHERE subcategory_id = :subcategory_id
-                      AND metadata->'enrichment' IS NOT NULL
-                """),
-                {"new_name": json.dumps(new_name), "subcategory_id": subcategory_id},
+            # Get transaction IDs for this subcategory
+            txn_ids = (
+                session.query(TrueLayerTransaction.id)
+                .filter(TrueLayerTransaction.subcategory_id == subcategory_id)
+                .all()
             )
-            transactions_updated = session.execute(
-                text(
-                    "SELECT COUNT(*) FROM truelayer_transactions WHERE subcategory_id = :subcategory_id"
-                ),
-                {"subcategory_id": subcategory_id},
-            ).scalar()
+            txn_id_list = [t[0] for t in txn_ids]
+
+            if txn_id_list:
+                session.query(RuleEnrichmentResult).filter(
+                    RuleEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                ).update({"subcategory": new_name}, synchronize_session=False)
+
+                session.query(LLMEnrichmentResult).filter(
+                    LLMEnrichmentResult.truelayer_transaction_id.in_(txn_id_list)
+                ).update({"subcategory": new_name}, synchronize_session=False)
+
+                session.query(TransactionEnrichmentSource).filter(
+                    TransactionEnrichmentSource.truelayer_transaction_id.in_(
+                        txn_id_list
+                    )
+                ).update({"subcategory": new_name}, synchronize_session=False)
+
+            transactions_updated = len(txn_id_list)
 
         session.commit()
 
@@ -4235,7 +4277,10 @@ def update_normalized_subcategory(
 
         return {
             "subcategory": {
-                **{col: getattr(current, col) for col in current.__table__.columns},
+                **{
+                    col.name: getattr(current, col.name)
+                    for col in current.__table__.columns
+                },
                 "category_name": new_category_name,
             },
             "transactions_updated": transactions_updated,

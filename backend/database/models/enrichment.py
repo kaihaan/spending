@@ -3,6 +3,8 @@ Enrichment models for LLM transaction categorization and caching.
 
 Maps to:
 - transaction_enrichment_sources table - Links transactions to enrichment data sources
+- rule_enrichment_results table - Rule-based enrichment (category rules, merchant norms)
+- llm_enrichment_results table - LLM-based enrichment results per transaction
 - llm_enrichment_cache table - Caches LLM enrichment results for reuse
 - llm_models table (DEPRECATED) - Configuration for LLM providers
 
@@ -13,10 +15,12 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -141,6 +145,147 @@ class EnrichmentCache(Base):
 
     def __repr__(self) -> str:
         return f"<EnrichmentCache(id={self.id}, description={self.transaction_description[:30]}...)>"
+
+
+# ============================================================================
+# DEDICATED ENRICHMENT RESULT TABLES
+# Store enrichment from each source independently (no overwrites)
+# ============================================================================
+
+
+class RuleEnrichmentResult(Base):
+    """
+    Stores enrichment results from consistency rules.
+
+    Each transaction can have at most one rule-based enrichment.
+    Sources include:
+    - category_rule: CategoryRule pattern matches
+    - merchant_rule: MerchantNormalization pattern matches
+    - direct_debit: Direct debit mapping rules
+    """
+
+    __tablename__ = "rule_enrichment_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    truelayer_transaction_id = Column(
+        Integer,
+        ForeignKey("truelayer_transactions.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+
+    # Categorization result
+    primary_category = Column(String(100), nullable=False)
+    subcategory = Column(String(100), nullable=True)
+    essential_discretionary = Column(String(20), nullable=True)
+
+    # Merchant info
+    merchant_clean_name = Column(String(255), nullable=True)
+    merchant_type = Column(String(100), nullable=True)
+
+    # Rule match metadata
+    rule_type = Column(String(30), nullable=False)
+    matched_rule_id = Column(Integer, nullable=True)
+    matched_rule_name = Column(String(100), nullable=True)
+    matched_merchant_id = Column(Integer, nullable=True)
+    matched_merchant_name = Column(String(255), nullable=True)
+
+    # Confidence (rules are deterministic)
+    confidence_score = Column(
+        Numeric(3, 2), nullable=False, default=1.00, server_default="1.00"
+    )
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "rule_type IN ('category_rule', 'merchant_rule', 'direct_debit')",
+            name="rule_enrichment_rule_type_check",
+        ),
+        CheckConstraint(
+            "confidence_score >= 0 AND confidence_score <= 1",
+            name="rule_enrichment_confidence_check",
+        ),
+        Index("idx_rule_enrichment_txn", "truelayer_transaction_id"),
+        Index("idx_rule_enrichment_category", "primary_category"),
+        Index("idx_rule_enrichment_type", "rule_type"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<RuleEnrichmentResult(id={self.id}, txn={self.truelayer_transaction_id}, category={self.primary_category})>"
+
+
+class LLMEnrichmentResult(Base):
+    """
+    Stores enrichment results from LLM inference.
+
+    Each transaction can have at most one LLM-based enrichment.
+    Links to EnrichmentCache for deduplication tracking.
+    """
+
+    __tablename__ = "llm_enrichment_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    truelayer_transaction_id = Column(
+        Integer,
+        ForeignKey("truelayer_transactions.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+
+    # Categorization result
+    primary_category = Column(String(100), nullable=False)
+    subcategory = Column(String(100), nullable=True)
+    essential_discretionary = Column(String(20), nullable=True)
+
+    # Merchant info
+    merchant_clean_name = Column(String(255), nullable=True)
+    merchant_type = Column(String(100), nullable=True)
+
+    # Payment info (LLM can infer these)
+    payment_method = Column(String(50), nullable=True)
+    payment_method_subtype = Column(String(50), nullable=True)
+    purchase_date = Column(Date, nullable=True)
+
+    # LLM metadata
+    llm_provider = Column(String(50), nullable=False)
+    llm_model = Column(String(100), nullable=False)
+    confidence_score = Column(Numeric(3, 2), nullable=True)
+
+    # Cache linkage
+    cache_id = Column(
+        Integer,
+        ForeignKey("llm_enrichment_cache.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Source tracking
+    enrichment_source = Column(
+        String(20), nullable=False, default="llm", server_default="llm"
+    )
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "confidence_score IS NULL OR (confidence_score >= 0 AND confidence_score <= 1)",
+            name="llm_enrichment_confidence_check",
+        ),
+        CheckConstraint(
+            "enrichment_source IN ('llm', 'cache')",
+            name="llm_enrichment_source_check",
+        ),
+        Index("idx_llm_enrichment_txn", "truelayer_transaction_id"),
+        Index("idx_llm_enrichment_category", "primary_category"),
+        Index("idx_llm_enrichment_provider", "llm_provider"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<LLMEnrichmentResult(id={self.id}, txn={self.truelayer_transaction_id}, category={self.primary_category})>"
 
 
 # ============================================================================
