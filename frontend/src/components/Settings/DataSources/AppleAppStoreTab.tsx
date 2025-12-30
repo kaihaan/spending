@@ -6,12 +6,10 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import apiClient from '../../../api/client';
 import SourceMetrics from './components/SourceMetrics';
 import DateRangeIndicator from './components/DateRangeIndicator';
 import type { AppleStats, AppleTransaction } from './types';
-
-const API_URL = 'http://localhost:5000/api';
 
 interface AppleAppStoreTabProps {
   stats: AppleStats | null;
@@ -39,8 +37,8 @@ export default function AppleAppStoreTab({ stats, onStatsUpdate }: AppleAppStore
     setIsLoading(true);
     try {
       // API endpoint is /api/apple (not /api/apple/transactions)
-      const response = await axios.get<{ transactions: AppleTransaction[]; count: number }>(
-        `${API_URL}/apple`
+      const response = await apiClient.get<{ transactions: AppleTransaction[]; count: number }>(
+        '/apple'
       );
       setTransactions(response.data.transactions ?? []);
     } catch (error) {
@@ -58,7 +56,7 @@ export default function AppleAppStoreTab({ stats, onStatsUpdate }: AppleAppStore
   const handleMatch = async () => {
     setIsMatching(true);
     try {
-      await axios.post(`${API_URL}/apple/match`);
+      await apiClient.post('/apple/match');
       await fetchTransactions();
       onStatsUpdate();
     } catch (error) {
@@ -75,7 +73,7 @@ export default function AppleAppStoreTab({ stats, onStatsUpdate }: AppleAppStore
       setBrowserError(null);
       setImportResult(null);
 
-      await axios.post(`${API_URL}/apple/import/browser-start`);
+      await apiClient.post('/apple/import/browser-start');
       setBrowserStatus('ready');
     } catch (err: unknown) {
       const error = err as { response?: { data?: { error?: string } }; message?: string };
@@ -89,7 +87,7 @@ export default function AppleAppStoreTab({ stats, onStatsUpdate }: AppleAppStore
       setBrowserStatus('scrolling');
       setBrowserError(null);
 
-      const response = await axios.post(`${API_URL}/apple/import/browser-capture`);
+      const response = await apiClient.post('/apple/import/browser-capture');
       const data = response.data;
 
       setImportResult({
@@ -111,7 +109,7 @@ export default function AppleAppStoreTab({ stats, onStatsUpdate }: AppleAppStore
 
   const handleBrowserCancel = async () => {
     try {
-      await axios.post(`${API_URL}/apple/import/browser-cancel`);
+      await apiClient.post('/apple/import/browser-cancel');
     } catch (err) {
       console.error('Error cancelling browser session:', err);
     }

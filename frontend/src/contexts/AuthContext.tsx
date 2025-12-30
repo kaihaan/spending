@@ -52,6 +52,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   /**
+   * Listen for auth-expired events from apiClient interceptor
+   * When session expires, clear user state to trigger redirect to login
+   */
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      console.log('Session expired - redirecting to login');
+      setUser(null);
+      setError('Session expired. Please log in again.');
+    };
+
+    window.addEventListener('auth-expired', handleAuthExpired);
+    return () => {
+      window.removeEventListener('auth-expired', handleAuthExpired);
+    };
+  }, []);
+
+  /**
    * Check if user is authenticated and load user data
    */
   const checkAuthStatus = async () => {

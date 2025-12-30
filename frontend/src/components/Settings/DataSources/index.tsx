@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import apiClient from '../../../api/client';
 import DataSourcesSubTabs from './DataSourcesSubTabs';
 import SourceSummaryTable from './SourceSummaryTable';
 import AmazonPurchasesTab from './AmazonPurchasesTab';
@@ -27,8 +27,6 @@ import type {
   AmazonBusinessStats,
   GmailStats,
 } from './types';
-
-const API_URL = 'http://localhost:5000/api';
 
 interface DataSourcesProps {
   subTab?: string;
@@ -51,11 +49,11 @@ export default function DataSources({ subTab }: DataSourcesProps) {
     setIsLoadingStats(true);
     try {
       const [amazon, returns, apple, business, gmail] = await Promise.all([
-        axios.get<AmazonStats>(`${API_URL}/amazon/statistics`).catch(() => ({ data: null })),
-        axios.get<ReturnsStats>(`${API_URL}/amazon/returns/statistics`).catch(() => ({ data: null })),
-        axios.get<AppleStats>(`${API_URL}/apple/statistics`).catch(() => ({ data: null })),
-        axios.get<AmazonBusinessStats>(`${API_URL}/amazon-business/statistics`).catch(() => ({ data: null })),
-        axios.get<GmailStats>(`${API_URL}/gmail/statistics?user_id=1`).catch(() => ({ data: null })),
+        apiClient.get<AmazonStats>('/amazon/statistics').catch(() => ({ data: null })),
+        apiClient.get<ReturnsStats>('/amazon/returns/statistics').catch(() => ({ data: null })),
+        apiClient.get<AppleStats>('/apple/statistics').catch(() => ({ data: null })),
+        apiClient.get<AmazonBusinessStats>('/amazon-business/statistics').catch(() => ({ data: null })),
+        apiClient.get<GmailStats>('/gmail/statistics?user_id=1').catch(() => ({ data: null })),
       ]);
 
       setAmazonStats(amazon.data);

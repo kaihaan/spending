@@ -6,12 +6,10 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import apiClient from '../../../api/client';
 import SourceMetrics from './components/SourceMetrics';
 import DateRangeIndicator from './components/DateRangeIndicator';
 import type { AmazonStats, AmazonOrder } from './types';
-
-const API_URL = 'http://localhost:5000/api';
 
 interface AmazonPurchasesTabProps {
   stats: AmazonStats | null;
@@ -34,8 +32,8 @@ export default function AmazonPurchasesTab({ stats, onStatsUpdate }: AmazonPurch
   const fetchOrders = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await axios.get<{ orders: AmazonOrder[]; count: number }>(
-        `${API_URL}/amazon/orders`
+      const response = await apiClient.get<{ orders: AmazonOrder[]; count: number }>(
+        '/amazon/orders'
       );
       setOrders(response.data.orders ?? []);
     } catch (error) {
@@ -53,7 +51,7 @@ export default function AmazonPurchasesTab({ stats, onStatsUpdate }: AmazonPurch
   const handleMatch = async () => {
     setIsMatching(true);
     try {
-      await axios.post(`${API_URL}/amazon/match`);
+      await apiClient.post('/amazon/match');
       await fetchOrders();
       onStatsUpdate();
     } catch (error) {
@@ -82,7 +80,7 @@ export default function AmazonPurchasesTab({ stats, onStatsUpdate }: AmazonPurch
 
     try {
       setIsImporting(true);
-      const response = await axios.post(`${API_URL}/amazon/import`, {
+      const response = await apiClient.post('/amazon/import', {
         csv_content: fileContent,
         filename: selectedFileName,
       });

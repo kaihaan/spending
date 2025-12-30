@@ -6,12 +6,10 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import apiClient from '../../../api/client';
 import SourceMetrics from './components/SourceMetrics';
 import DateRangeIndicator from './components/DateRangeIndicator';
 import type { AmazonBusinessStats, AmazonBusinessOrder, AmazonBusinessConnection } from './types';
-
-const API_URL = 'http://localhost:5000/api';
 
 interface AmazonBusinessTabProps {
   stats: AmazonBusinessStats | null;
@@ -42,7 +40,7 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
   const fetchOrders = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await axios.get<AmazonBusinessOrder[]>(`${API_URL}/amazon-business/orders`);
+      const response = await apiClient.get<AmazonBusinessOrder[]>('/amazon-business/orders');
       setOrders(response.data);
     } catch (error) {
       console.error('Failed to fetch Amazon Business orders:', error);
@@ -54,7 +52,7 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
   const fetchConnection = useCallback(async () => {
     setConnectionLoading(true);
     try {
-      const response = await axios.get<AmazonBusinessConnection>(`${API_URL}/amazon-business/connection`);
+      const response = await apiClient.get<AmazonBusinessConnection>('/amazon-business/connection');
       setConnection(response.data);
     } catch (error) {
       console.error('Failed to fetch Amazon Business connection:', error);
@@ -83,7 +81,7 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
   const handleMatch = async () => {
     setIsMatching(true);
     try {
-      await axios.post(`${API_URL}/amazon-business/match`);
+      await apiClient.post('/amazon-business/match');
       await fetchOrders();
       onStatsUpdate();
     } catch (error) {
@@ -96,7 +94,7 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
   // Connection handlers
   const handleConnect = async () => {
     try {
-      const response = await axios.get(`${API_URL}/amazon-business/authorize`);
+      const response = await apiClient.get('/amazon-business/authorize');
       if (response.data.success) {
         window.open(response.data.authorization_url, '_blank', 'width=600,height=700');
       } else {
@@ -112,7 +110,7 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
     if (!confirm('Are you sure you want to disconnect Amazon Business?')) return;
 
     try {
-      await axios.post(`${API_URL}/amazon-business/disconnect`);
+      await apiClient.post('/amazon-business/disconnect');
       setConnection(null);
       await fetchConnection();
       onStatsUpdate();
@@ -132,7 +130,7 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
     try {
       setIsImporting(true);
       setImportResult(null);
-      const response = await axios.post(`${API_URL}/amazon-business/import`, {
+      const response = await apiClient.post('/amazon-business/import', {
         start_date: dateFrom,
         end_date: dateTo,
         run_matching: true,

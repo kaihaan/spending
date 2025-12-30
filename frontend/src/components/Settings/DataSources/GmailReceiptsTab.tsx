@@ -6,14 +6,14 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import apiClient from '../../../api/client';
 import SourceMetrics from './components/SourceMetrics';
 import DateRangeIndicator from './components/DateRangeIndicator';
 import { GmailDateRangeSelector, getDefaultDateRange } from '../../GmailDateRangeSelector';
 import { GmailSyncProgressBar } from '../../GmailSyncProgressBar';
 import type { GmailStats, GmailReceipt, GmailConnection } from './types';
 
-const API_URL = 'http://localhost:5000/api';
+const API_URL = 'http://localhost:5000/api'; // Keep for OAuth redirect URLs
 
 interface GmailReceiptsTabProps {
   stats: GmailStats | null;
@@ -47,7 +47,7 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
   const fetchReceipts = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await axios.get<GmailReceipt[]>(`${API_URL}/gmail/receipts?user_id=1`);
+      const response = await apiClient.get<GmailReceipt[]>('/gmail/receipts?user_id=1');
       setReceipts(response.data);
     } catch (error) {
       console.error('Failed to fetch Gmail receipts:', error);
@@ -59,7 +59,7 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
   const fetchConnection = useCallback(async () => {
     setConnectionLoading(true);
     try {
-      const response = await axios.get(`${API_URL}/gmail/connection`);
+      const response = await apiClient.get('/gmail/connection');
       // Backend returns connection object directly, or null if not connected
       if (response.data?.id) {
         setConnection(response.data);
@@ -86,7 +86,7 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
       if (!savedJobId) return;
 
       try {
-        const response = await axios.get(`${API_URL}/gmail/sync/${savedJobId}`);
+        const response = await apiClient.get(`/gmail/sync/${savedJobId}`);
         const job = response.data;
 
         if (job.status === 'queued' || job.status === 'running') {
@@ -124,7 +124,7 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
   const handleMatch = async () => {
     setIsMatching(true);
     try {
-      await axios.post(`${API_URL}/gmail/match`, { user_id: 1 });
+      await apiClient.post('/gmail/match', { user_id: 1 });
       await fetchReceipts();
       onStatsUpdate();
     } catch (error) {
@@ -144,7 +144,7 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
     if (!confirm('Are you sure you want to disconnect Gmail? All synced receipts will be deleted.')) return;
 
     try {
-      await axios.post(`${API_URL}/gmail/disconnect`, {
+      await apiClient.post('/gmail/disconnect', {
         connection_id: connection.id,
       });
       setConnection(null);
@@ -167,7 +167,7 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
       setSyncResult(null);
       setSyncJobId(null);
 
-      const response = await axios.post(`${API_URL}/gmail/sync`, {
+      const response = await apiClient.post('/gmail/sync', {
         connection_id: connection.id,
         sync_type: 'full',
         from_date: fromDate,
@@ -222,7 +222,7 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
 
     try {
       setIsParsing(true);
-      const response = await axios.post(`${API_URL}/gmail/parse`, {
+      const response = await apiClient.post('/gmail/parse', {
         connection_id: connection.id,
       });
       alert(`Parsed ${response.data.parsed} receipts successfully`);
