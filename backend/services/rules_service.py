@@ -14,7 +14,7 @@ Separates business logic from HTTP routing concerns.
 
 import cache_manager
 
-from database import matching
+from database import categories, matching
 from mcp.pattern_utils import parse_pattern_with_prefix, validate_pattern
 
 # ============================================================================
@@ -131,8 +131,7 @@ def update_category_rule(rule_id: int, **updates) -> bool:
         if not is_valid:
             raise ValueError(error_msg)
 
-    success = matching.update_category_rule(rule_id, **updates)
-    return success
+    return matching.update_category_rule(rule_id, **updates)
 
 
 def delete_category_rule(rule_id: int) -> bool:
@@ -169,11 +168,9 @@ def test_category_rule(rule_id: int, limit: int = 10) -> dict:
     if not rule:
         raise ValueError("Rule not found")
 
-    result = matching.test_rule_pattern(
+    return matching.test_rule_pattern(
         rule["description_pattern"], rule["pattern_type"], limit=limit
     )
-
-    return result
 
 
 def test_pattern(pattern: str, pattern_type: str = None, limit: int = 10) -> dict:
@@ -200,9 +197,7 @@ def test_pattern(pattern: str, pattern_type: str = None, limit: int = 10) -> dic
     if not is_valid:
         raise ValueError(error_msg)
 
-    result = matching.test_rule_pattern(pattern, pattern_type, limit=limit)
-
-    return result
+    return matching.test_rule_pattern(pattern, pattern_type, limit=limit)
 
 
 # ============================================================================
@@ -318,8 +313,7 @@ def update_merchant_rule(norm_id: int, **updates) -> bool:
         if not is_valid:
             raise ValueError(error_msg)
 
-    success = matching.update_merchant_normalization(norm_id, **updates)
-    return success
+    return matching.update_merchant_normalization(norm_id, **updates)
 
 
 def delete_merchant_rule(norm_id: int) -> bool:
@@ -355,11 +349,9 @@ def test_merchant_rule(norm_id: int, limit: int = 10) -> dict:
     if not norm:
         raise ValueError("Normalization not found")
 
-    result = matching.test_rule_pattern(
+    return matching.test_rule_pattern(
         norm["pattern"], norm["pattern_type"], limit=limit
     )
-
-    return result
 
 
 # ============================================================================
@@ -374,7 +366,7 @@ def get_statistics() -> dict:
     Returns:
         Statistics dict with rule counts and coverage
     """
-    return matching.get_rules_statistics()
+    return categories.get_rules_statistics()
 
 
 def test_all_rules() -> dict:
@@ -387,7 +379,7 @@ def test_all_rules() -> dict:
     Returns:
         Test results dict with coverage analysis
     """
-    return matching.test_all_rules()
+    return categories.test_all_rules()
 
 
 def apply_all_rules() -> dict:
@@ -400,7 +392,7 @@ def apply_all_rules() -> dict:
     Returns:
         Application results with update counts
     """
-    result = matching.apply_all_rules_to_transactions()
+    result = categories.apply_all_rules_to_transactions()
 
     # Invalidate transaction cache
     cache_manager.cache_invalidate_transactions()

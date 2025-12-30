@@ -533,4 +533,4 @@ def get_source_details(source_id: int) -> dict:
     Returns:
         Source details dict with full data
     """
-    return enrichment.get_enrichment_source_details(source_id)
+    return enrichment.get_enrichment_source_full_details(source_id)

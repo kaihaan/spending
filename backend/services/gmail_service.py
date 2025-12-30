@@ -6,7 +6,7 @@ Separates business logic from HTTP routing concerns.
 """
 
 from database import gmail
-from mcp import gmail_sync
+from mcp import gmail_llm_queue, gmail_sync
 from tasks.gmail_tasks import sync_gmail_receipts_task
 
 
@@ -310,6 +310,6 @@ def get_llm_queue(limit: int = 50) -> dict:
         limit: Max receipts to return
 
     Returns:
-        LLM queue summary dict
+        Dict with 'receipts' list and 'summary' stats
     """
-    return gmail.get_llm_queue_summary(limit=limit)
+    return gmail_llm_queue.get_queue_with_estimates(limit=limit)
