@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import apiClient from '../api/client';
+import { useAuth } from './AuthContext';
 import type { Transaction } from '../types';
 import type {
   TransactionFilters} from '../utils/filterUtils';
@@ -40,6 +41,7 @@ interface FilterContextType {
 const FilterContext = createContext<FilterContextType | undefined>(undefined);
 
 export function FilterProvider({ children }: { children: ReactNode }) {
+  const { user, loading: authLoading } = useAuth();
   const [filters, setFilters] = useState<TransactionFilters>(() => loadFilters());
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,29 +53,45 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     saveFilters(filters);
   }, [filters]);
 
-  // Fetch transactions once on mount
+  // Fetch transactions - only when authenticated
   const fetchTransactions = useCallback(async () => {
+    // Don't fetch if not authenticated
+    if (!user) {
+      setTransactions([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
       const response = await apiClient.get<Transaction[]>('/transactions');
       setTransactions(response.data);
     } catch (err) {
-      setError('Failed to load transactions');
-      console.error(err);
+      // Don't show error for 401 - auth interceptor handles redirect
+      const axiosError = err as { response?: { status?: number } };
+      if (axiosError.response?.status !== 401) {
+        setError('Failed to load transactions');
+        console.error(err);
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
+  // Fetch when user changes (login/logout) or auth check completes
   useEffect(() => {
+    // Wait for auth check to complete
+    if (authLoading) return;
+
     void fetchTransactions();
 
     // Listen for transaction updates
     const handleUpdate = () => void fetchTransactions();
     window.addEventListener('transactions-updated', handleUpdate);
     return () => window.removeEventListener('transactions-updated', handleUpdate);
-  }, [fetchTransactions]);
+  }, [fetchTransactions, authLoading]);
 
   // Derived state
   const filteredTransactions = getFilteredTransactions(transactions, filters);
