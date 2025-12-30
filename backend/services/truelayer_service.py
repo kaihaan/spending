@@ -505,3 +505,33 @@ def get_job_status(job_id: str) -> dict:
         return {"job_id": job_id, "status": "failed", "error": str(task.info)}
 
     return {"job_id": job_id, "status": task.state.lower()}
+
+
+def get_raw_transactions(user_id: int, page: int = 1, page_size: int = 50) -> dict:
+    """
+    Get raw TrueLayer transactions with pagination.
+
+    Args:
+        user_id: User ID to filter transactions by
+        page: Page number (1-indexed)
+        page_size: Number of transactions per page
+
+    Returns:
+        Dict with transactions list, total count, and pagination info
+    """
+    return truelayer.get_raw_transactions_paginated(
+        user_id=user_id, page=page, page_size=page_size
+    )
+
+
+def get_bank_statistics(user_id: int) -> dict:
+    """
+    Get bank transaction statistics.
+
+    Args:
+        user_id: User ID to get statistics for
+
+    Returns:
+        Dict with total_in, total_out, min_date, max_date, transaction_count
+    """
+    return truelayer.get_bank_statistics(user_id=user_id)
