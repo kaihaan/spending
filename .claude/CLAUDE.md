@@ -56,6 +56,15 @@ When **generating Python code**:
 - Write docstrings for public modules, classes, and functions
 - Raise specific exceptions; do not use bare `except`
 - Do not suppress lint rules unless explicitly requested
+- Avoid unnecessary variable assignments before `return` (Ruff RET504):
+  ```python
+  # Bad - Ruff rejects this
+  result = some_function()
+  return result
+
+  # Good - return directly
+  return some_function()
+  ```
 
 **Context7 Documentation MCP Server**: Always use Context7 for code generation, setup/configuration steps, or library/API documentation. Use Context7 MCP tools to resolve library ID and get library docs automatically.
 
