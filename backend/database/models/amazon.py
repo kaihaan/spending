@@ -78,6 +78,40 @@ class AmazonReturn(Base):
         return f"<AmazonReturn(id={self.id}, order_id={self.order_id}, amount={self.amount_refunded})>"
 
 
+class AmazonDigitalOrder(Base):
+    """Amazon digital orders (Kindle, Video, Music, Prime subscriptions, etc.)."""
+
+    __tablename__ = "amazon_digital_orders"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, default=1)
+    asin = Column(String(20), nullable=False)
+    product_name = Column(String(500), nullable=False)
+    order_id = Column(String(50), nullable=False)
+    digital_order_item_id = Column(String(100), nullable=False, unique=True)
+    order_date = Column(DateTime(timezone=True), nullable=False)
+    fulfilled_date = Column(DateTime(timezone=True), nullable=True)
+    price = Column(Numeric(10, 2), nullable=False)
+    price_tax = Column(Numeric(10, 2), nullable=True)
+    currency = Column(String(10), nullable=False, default="GBP")
+    publisher = Column(String(255), nullable=True)
+    seller_of_record = Column(String(255), nullable=True)
+    marketplace = Column(String(100), nullable=True)
+    source_file = Column(String(255), nullable=True)
+    matched_transaction_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_amazon_digital_user_id", "user_id"),
+        Index("idx_amazon_digital_order_id", "order_id"),
+        Index("idx_amazon_digital_order_date", "order_date"),
+        Index("idx_amazon_digital_matched_txn", "matched_transaction_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AmazonDigitalOrder(id={self.id}, product={self.product_name[:30]}, price={self.price})>"
+
+
 class AmazonBusinessConnection(Base):
     """OAuth connections for Amazon Business API."""
 

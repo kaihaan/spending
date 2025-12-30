@@ -404,6 +404,106 @@ def list_returns_files():
 
 
 # ============================================================================
+# Amazon Digital Orders (CSV Import)
+# ============================================================================
+
+
+@amazon_bp.route("/digital/import", methods=["POST"])
+def import_digital_orders():
+    """
+    Import Amazon digital orders from CSV file or content.
+
+    Request body:
+        csv_content (str): CSV file content (preferred)
+        filename (str): Legacy path to CSV file
+
+    Returns:
+        Import result with counts
+    """
+    try:
+        data = request.json
+        csv_content = data.get("csv_content")
+        filename = data.get("filename")
+
+        result = amazon_service.import_digital_orders(
+            csv_content=csv_content, filename=filename
+        )
+
+        return jsonify(result), 201
+
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        print(f"❌ Amazon digital orders import error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": f"Import failed: {str(e)}"}), 500
+
+
+@amazon_bp.route("/digital", methods=["GET"])
+def get_digital_orders():
+    """
+    Get all Amazon digital orders with optional filters.
+
+    Query params:
+        date_from (str): Start date (YYYY-MM-DD)
+        date_to (str): End date (YYYY-MM-DD)
+
+    Returns:
+        Orders list with count
+    """
+    try:
+        date_from = request.args.get("date_from")
+        date_to = request.args.get("date_to")
+
+        result = amazon_service.get_digital_orders(date_from=date_from, date_to=date_to)
+
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ Get Amazon digital orders error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@amazon_bp.route("/digital/statistics", methods=["GET"])
+def get_digital_statistics():
+    """
+    Get Amazon digital orders statistics (cached).
+
+    Returns:
+        Statistics summary (15 minute cache)
+    """
+    try:
+        stats = amazon_service.get_digital_statistics()
+        return jsonify(stats)
+
+    except Exception as e:
+        print(f"❌ Amazon digital statistics error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@amazon_bp.route("/digital", methods=["DELETE"])
+def clear_digital_orders():
+    """
+    Clear all Amazon digital orders (for testing/reimporting).
+
+    Returns:
+        Deletion count
+    """
+    try:
+        result = amazon_service.clear_digital_orders()
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ Clear Amazon digital orders error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
 # Amazon Business (SP-API) - Separate blueprint registered at /api/amazon-business
 # ============================================================================
 # Note: Amazon Business routes are in a separate blueprint to maintain

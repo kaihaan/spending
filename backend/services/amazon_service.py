@@ -15,7 +15,12 @@ import os
 import cache_manager
 
 from database import amazon, create_matching_job, update_matching_job_status
-from mcp import amazon_parser, amazon_returns_parser, amazon_sp_auth
+from mcp import (
+    amazon_digital_parser,
+    amazon_parser,
+    amazon_returns_parser,
+    amazon_sp_auth,
+)
 from mcp.amazon_business_matcher import match_all_amazon_business_transactions
 from mcp.amazon_matcher import match_all_amazon_transactions, rematch_transaction
 from mcp.amazon_returns_matcher import match_all_returns
@@ -416,6 +421,110 @@ def list_returns_files() -> dict:
     file_list = [{"filename": os.path.basename(f), "path": f} for f in files]
 
     return {"files": file_list, "count": len(file_list)}
+
+
+# ============================================================================
+# Amazon Digital Orders (CSV Import)
+# ============================================================================
+
+
+def import_digital_orders(csv_content: str = None, filename: str = None) -> dict:
+    """
+    Import Amazon digital orders from CSV file or content.
+
+    Args:
+        csv_content: CSV file content (preferred)
+        filename: Legacy path to CSV file in sample folder
+
+    Returns:
+        Import result with counts
+
+    Raises:
+        ValueError: If neither csv_content nor filename provided
+        FileNotFoundError: If filename path doesn't exist
+    """
+    # Parse CSV
+    if csv_content:
+        orders = amazon_digital_parser.parse_amazon_digital_csv_content(csv_content)
+        source_name = filename or "uploaded_file.csv"
+    elif filename:
+        file_path = os.path.join("..", "sample", filename)
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {filename}")
+        orders = amazon_digital_parser.parse_amazon_digital_csv(file_path)
+        source_name = filename
+    else:
+        raise ValueError("Missing csv_content or filename")
+
+    # Import to database
+    imported, duplicates = amazon.import_amazon_digital_orders(orders, source_name)
+
+    # Invalidate statistics cache
+    cache_manager.cache_delete("amazon:digital:statistics")
+
+    return {
+        "success": True,
+        "orders_imported": imported,
+        "orders_duplicated": duplicates,
+        "filename": source_name,
+    }
+
+
+def get_digital_orders(date_from: str = None, date_to: str = None) -> dict:
+    """
+    Get all Amazon digital orders with optional filters.
+
+    Args:
+        date_from: Start date filter (YYYY-MM-DD)
+        date_to: End date filter (YYYY-MM-DD)
+
+    Returns:
+        Orders list with count
+    """
+    orders = amazon.get_amazon_digital_orders(date_from, date_to)
+
+    return {"orders": orders, "count": len(orders)}
+
+
+def get_digital_statistics() -> dict:
+    """
+    Get Amazon digital orders statistics (cached).
+
+    Returns:
+        Statistics dict (cached 15 minutes)
+    """
+    cache_key = "amazon:digital:statistics"
+    cached_data = cache_manager.cache_get(cache_key)
+
+    if cached_data is not None:
+        return cached_data
+
+    # Cache miss - fetch from database
+    stats = amazon.get_amazon_digital_statistics()
+
+    # Cache the result (15 minute TTL)
+    cache_manager.cache_set(cache_key, stats, ttl=900)
+
+    return stats
+
+
+def clear_digital_orders() -> dict:
+    """
+    Clear all Amazon digital orders (for testing/reimporting).
+
+    Returns:
+        Deletion count
+    """
+    orders_deleted = amazon.clear_amazon_digital_orders()
+
+    # Invalidate statistics cache
+    cache_manager.cache_delete("amazon:digital:statistics")
+
+    return {
+        "success": True,
+        "orders_deleted": orders_deleted,
+        "message": f"Cleared {orders_deleted} digital orders",
+    }
 
 
 # ============================================================================

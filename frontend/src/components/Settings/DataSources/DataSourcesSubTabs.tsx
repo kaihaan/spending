@@ -13,6 +13,7 @@ interface TabCounts {
   apple?: number;
   business?: number;
   gmail?: number;
+  digital?: number;
 }
 
 interface DataSourcesSubTabsProps {
@@ -35,6 +36,8 @@ const TABS: TabConfig[] = [
   { id: 'business', label: 'Business', countKey: 'business' },
   { id: 'apple', label: 'Apple', countKey: 'apple' },
   { id: 'gmail', label: 'Gmail', countKey: 'gmail' },
+  { id: 'digital', label: 'Digital', countKey: 'digital' },
+  { id: 'matches', label: 'Matches' },
 ];
 
 export default function DataSourcesSubTabs({

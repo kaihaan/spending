@@ -16,6 +16,7 @@ from .models.amazon import (
     AmazonBusinessConnection,
     AmazonBusinessLineItem,
     AmazonBusinessOrder,
+    AmazonDigitalOrder,
     AmazonOrder,
     AmazonReturn,
     TrueLayerAmazonTransactionMatch,
@@ -61,9 +62,18 @@ def import_amazon_orders(orders, source_file):
 
 
 def get_amazon_orders(date_from=None, date_to=None, website=None):
-    """Get Amazon orders with optional filters."""
+    """Get Amazon orders with optional filters, including match status."""
     with get_session() as session:
-        query = session.query(AmazonOrder)
+        # Left outer join to include match information
+        query = session.query(
+            AmazonOrder,
+            TrueLayerAmazonTransactionMatch.truelayer_transaction_id.label(
+                "matched_transaction_id"
+            ),
+        ).outerjoin(
+            TrueLayerAmazonTransactionMatch,
+            AmazonOrder.id == TrueLayerAmazonTransactionMatch.amazon_order_id,
+        )
 
         if date_from:
             query = query.filter(AmazonOrder.order_date >= date_from)
@@ -74,7 +84,7 @@ def get_amazon_orders(date_from=None, date_to=None, website=None):
         if website:
             query = query.filter(AmazonOrder.website == website)
 
-        orders = query.order_by(AmazonOrder.order_date.desc()).all()
+        results = query.order_by(AmazonOrder.order_date.desc()).all()
 
         return [
             {
@@ -89,8 +99,9 @@ def get_amazon_orders(date_from=None, date_to=None, website=None):
                 "shipment_status": o.shipment_status,
                 "source_file": o.source_file,
                 "created_at": o.created_at,
+                "matched_transaction_id": matched_txn_id,
             }
-            for o in orders
+            for o, matched_txn_id in results
         ]
 
 
@@ -441,33 +452,43 @@ def check_amazon_coverage(date_from, date_to):
 
 
 def get_amazon_statistics():
-    """Get overall Amazon import and matching statistics (OPTIMIZED - single query)."""
+    """Get overall Amazon import and matching statistics with date range overlap."""
     with get_session() as session:
-        # Individual scalar queries for each statistic
+        # Amazon order statistics
         total_orders = session.query(func.count(AmazonOrder.id)).scalar() or 0
         min_order_date = session.query(func.min(AmazonOrder.order_date)).scalar()
         max_order_date = session.query(func.max(AmazonOrder.order_date)).scalar()
         total_matched = (
             session.query(func.count(TrueLayerAmazonTransactionMatch.id)).scalar() or 0
         )
+        total_unmatched = total_orders - total_matched
 
-        # Count unmatched Amazon transactions
-        matched_txn_ids = session.query(
-            TrueLayerAmazonTransactionMatch.truelayer_transaction_id
-        ).subquery()
-        total_unmatched = (
-            session.query(func.count(TrueLayerTransaction.id))
-            .filter(
-                or_(
-                    func.upper(TrueLayerTransaction.merchant_name).like("%AMAZON%"),
-                    func.upper(TrueLayerTransaction.merchant_name).like("%AMZN%"),
-                    func.upper(TrueLayerTransaction.description).like("%AMAZON%"),
-                    func.upper(TrueLayerTransaction.description).like("%AMZN%"),
-                ),
-                ~TrueLayerTransaction.id.in_(matched_txn_ids),
+        # Bank transaction date range
+        min_bank_date = session.query(func.min(TrueLayerTransaction.timestamp)).scalar()
+        max_bank_date = session.query(func.max(TrueLayerTransaction.timestamp)).scalar()
+
+        # Calculate overlap dates
+        overlap_start = None
+        overlap_end = None
+        if min_order_date and max_order_date and min_bank_date and max_bank_date:
+            # Overlap start is the later of the two start dates
+            overlap_start = max(
+                min_order_date,
+                min_bank_date.date()
+                if hasattr(min_bank_date, "date")
+                else min_bank_date,
             )
-            .scalar()
-        ) or 0
+            # Overlap end is the earlier of the two end dates
+            overlap_end = min(
+                max_order_date,
+                max_bank_date.date()
+                if hasattr(max_bank_date, "date")
+                else max_bank_date,
+            )
+            # If there's no actual overlap, set to None
+            if overlap_start > overlap_end:
+                overlap_start = None
+                overlap_end = None
 
         return {
             "total_orders": total_orders,
@@ -475,6 +496,14 @@ def get_amazon_statistics():
             "max_order_date": max_order_date.isoformat() if max_order_date else None,
             "total_matched": total_matched,
             "total_unmatched": total_unmatched,
+            "min_bank_date": min_bank_date.date().isoformat()
+            if min_bank_date
+            else None,
+            "max_bank_date": max_bank_date.date().isoformat()
+            if max_bank_date
+            else None,
+            "overlap_start": overlap_start.isoformat() if overlap_start else None,
+            "overlap_end": overlap_end.isoformat() if overlap_end else None,
         }
 
 
@@ -630,6 +659,194 @@ def clear_amazon_returns():
         session.commit()
 
         return return_count
+
+
+# ============================================================================
+
+
+# ============================================================================
+# AMAZON DIGITAL ORDERS FUNCTIONS
+# ============================================================================
+
+
+def import_amazon_digital_orders(orders: list, source_file: str) -> tuple:
+    """Bulk import Amazon digital orders into database.
+
+    Args:
+        orders: List of digital order dictionaries from CSV parser
+        source_file: Name of the source CSV file
+
+    Returns:
+        Tuple of (imported_count, duplicate_count)
+    """
+    imported = 0
+    duplicates = 0
+
+    with get_session() as session:
+        for order in orders:
+            try:
+                new_order = AmazonDigitalOrder(
+                    user_id=1,  # Default user
+                    asin=order["asin"],
+                    product_name=order["product_name"],
+                    order_id=order["order_id"],
+                    digital_order_item_id=order["digital_order_item_id"],
+                    order_date=order["order_date"],
+                    fulfilled_date=order.get("fulfilled_date"),
+                    price=order["price"],
+                    price_tax=order.get("price_tax"),
+                    currency=order.get("currency", "GBP"),
+                    publisher=order.get("publisher"),
+                    seller_of_record=order.get("seller_of_record"),
+                    marketplace=order.get("marketplace"),
+                    source_file=source_file,
+                )
+                session.add(new_order)
+                session.flush()
+                imported += 1
+            except IntegrityError:
+                session.rollback()
+                duplicates += 1
+                continue
+
+        session.commit()
+    return (imported, duplicates)
+
+
+def get_amazon_digital_orders(date_from=None, date_to=None) -> list:
+    """Get Amazon digital orders with optional filters.
+
+    Args:
+        date_from: Optional start date filter
+        date_to: Optional end date filter
+
+    Returns:
+        List of digital order dictionaries
+    """
+    with get_session() as session:
+        query = session.query(AmazonDigitalOrder)
+
+        if date_from:
+            query = query.filter(AmazonDigitalOrder.order_date >= date_from)
+
+        if date_to:
+            query = query.filter(AmazonDigitalOrder.order_date <= date_to)
+
+        orders = query.order_by(AmazonDigitalOrder.order_date.desc()).all()
+
+        return [
+            {
+                "id": o.id,
+                "asin": o.asin,
+                "product_name": o.product_name,
+                "order_id": o.order_id,
+                "digital_order_item_id": o.digital_order_item_id,
+                "order_date": o.order_date.isoformat() if o.order_date else None,
+                "fulfilled_date": o.fulfilled_date.isoformat()
+                if o.fulfilled_date
+                else None,
+                "price": float(o.price),
+                "price_tax": float(o.price_tax) if o.price_tax else None,
+                "currency": o.currency,
+                "publisher": o.publisher,
+                "seller_of_record": o.seller_of_record,
+                "marketplace": o.marketplace,
+                "source_file": o.source_file,
+                "matched_transaction_id": o.matched_transaction_id,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+            }
+            for o in orders
+        ]
+
+
+def get_amazon_digital_statistics() -> dict:
+    """Get Amazon digital orders statistics with bank overlap dates.
+
+    Returns:
+        Dictionary with counts and date ranges
+    """
+    with get_session() as session:
+        # Digital order statistics
+        total_orders = session.query(func.count(AmazonDigitalOrder.id)).scalar() or 0
+        min_order_date = session.query(func.min(AmazonDigitalOrder.order_date)).scalar()
+        max_order_date = session.query(func.max(AmazonDigitalOrder.order_date)).scalar()
+
+        # Matched orders (have matched_transaction_id)
+        matched_orders = (
+            session.query(func.count(AmazonDigitalOrder.id))
+            .filter(AmazonDigitalOrder.matched_transaction_id.is_not(None))
+            .scalar()
+        ) or 0
+
+        unmatched_orders = total_orders - matched_orders
+
+        # Bank transaction date range
+        min_bank_date = session.query(func.min(TrueLayerTransaction.timestamp)).scalar()
+        max_bank_date = session.query(func.max(TrueLayerTransaction.timestamp)).scalar()
+
+        # Calculate overlap dates
+        overlap_start = None
+        overlap_end = None
+        if min_order_date and max_order_date and min_bank_date and max_bank_date:
+            # Overlap start is the later of the two start dates
+            order_start = (
+                min_order_date.date()
+                if hasattr(min_order_date, "date")
+                else min_order_date
+            )
+            bank_start = (
+                min_bank_date.date()
+                if hasattr(min_bank_date, "date")
+                else min_bank_date
+            )
+            overlap_start = max(order_start, bank_start)
+
+            # Overlap end is the earlier of the two end dates
+            order_end = (
+                max_order_date.date()
+                if hasattr(max_order_date, "date")
+                else max_order_date
+            )
+            bank_end = (
+                max_bank_date.date()
+                if hasattr(max_bank_date, "date")
+                else max_bank_date
+            )
+            overlap_end = min(order_end, bank_end)
+
+            # If there's no actual overlap, set to None
+            if overlap_start > overlap_end:
+                overlap_start = None
+                overlap_end = None
+
+        return {
+            "total_orders": total_orders,
+            "matched_orders": matched_orders,
+            "unmatched_orders": unmatched_orders,
+            "min_order_date": min_order_date.isoformat() if min_order_date else None,
+            "max_order_date": max_order_date.isoformat() if max_order_date else None,
+            "min_bank_date": min_bank_date.date().isoformat()
+            if min_bank_date
+            else None,
+            "max_bank_date": max_bank_date.date().isoformat()
+            if max_bank_date
+            else None,
+            "overlap_start": overlap_start.isoformat() if overlap_start else None,
+            "overlap_end": overlap_end.isoformat() if overlap_end else None,
+        }
+
+
+def clear_amazon_digital_orders() -> int:
+    """Delete all Amazon digital orders from database.
+
+    Returns:
+        Count of deleted orders
+    """
+    with get_session() as session:
+        order_count = session.query(func.count(AmazonDigitalOrder.id)).scalar() or 0
+        session.query(AmazonDigitalOrder).delete()
+        session.commit()
+        return order_count
 
 
 # ============================================================================
