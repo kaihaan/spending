@@ -41,7 +41,7 @@ def parse_amazon_csv(file_path):
         # Group items by Order ID to handle multi-item orders
         orders_dict = defaultdict(list)
 
-        for idx, row in df.iterrows():
+        for _idx, row in df.iterrows():
             # Skip rows with no order ID or product name
             if pd.isna(row["Order ID"]) or pd.isna(row["Product Name"]):
                 continue
@@ -68,7 +68,7 @@ def parse_amazon_csv(file_path):
         # Consolidate orders - combine product names for multi-item orders
         consolidated_orders = []
 
-        for order_id, items in orders_dict.items():
+        for _order_id, items in orders_dict.items():
             # Use first item for base data (all items in same order have same metadata)
             base_item = items[0]
 
@@ -94,7 +94,7 @@ def parse_amazon_csv(file_path):
                     "order_date": base_item["order_date"],
                     "website": base_item["website"],
                     "currency": base_item["currency"],
-                    "total_owed": base_item["total_owed"],
+                    "total_owed": sum(item["total_owed"] for item in items),
                     "product_names": product_names,
                     "order_status": base_item["order_status"],
                     "shipment_status": base_item["shipment_status"],
@@ -104,7 +104,7 @@ def parse_amazon_csv(file_path):
         return consolidated_orders
 
     except Exception as e:
-        raise Exception(f"Failed to parse Amazon CSV: {str(e)}")
+        raise Exception(f"Failed to parse Amazon CSV: {str(e)}") from e
 
 
 def parse_amazon_csv_content(csv_content: str) -> list:
@@ -137,7 +137,7 @@ def parse_amazon_csv_content(csv_content: str) -> list:
         # Group items by Order ID to handle multi-item orders
         orders_dict = defaultdict(list)
 
-        for idx, row in df.iterrows():
+        for _idx, row in df.iterrows():
             # Skip rows with no order ID or product name
             if pd.isna(row["Order ID"]) or pd.isna(row["Product Name"]):
                 continue
@@ -164,7 +164,7 @@ def parse_amazon_csv_content(csv_content: str) -> list:
         # Consolidate orders - combine product names for multi-item orders
         consolidated_orders = []
 
-        for order_id, items in orders_dict.items():
+        for _order_id, items in orders_dict.items():
             # Use first item for base data (all items in same order have same metadata)
             base_item = items[0]
 
@@ -190,7 +190,7 @@ def parse_amazon_csv_content(csv_content: str) -> list:
                     "order_date": base_item["order_date"],
                     "website": base_item["website"],
                     "currency": base_item["currency"],
-                    "total_owed": base_item["total_owed"],
+                    "total_owed": sum(item["total_owed"] for item in items),
                     "product_names": product_names,
                     "order_status": base_item["order_status"],
                     "shipment_status": base_item["shipment_status"],
@@ -200,7 +200,7 @@ def parse_amazon_csv_content(csv_content: str) -> list:
         return consolidated_orders
 
     except Exception as e:
-        raise Exception(f"Failed to parse Amazon CSV content: {str(e)}")
+        raise Exception(f"Failed to parse Amazon CSV content: {str(e)}") from e
 
 
 def abbreviate_product_name(product_name, max_length=35):
@@ -277,7 +277,7 @@ def clean_currency(value):
         return 0.0
 
     # If already a number, return it
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return float(value)
 
     # Convert to string and clean
