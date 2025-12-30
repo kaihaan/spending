@@ -10,6 +10,7 @@ import traceback
 from datetime import UTC
 
 from flask import Blueprint, jsonify, redirect, request
+from flask_login import current_user
 
 from mcp import truelayer_auth
 from services import truelayer_service
@@ -457,6 +458,50 @@ def get_sync_status():
 
     except Exception as e:
         print(f"❌ TrueLayer sync status error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@truelayer_bp.route("/transactions/raw", methods=["GET"])
+def get_raw_transactions():
+    """
+    Get raw TrueLayer transactions with pagination.
+
+    Query params:
+        page (int): Page number (default: 1)
+        page_size (int): Items per page (default: 50)
+
+    Returns:
+        Paginated transactions with total count
+    """
+    try:
+        page = int(request.args.get("page", 1))
+        page_size = int(request.args.get("page_size", 50))
+
+        result = truelayer_service.get_raw_transactions(
+            user_id=current_user.id, page=page, page_size=page_size
+        )
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ TrueLayer raw transactions error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@truelayer_bp.route("/statistics", methods=["GET"])
+def get_statistics():
+    """
+    Get bank transaction statistics.
+
+    Returns total in (credits), total out (debits), date range, and transaction count.
+    """
+    try:
+        result = truelayer_service.get_bank_statistics(user_id=current_user.id)
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ TrueLayer statistics error: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 

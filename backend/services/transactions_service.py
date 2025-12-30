@@ -236,6 +236,97 @@ def get_all_transactions(user_id: int | None = None) -> list:
     return normalized
 
 
+def get_transactions_with_matches(
+    user_id: int, page: int = 1, page_size: int = 50
+) -> dict:
+    """
+    Get paginated TrueLayer transactions with enrichment sources for the Matches tab.
+
+    Returns a simplified transaction list focused on match data, with pagination.
+    Does NOT use cache since pagination parameters vary.
+
+    Args:
+        user_id: User ID to filter transactions by
+        page: Page number (1-indexed)
+        page_size: Number of items per page
+
+    Returns:
+        Dict with:
+        - items: List of transactions with enrichment_sources
+        - total: Total count of transactions
+        - page: Current page
+        - page_size: Page size
+        - total_pages: Total number of pages
+    """
+    # Get all transactions for user (needed for count and pagination)
+    all_transactions = (
+        truelayer.get_all_truelayer_transactions_with_enrichment(user_id=user_id) or []
+    )
+
+    # Sort by timestamp descending (most recent first)
+    all_transactions.sort(key=lambda t: str(t.get("timestamp", "")), reverse=True)
+
+    total = len(all_transactions)
+    total_pages = (total + page_size - 1) // page_size
+
+    # Paginate
+    offset = (page - 1) * page_size
+    paginated_transactions = all_transactions[offset : offset + page_size]
+
+    # Batch-fetch enrichment sources for paginated transactions
+    transaction_ids = [t.get("id") for t in paginated_transactions if t.get("id")]
+    enrichment_sources_map = {}
+    if transaction_ids:
+        enrichment_sources_map = (
+            db_enrichment.get_all_enrichment_sources_for_transactions(transaction_ids)
+        )
+
+    # Build response items with minimal fields for Matches tab
+    items = []
+    for t in paginated_transactions:
+        timestamp = t.get("timestamp")
+        if timestamp:
+            if isinstance(timestamp, str):
+                timestamp_str = timestamp
+            else:
+                timestamp_str = timestamp.isoformat()
+        else:
+            timestamp_str = None
+
+        txn_id = t.get("id")
+        sources = enrichment_sources_map.get(txn_id, [])
+
+        items.append(
+            {
+                "id": txn_id,
+                "timestamp": timestamp_str,
+                "description": t.get("description"),
+                "amount": float(t.get("amount", 0))
+                if t.get("amount") is not None
+                else 0,
+                "currency": t.get("currency", "GBP"),
+                "enrichment_sources": [
+                    {
+                        "id": s.get("id"),
+                        "source_type": s.get("source_type"),
+                        "source_id": s.get("source_id"),
+                        "match_confidence": s.get("match_confidence"),
+                        "is_primary": s.get("is_primary", False),
+                    }
+                    for s in sources
+                ],
+            }
+        )
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
+
+
 # ============================================================================
 # Transaction Updates
 # ============================================================================

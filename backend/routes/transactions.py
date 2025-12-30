@@ -49,6 +49,40 @@ def get_transactions():
         return jsonify({"error": str(e)}), 500
 
 
+@transactions_bp.route("/with-matches", methods=["GET"])
+def get_transactions_with_matches():
+    """
+    Get paginated transactions with match status for each data source.
+
+    Used by the Matches tab to display bank transactions with match badges.
+
+    Query params:
+        page (int): Page number (default: 1)
+        page_size (int): Items per page (default: 50)
+
+    Returns:
+        Dict with items, total, page, page_size, total_pages
+    """
+    try:
+        page = request.args.get("page", 1, type=int)
+        page_size = request.args.get("page_size", 50, type=int)
+
+        # Clamp page_size to reasonable limits
+        page_size = max(1, min(100, page_size))
+
+        result = transactions_service.get_transactions_with_matches(
+            user_id=current_user.id,
+            page=page,
+            page_size=page_size,
+        )
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ Get transactions with matches error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 # ============================================================================
 # Transaction Updates
 # ============================================================================
