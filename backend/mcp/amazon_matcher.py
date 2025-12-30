@@ -1,12 +1,15 @@
 """
 Amazon Transaction Matcher MCP Component
 Fuzzy matching algorithm to match bank transactions with Amazon order history.
-Uses exact amount matching, date proximity (±3 days), and merchant name detection.
+Uses exact amount matching, date proximity (±7 days), and merchant name detection.
 """
 
-from datetime import datetime
+import logging
+from datetime import datetime, timedelta
 
 import database
+
+logger = logging.getLogger(__name__)
 
 
 def match_all_amazon_transactions():
@@ -41,6 +44,10 @@ def match_all_amazon_transactions():
     for transaction in unmatched_transactions:
         # Find ALL matching orders above threshold
         all_matches = find_all_matches(transaction, all_orders)
+
+        if not all_matches:
+            # Log debug info for unmatched transactions
+            debug_unmatched_transaction(transaction, all_orders)
 
         if all_matches:
             best_match = all_matches[0]
@@ -151,9 +158,9 @@ def find_all_matches(transaction, orders, min_confidence=70):
         except Exception:  # Fixed: was bare except
             continue
 
-        # Check date proximity (±3 days)
+        # Check date proximity (±7 days)
         date_diff_days = abs((txn_date - order_date).days)
-        if date_diff_days > 3:
+        if date_diff_days > 7:
             continue
 
         # Check amount match (exact match only)
@@ -257,7 +264,7 @@ def calculate_confidence(txn_date, order_date, txn_amount, order_amount):
     if amounts_match(txn_amount, order_amount):
         confidence += 50
 
-    # Date proximity (50 points max)
+    # Date proximity (50 points max, extended to ±7 days)
     date_diff_days = abs((txn_date - order_date).days)
 
     if date_diff_days == 0:
@@ -268,6 +275,10 @@ def calculate_confidence(txn_date, order_date, txn_amount, order_amount):
         confidence += 35  # 2 days difference
     elif date_diff_days == 3:
         confidence += 25  # 3 days difference
+    elif date_diff_days <= 5:
+        confidence += 22  # 4-5 days (still good match)
+    elif date_diff_days <= 7:
+        confidence += 20  # 6-7 days (acceptable match)
 
     return confidence
 
@@ -367,9 +378,9 @@ def get_match_preview(transaction_id):
         except Exception:  # Fixed: was bare except
             continue
 
-        # Check date proximity
+        # Check date proximity (±7 days)
         date_diff_days = abs((txn_date - order_date).days)
-        if date_diff_days > 3:
+        if date_diff_days > 7:
             continue
 
         # Check amount match
@@ -397,3 +408,122 @@ def get_match_preview(transaction_id):
     candidates.sort(key=lambda x: (-x["confidence"], x["date_diff"]))
 
     return candidates[:5]  # Return top 5 candidates
+
+
+def debug_unmatched_transaction(transaction, orders):
+    """
+    Log detailed info for transactions that failed to match.
+    Helps identify why matching failed and potential fixes.
+
+    Args:
+        transaction: The unmatched transaction dictionary
+        orders: List of all Amazon orders
+    """
+    txn_amount = abs(float(transaction.get("amount", 0)))
+    txn_date_str = str(
+        transaction.get("date", transaction.get("timestamp", ""))
+    ).strip()
+
+    # Parse transaction date
+    try:
+        if " " in txn_date_str or "T" in txn_date_str:
+            date_part = (
+                txn_date_str.split(" ")[0]
+                if " " in txn_date_str
+                else txn_date_str.split("T")[0]
+            )
+            txn_date = datetime.strptime(date_part, "%Y-%m-%d")
+        else:
+            txn_date = datetime.strptime(txn_date_str, "%Y-%m-%d")
+    except Exception:
+        logger.warning(
+            f"Could not parse date for transaction {transaction.get('id')}: {txn_date_str}"
+        )
+        return
+
+    logger.info(
+        f"=== UNMATCHED: {txn_date.date()} £{txn_amount:.2f} - {transaction.get('description', '')[:50]} ==="
+    )
+
+    # Find closest by amount (within £5)
+    by_amount = []
+    for o in orders:
+        try:
+            order_amount = abs(float(o.get("total_owed", 0)))
+            diff = abs(order_amount - txn_amount)
+            if diff < 5.0:
+                by_amount.append(
+                    (
+                        o["order_date"],
+                        order_amount,
+                        diff,
+                        o.get("product_names", "")[:40],
+                    )
+                )
+        except (ValueError, TypeError):
+            continue
+    by_amount.sort(key=lambda x: x[2])
+    if by_amount:
+        logger.info(f"  Closest by amount (within £5): {by_amount[:5]}")
+    else:
+        logger.info("  No orders within £5 of transaction amount")
+
+    # Find closest by date (within 14 days)
+    by_date = []
+    for o in orders:
+        try:
+            order_date_val = o["order_date"]
+            if isinstance(order_date_val, datetime):
+                order_date = order_date_val
+            elif hasattr(order_date_val, "year"):  # date object
+                order_date = datetime.combine(order_date_val, datetime.min.time())
+            else:
+                order_date = datetime.strptime(str(order_date_val), "%Y-%m-%d")
+
+            days_diff = abs((txn_date - order_date).days)
+            if days_diff <= 14:
+                by_date.append(
+                    (
+                        o["order_date"],
+                        o.get("total_owed"),
+                        days_diff,
+                        o.get("product_names", "")[:40],
+                    )
+                )
+        except Exception:
+            continue
+    by_date.sort(key=lambda x: x[2])
+    if by_date:
+        logger.info(f"  Closest by date (within 14 days): {by_date[:5]}")
+    else:
+        logger.info("  No orders within 14 days of transaction date")
+
+    # Check for combined orders on nearby dates
+    for days_offset in range(-7, 8):
+        check_date = txn_date + timedelta(days=days_offset)
+        day_orders = []
+        for o in orders:
+            try:
+                order_date_val = o["order_date"]
+                if isinstance(order_date_val, datetime):
+                    order_date = order_date_val.date()
+                elif hasattr(order_date_val, "year"):
+                    order_date = order_date_val
+                else:
+                    order_date = datetime.strptime(
+                        str(order_date_val), "%Y-%m-%d"
+                    ).date()
+
+                if order_date == check_date.date():
+                    day_orders.append(o)
+            except Exception:
+                continue
+
+        if len(day_orders) >= 2:
+            total = sum(abs(float(o.get("total_owed", 0))) for o in day_orders)
+            if abs(total - txn_amount) < 0.02:
+                products = [o.get("product_names", "")[:30] for o in day_orders]
+                logger.info(
+                    f"  POTENTIAL COMBINED: {len(day_orders)} orders on {check_date.date()} = £{total:.2f}"
+                )
+                logger.info(f"    Products: {products}")

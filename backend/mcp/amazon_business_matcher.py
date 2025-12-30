@@ -107,7 +107,7 @@ def find_best_amazon_business_match(transaction: dict, orders: list) -> dict:
 
     Matching criteria:
     - Amount must match exactly (within £0.01)
-    - Date must be within ±3 days
+    - Date must be within ±7 days
     - Confidence based on date proximity
 
     Args:
@@ -178,9 +178,9 @@ def find_best_amazon_business_match(transaction: dict, orders: list) -> dict:
         except Exception:
             continue
 
-        # Date proximity (±3 days)
+        # Date proximity (±7 days)
         date_diff_days = abs((txn_date - order_date).days)
-        if date_diff_days > 3:
+        if date_diff_days > 7:
             continue
 
         # Amount match (net_total, within £0.01)
@@ -197,8 +197,12 @@ def find_best_amazon_business_match(transaction: dict, orders: list) -> dict:
             confidence += 40
         elif date_diff_days == 2:
             confidence += 30
+        elif date_diff_days == 3:
+            confidence += 25  # 3 days
+        elif date_diff_days <= 5:
+            confidence += 22  # 4-5 days (still good match)
         else:
-            confidence += 20  # 3 days
+            confidence += 20  # 6-7 days (acceptable match)
 
         candidates.append(
             {
