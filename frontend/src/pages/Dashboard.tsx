@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useFilters } from '../contexts/FilterContext';
 import { getSubcategoriesForCategory } from '../utils/filterUtils';
 import D3BarChart from '../components/charts/D3BarChart';
@@ -13,6 +14,11 @@ export default function Dashboard() {
   const [selectedMonth, setSelectedMonth] = useState<MonthKey | null>('average');
 
   const isAverageMode = selectedMonth === 'average';
+
+  // Detect if AI categorization is needed (only null category or no categories)
+  const needsAICategorization =
+    uniqueCategories.length === 0 ||
+    (uniqueCategories.length === 1 && uniqueCategories[0] === 'null');
 
   // Process data for category bar chart
   const categoryData = uniqueCategories
@@ -236,7 +242,30 @@ export default function Dashboard() {
               <span>No transactions match the current filters</span>
             </div>
           ) : (
-            <div className="bg-base-100 p-4 rounded-lg">
+            <div className="relative bg-base-100 p-4 rounded-lg">
+              {/* AI Needed Banner - shows when no categorization has been run */}
+              {chartView === 'category' && needsAICategorization && (
+                <div className="absolute inset-0 flex items-center justify-center z-10 bg-base-100/80 backdrop-blur-sm rounded-lg">
+                  <div className="text-center space-y-3 p-6">
+                    <div className="text-lg font-semibold text-warning flex items-center justify-center gap-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      AI Categorization Needed
+                    </div>
+                    <p className="text-base-content/70 text-sm">
+                      Transactions haven't been categorized yet
+                    </p>
+                    <Link
+                      to="/settings#enrichment"
+                      className="btn btn-primary btn-sm"
+                    >
+                      Configure AI Settings →
+                    </Link>
+                  </div>
+                </div>
+              )}
+
               {chartView === 'category' && barChartData.length > 0 && (
                 <div className="space-y-2">
                   {/* Subcategory view: show back button + title */}
