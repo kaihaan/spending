@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../../api/client';
 import type { AmazonBusinessStats, AmazonBusinessOrder, AmazonBusinessConnection } from './types';
+import { useTableStyles } from '../../../hooks/useTableStyles';
 
 /** Format date string to readable format like "01 Jan 2025" */
 function formatDateRange(dateString: string): string {
@@ -52,6 +53,8 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
     orders_imported: number;
     matching_results?: { matched: number; unmatched: number };
   } | null>(null);
+
+  const { style: glassStyle, className: glassClassName } = useTableStyles();
 
   const fetchOrders = useCallback(async () => {
     setIsLoading(true);
@@ -379,8 +382,8 @@ export default function AmazonBusinessTab({ stats, onStatsUpdate }: AmazonBusine
       </div>
 
       {/* Orders Table */}
-      <div className="overflow-x-auto">
-        <table className="table table-zebra">
+      <div className={`overflow-x-auto rounded-lg ${glassClassName}`} style={glassStyle}>
+        <table className="table">
           <thead>
             <tr>
               <th>Order ID</th>

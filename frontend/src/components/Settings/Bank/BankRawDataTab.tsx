@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../../api/client';
+import { useTableStyles } from '../../../hooks/useTableStyles';
 
 interface RawTransaction {
   id: number;
@@ -35,6 +36,9 @@ export default function BankRawDataTab() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = 50;
+
+  // Glass effect styling for theme-aware table backgrounds
+  const { style: glassStyle, className: glassClassName } = useTableStyles();
 
   const fetchData = useCallback(async () => {
     try {
@@ -112,9 +116,9 @@ export default function BankRawDataTab() {
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto border border-base-300 rounded-lg">
+      <div className={`overflow-x-auto border border-base-300 rounded-lg ${glassClassName}`} style={glassStyle}>
         <table className="table table-sm">
-          <thead className="bg-base-200">
+          <thead className={glassClassName} style={glassStyle}>
             <tr>
               <th className="w-36">Date/Time</th>
               <th>Description</th>

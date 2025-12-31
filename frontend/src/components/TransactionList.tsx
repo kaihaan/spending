@@ -5,6 +5,7 @@ import type { Transaction, Category } from '../types';
 import CategoryUpdateModal from './CategoryUpdateModal';
 import EnrichmentSourceDetailModal from './EnrichmentSourceDetailModal';
 import { useFilters } from '../contexts/FilterContext';
+import { useTableStyles } from '../hooks/useTableStyles';
 import type { ColumnVisibility, ColumnOrder, ColumnKey} from './TransactionRow';
 import TransactionRow, { COLUMN_CONFIG } from './TransactionRow';
 
@@ -172,7 +173,8 @@ const ResizeHandle = ({ onResizeStart, onResize, onResizeEnd }: ResizeHandleProp
 
 export default function TransactionList() {
   const { filteredTransactions, transactions, loading, error, refreshTransactions, filters } = useFilters();
-  const [categories, setCategories] = useState<Category[]>([]);
+  const { style: glassStyle, className: glassClassName } = useTableStyles();
+  const [_categories, _setCategories] = useState<Category[]>([]); // Reserved for category editing
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   // Enrichment source detail modal state
   const [viewingEnrichmentSource, setViewingEnrichmentSource] = useState<{
@@ -407,7 +409,7 @@ export default function TransactionList() {
   const fetchCategories = async () => {
     try {
       const response = await axios.get<Category[]>(`${API_URL}/categories`);
-      setCategories(response.data);
+      _setCategories(response.data);
     } catch (err) {
       console.error('Failed to fetch categories:', err);
     }
@@ -416,19 +418,6 @@ export default function TransactionList() {
   const handleModalSuccess = () => {
     // Refresh transactions after successful update
     refreshTransactions();
-  };
-
-  const handleClassificationChange = async (transactionId: number, classification: 'essential' | 'discretionary' | null) => {
-    try {
-      await axios.put(`${API_URL}/transactions/${transactionId}/huququllah`, {
-        classification
-      });
-      // Refresh transactions to show updated classification
-      refreshTransactions();
-    } catch (err) {
-      console.error('Failed to update classification:', err);
-      alert('Failed to update classification');
-    }
   };
 
   if (loading) {
@@ -489,8 +478,8 @@ export default function TransactionList() {
             Table: ({ style, ...props }) => (
               <table
                 {...props}
-                className="table table-zebra table-fixed"
-                style={{ ...style, width: '100%', tableLayout: 'fixed' }}
+                className={`table table-fixed ${glassClassName}`}
+                style={{ ...style, ...glassStyle, width: '100%', tableLayout: 'fixed' }}
               >
                 <colgroup>
                   {columnOrder.map(key =>
@@ -503,7 +492,7 @@ export default function TransactionList() {
               </table>
             ),
             TableHead: React.forwardRef((props, ref) => (
-              <thead {...props} ref={ref} className="sticky top-0 z-10 bg-base-100">
+              <thead {...props} ref={ref} className={`sticky top-0 z-10 ${glassClassName}`} style={glassStyle}>
                 <tr>
                   {columnOrder.map(key => {
                     if (!columnVisibility[key]) return null;
@@ -531,7 +520,7 @@ export default function TransactionList() {
             },
           }}
           fixedHeaderContent={() => null}
-          itemContent={(index, row) => {
+          itemContent={(_index, row) => {
             if (row.type === 'header') {
               // Date header row
               const isCollapsed = collapsedGroups.has(row.dateKey);

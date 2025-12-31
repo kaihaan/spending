@@ -8,6 +8,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../../api/client';
 import type { ReturnsStats, AmazonReturn } from './types';
+import { useTableStyles } from '../../../hooks/useTableStyles';
 
 /** Format date string to readable format like "01 Jan 2025" */
 function formatDateRange(dateString: string): string {
@@ -44,6 +45,8 @@ export default function AmazonReturnsTab({ stats, onStatsUpdate }: AmazonReturns
 
   // Bank stats for overlap calculation
   const [bankStats, setBankStats] = useState<BankStats | null>(null);
+
+  const { style: glassStyle, className: glassClassName } = useTableStyles();
 
   const fetchReturns = useCallback(async () => {
     setIsLoading(true);
@@ -287,8 +290,8 @@ export default function AmazonReturnsTab({ stats, onStatsUpdate }: AmazonReturns
       </div>
 
       {/* Returns Table */}
-      <div className="overflow-x-auto">
-        <table className="table table-zebra">
+      <div className={`overflow-x-auto rounded-lg ${glassClassName}`} style={glassStyle}>
+        <table className="table">
           <thead>
             <tr>
               <th>Order ID</th>

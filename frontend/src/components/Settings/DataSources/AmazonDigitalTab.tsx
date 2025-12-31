@@ -8,6 +8,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../../api/client';
 import type { AmazonDigitalStats, AmazonDigitalOrder } from './types';
+import { useTableStyles } from '../../../hooks/useTableStyles';
 
 /** Format date string to readable format like "01 Jan 2025" */
 function formatDateRange(dateString: string): string {
@@ -35,6 +36,8 @@ export default function AmazonDigitalTab({ stats, onStatsUpdate }: AmazonDigital
   const [fileContent, setFileContent] = useState<string>('');
   const [selectedFileName, setSelectedFileName] = useState<string>('');
   const [isImporting, setIsImporting] = useState(false);
+
+  const { style: glassStyle, className: glassClassName } = useTableStyles();
 
   const fetchOrders = useCallback(async () => {
     setIsLoading(true);
@@ -224,8 +227,8 @@ export default function AmazonDigitalTab({ stats, onStatsUpdate }: AmazonDigital
       </div>
 
       {/* Orders Table */}
-      <div className="overflow-x-auto">
-        <table className="table table-zebra">
+      <div className={`overflow-x-auto rounded-lg ${glassClassName}`} style={glassStyle}>
+        <table className="table">
           <thead>
             <tr>
               <th>Product Name</th>

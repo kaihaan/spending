@@ -75,7 +75,6 @@ interface EnrichmentSourceDetails {
     merchant_name?: string;
     merchant_domain?: string;
     total_amount_gmail?: number;
-    total_amount?: number;
     currency_code?: string;
     receipt_date?: string;
     parse_method?: string;
@@ -367,7 +366,7 @@ export default function EnrichmentSourceDetailModal({
               <div>
                 <h4 className="font-semibold text-sm text-base-content/60 mb-2">Items</h4>
                 <div className="overflow-x-auto">
-                  <table className="table table-sm table-zebra w-full">
+                  <table className="table table-sm w-full">
                     <thead>
                       <tr>
                         <th>Item</th>

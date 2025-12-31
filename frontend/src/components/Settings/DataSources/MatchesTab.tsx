@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import apiClient from '../../../api/client';
+import { useTableStyles } from '../../../hooks/useTableStyles';
 
 // ============================================================================
 // Types
@@ -188,6 +189,8 @@ export default function MatchesTab() {
   const [selectedMatch, setSelectedMatch] = useState<SelectedMatch | null>(null);
   const [matchDetails, setMatchDetails] = useState<MatchDetails | null>(null);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+
+  const { style: glassStyle, className: glassClassName } = useTableStyles();
 
   // Load saved selection from localStorage on mount
   useEffect(() => {
@@ -603,8 +606,8 @@ export default function MatchesTab() {
       </div>
 
       {/* Transactions Table */}
-      <div className="overflow-x-auto">
-        <table className="table table-zebra">
+      <div className={`overflow-x-auto rounded-lg ${glassClassName}`} style={glassStyle}>
+        <table className="table">
           <thead>
             <tr>
               <th>Date</th>

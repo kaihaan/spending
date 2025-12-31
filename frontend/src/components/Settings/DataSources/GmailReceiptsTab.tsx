@@ -10,6 +10,7 @@ import apiClient from '../../../api/client';
 import { GmailDateRangeSelector, getDefaultDateRange } from '../../GmailDateRangeSelector';
 import { GmailSyncProgressBar } from '../../GmailSyncProgressBar';
 import type { GmailStats, GmailReceipt, GmailConnection } from './types';
+import { useTableStyles } from '../../../hooks/useTableStyles';
 
 /** Format date string to readable format like "01 Jan 2025" */
 function formatDateRange(dateString: string): string {
@@ -60,6 +61,8 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
     duplicates: number;
     failed: number;
   } | null>(null);
+
+  const { style: glassStyle, className: glassClassName } = useTableStyles();
 
   const fetchReceipts = useCallback(async () => {
     setIsLoading(true);
@@ -522,8 +525,8 @@ export default function GmailReceiptsTab({ stats, onStatsUpdate }: GmailReceipts
       </div>
 
       {/* Receipts Table */}
-      <div className="overflow-x-auto">
-        <table className="table table-zebra">
+      <div className={`overflow-x-auto rounded-lg ${glassClassName}`} style={glassStyle}>
+        <table className="table">
           <thead>
             <tr>
               <th>Received</th>

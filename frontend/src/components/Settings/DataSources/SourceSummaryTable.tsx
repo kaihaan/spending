@@ -6,6 +6,7 @@
  */
 
 import { calculateDaysGap, getStalenessStatus } from './components/DateRangeIndicator';
+import { useTableStyles } from '../../../hooks/useTableStyles';
 import type {
   SourceTabId,
   AmazonStats,
@@ -44,6 +45,8 @@ export default function SourceSummaryTable({
   isLoading,
   onNavigateToTab,
 }: SourceSummaryTableProps) {
+  const { style: glassStyle, className: glassClassName } = useTableStyles();
+
   // Build rows from stats
   const rows: SourceRow[] = [
     {
@@ -95,8 +98,8 @@ export default function SourceSummaryTable({
 
   if (isLoading) {
     return (
-      <div className="overflow-x-auto">
-        <table className="table table-zebra">
+      <div className={`overflow-x-auto rounded-lg ${glassClassName}`} style={glassStyle}>
+        <table className="table">
           <thead>
             <tr>
               <th>Source</th>
@@ -125,8 +128,8 @@ export default function SourceSummaryTable({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="table table-zebra">
+    <div className={`overflow-x-auto rounded-lg ${glassClassName}`} style={glassStyle}>
+      <table className="table">
         <thead>
           <tr>
             <th>Source</th>
