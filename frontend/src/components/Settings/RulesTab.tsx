@@ -1,13 +1,35 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
+import AutocompleteCombobox, { type ComboboxOption } from '../AutocompleteCombobox';
 import type {
   CategoryRule,
   MerchantNormalization,
   RulesStatistics,
   RuleTestResult,
   TestAllRulesResult,
-  Category,
 } from '../../types';
+
+// Normalized category from v2 API
+interface NormalizedCategory {
+  id: number;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  is_essential: boolean;
+  transaction_count?: number;
+  subcategory_count?: number;
+}
+
+// Normalized subcategory from v2 API
+interface NormalizedSubcategory {
+  id: number;
+  name: string;
+  category_id: number;
+  category_name: string;
+  description: string | null;
+  is_active: boolean;
+  transaction_count?: number;
+}
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -49,7 +71,8 @@ export default function RulesTab() {
   const [categoryRules, setCategoryRules] = useState<CategoryRule[]>([]);
   const [merchantRules, setMerchantRules] = useState<MerchantNormalization[]>([]);
   const [statistics, setStatistics] = useState<RulesStatistics | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
+  const [categories, setCategories] = useState<NormalizedCategory[]>([]);
+  const [subcategories, setSubcategories] = useState<NormalizedSubcategory[]>([]);
 
   // Filter state
   const [ruleTypeFilter, setRuleTypeFilter] = useState<RuleType>('all');
@@ -85,6 +108,7 @@ export default function RulesTab() {
         fetchMerchantRules(),
         fetchStatistics(),
         fetchCategories(),
+        fetchSubcategories(),
       ]);
     } finally {
       setLoading(false);
@@ -120,18 +144,25 @@ export default function RulesTab() {
 
   const fetchCategories = async () => {
     try {
-      const response = await axios.get<{ categories: { name: string }[] }>(
-        `${API_URL}/categories/summary`
+      // Use v2 API to get all categories (not just those with spending)
+      const response = await axios.get<{ categories: NormalizedCategory[] }>(
+        `${API_URL}/v2/categories`
       );
-      const cats = response.data.categories.map((c, idx) => ({
-        id: idx,
-        name: c.name,
-        rule_pattern: null,
-        ai_suggested: false,
-      }));
-      setCategories(cats);
-    } catch (err: any) {
+      setCategories(response.data.categories || []);
+    } catch (err: unknown) {
       console.error('Error fetching categories:', err);
+    }
+  };
+
+  const fetchSubcategories = async () => {
+    try {
+      // Use v2 API to get all subcategories
+      const response = await axios.get<{ subcategories: NormalizedSubcategory[] }>(
+        `${API_URL}/v2/subcategories`
+      );
+      setSubcategories(response.data.subcategories || []);
+    } catch (err: unknown) {
+      console.error('Error fetching subcategories:', err);
     }
   };
 
@@ -187,6 +218,35 @@ export default function RulesTab() {
 
     return rules;
   }, [categoryRules, merchantRules, ruleTypeFilter, categoryFilter, sourceFilter, patternSearch]);
+
+  // Memoized category options for autocomplete
+  const categoryOptions: ComboboxOption[] = useMemo(() => {
+    return categories.map((cat) => ({
+      value: cat.name,
+      label: cat.name,
+      sublabel: cat.transaction_count !== undefined ? `${cat.transaction_count} txns` : undefined,
+    }));
+  }, [categories]);
+
+  // Memoized subcategory options filtered by selected category
+  const subcategoryOptions: ComboboxOption[] = useMemo(() => {
+    if (!editing.category) {
+      // Show all subcategories if no category selected
+      return subcategories.map((sub) => ({
+        value: sub.name,
+        label: sub.name,
+        sublabel: sub.category_name,
+      }));
+    }
+    // Filter subcategories by selected category
+    return subcategories
+      .filter((sub) => sub.category_name === editing.category)
+      .map((sub) => ({
+        value: sub.name,
+        label: sub.name,
+        sublabel: sub.transaction_count !== undefined ? `${sub.transaction_count} txns` : undefined,
+      }));
+  }, [subcategories, editing.category]);
 
   // Start editing a rule
   const startEditing = (type: 'category' | 'merchant', rule: CategoryRule | MerchantNormalization) => {
@@ -474,89 +534,318 @@ export default function RulesTab() {
       <div className="card bg-base-100 border border-base-300 shadow-sm">
         <div className="card-body p-0">
           <div className="flex flex-col lg:flex-row">
-            {/* Filters sidebar */}
-            <div className="lg:w-64 p-4 border-b lg:border-b-0 lg:border-r border-base-300 space-y-4">
-              <h3 className="font-semibold text-sm">Filters</h3>
+            {/* Sidebar: Filters OR Edit Form */}
+            <div className="lg:w-72 p-4 border-b lg:border-b-0 lg:border-r border-base-300 space-y-4">
+              {editing.mode === 'none' ? (
+                <>
+                  {/* Filters */}
+                  <h3 className="font-semibold text-sm">Filters</h3>
 
-              <div className="form-control">
-                <label className="label py-1">
-                  <span className="label-text text-xs">Rule Type</span>
-                </label>
-                <select
-                  className="select select-bordered select-sm w-full"
-                  value={ruleTypeFilter}
-                  onChange={(e) => setRuleTypeFilter(e.target.value as RuleType)}
-                >
-                  <option value="all">All Rules</option>
-                  <option value="category">Category Rules</option>
-                  <option value="merchant">Merchant Rules</option>
-                </select>
-              </div>
+                  <div className="form-control">
+                    <label className="label py-1">
+                      <span className="label-text text-xs">Rule Type</span>
+                    </label>
+                    <select
+                      className="select select-bordered select-sm w-full"
+                      value={ruleTypeFilter}
+                      onChange={(e) => setRuleTypeFilter(e.target.value as RuleType)}
+                    >
+                      <option value="all">All Rules</option>
+                      <option value="category">Category Rules</option>
+                      <option value="merchant">Merchant Rules</option>
+                    </select>
+                  </div>
 
-              <div className="form-control">
-                <label className="label py-1">
-                  <span className="label-text text-xs">Category</span>
-                </label>
-                <select
-                  className="select select-bordered select-sm w-full"
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                >
-                  <option value="">All Categories</option>
-                  {categories.map((cat) => (
-                    <option key={cat.id} value={cat.name}>
-                      {cat.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                  <div className="form-control">
+                    <label className="label py-1">
+                      <span className="label-text text-xs">Category</span>
+                    </label>
+                    <select
+                      className="select select-bordered select-sm w-full"
+                      value={categoryFilter}
+                      onChange={(e) => setCategoryFilter(e.target.value)}
+                    >
+                      <option value="">All Categories</option>
+                      {categories.map((cat) => (
+                        <option key={cat.id} value={cat.name}>
+                          {cat.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-              <div className="form-control">
-                <label className="label py-1">
-                  <span className="label-text text-xs">Source</span>
-                </label>
-                <select
-                  className="select select-bordered select-sm w-full"
-                  value={sourceFilter}
-                  onChange={(e) => setSourceFilter(e.target.value)}
-                >
-                  <option value="">All Sources</option>
-                  <option value="manual">Manual</option>
-                  <option value="learned">Learned</option>
-                  <option value="llm">LLM</option>
-                  <option value="direct_debit">Direct Debit</option>
-                </select>
-              </div>
+                  <div className="form-control">
+                    <label className="label py-1">
+                      <span className="label-text text-xs">Source</span>
+                    </label>
+                    <select
+                      className="select select-bordered select-sm w-full"
+                      value={sourceFilter}
+                      onChange={(e) => setSourceFilter(e.target.value)}
+                    >
+                      <option value="">All Sources</option>
+                      <option value="manual">Manual</option>
+                      <option value="learned">Learned</option>
+                      <option value="llm">LLM</option>
+                      <option value="direct_debit">Direct Debit</option>
+                    </select>
+                  </div>
 
-              <div className="form-control">
-                <label className="label py-1">
-                  <span className="label-text text-xs">Search Pattern</span>
-                </label>
-                <input
-                  type="text"
-                  className="input input-bordered input-sm w-full"
-                  placeholder="Search..."
-                  value={patternSearch}
-                  onChange={(e) => setPatternSearch(e.target.value)}
-                />
-              </div>
+                  <div className="form-control">
+                    <label className="label py-1">
+                      <span className="label-text text-xs">Search Pattern</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="input input-bordered input-sm w-full"
+                      placeholder="Search..."
+                      value={patternSearch}
+                      onChange={(e) => setPatternSearch(e.target.value)}
+                    />
+                  </div>
 
-              <div className="divider my-2"></div>
+                  <div className="divider my-2"></div>
 
-              <div className="space-y-2">
-                <button
-                  className="btn btn-outline btn-sm w-full"
-                  onClick={() => startCreating('category')}
-                >
-                  + New Category Rule
-                </button>
-                <button
-                  className="btn btn-outline btn-sm w-full"
-                  onClick={() => startCreating('merchant')}
-                >
-                  + New Merchant Rule
-                </button>
-              </div>
+                  <div className="space-y-2">
+                    <button
+                      className="btn btn-outline btn-sm w-full"
+                      onClick={() => startCreating('category')}
+                    >
+                      + New Category Rule
+                    </button>
+                    <button
+                      className="btn btn-outline btn-sm w-full"
+                      onClick={() => startCreating('merchant')}
+                    >
+                      + New Merchant Rule
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Inline Edit Form */}
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-sm">
+                      {editing.id ? 'Edit' : 'New'}{' '}
+                      {editing.mode === 'category' ? 'Category Rule' : 'Merchant Rule'}
+                    </h3>
+                    <button
+                      className="btn btn-ghost btn-xs"
+                      onClick={cancelEditing}
+                      title="Cancel"
+                    >
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Rule Name (category only) */}
+                  {editing.mode === 'category' && (
+                    <div className="form-control">
+                      <label className="label py-1">
+                        <span className="label-text text-xs">Rule Name</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="input input-bordered input-sm w-full"
+                        value={editing.rule_name}
+                        onChange={(e) => setEditing((s) => ({ ...s, rule_name: e.target.value }))}
+                        placeholder="e.g., Grocery Stores"
+                      />
+                    </div>
+                  )}
+
+                  {/* Normalized Name (merchant only) */}
+                  {editing.mode === 'merchant' && (
+                    <div className="form-control">
+                      <label className="label py-1">
+                        <span className="label-text text-xs">Merchant Name</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="input input-bordered input-sm w-full"
+                        value={editing.normalized_name}
+                        onChange={(e) => setEditing((s) => ({ ...s, normalized_name: e.target.value }))}
+                        placeholder="Clean merchant name"
+                      />
+                    </div>
+                  )}
+
+                  {/* Pattern */}
+                  <div className="form-control">
+                    <label className="label py-1">
+                      <span className="label-text text-xs">Pattern</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="input input-bordered input-sm w-full"
+                      value={editing.pattern}
+                      onChange={(e) => setEditing((s) => ({ ...s, pattern: e.target.value }))}
+                      placeholder="e.g., TESCO"
+                    />
+                  </div>
+
+                  {/* Pattern Type */}
+                  <div className="form-control">
+                    <label className="label py-1">
+                      <span className="label-text text-xs">Match Type</span>
+                    </label>
+                    <select
+                      className="select select-bordered select-sm w-full"
+                      value={editing.pattern_type}
+                      onChange={(e) =>
+                        setEditing((s) => ({
+                          ...s,
+                          pattern_type: e.target.value as EditingState['pattern_type'],
+                        }))
+                      }
+                    >
+                      <option value="contains">Contains</option>
+                      <option value="starts_with">Starts With</option>
+                      <option value="exact">Exact Match</option>
+                      <option value="regex">Regex</option>
+                    </select>
+                  </div>
+
+                  {/* Category with Autocomplete */}
+                  <AutocompleteCombobox
+                    options={categoryOptions}
+                    value={editing.category}
+                    onChange={(val) => setEditing((s) => ({ ...s, category: val, subcategory: '' }))}
+                    placeholder="Select or type category..."
+                    label="Category"
+                    allowCreate
+                    createLabel="Create category"
+                    size="sm"
+                  />
+
+                  {/* Subcategory with Autocomplete (category rules only) */}
+                  {editing.mode === 'category' && (
+                    <AutocompleteCombobox
+                      options={subcategoryOptions}
+                      value={editing.subcategory}
+                      onChange={(val) => setEditing((s) => ({ ...s, subcategory: val }))}
+                      placeholder="Select or type subcategory..."
+                      label="Subcategory"
+                      allowCreate
+                      createLabel="Create subcategory"
+                      size="sm"
+                    />
+                  )}
+
+                  {/* Merchant Type (merchant only) */}
+                  {editing.mode === 'merchant' && (
+                    <div className="form-control">
+                      <label className="label py-1">
+                        <span className="label-text text-xs">Merchant Type</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="input input-bordered input-sm w-full"
+                        value={editing.merchant_type}
+                        onChange={(e) => setEditing((s) => ({ ...s, merchant_type: e.target.value }))}
+                        placeholder="e.g., supermarket"
+                      />
+                    </div>
+                  )}
+
+                  {/* Transaction Type (category only) */}
+                  {editing.mode === 'category' && (
+                    <div className="form-control">
+                      <label className="label py-1">
+                        <span className="label-text text-xs">Transaction Type</span>
+                      </label>
+                      <select
+                        className="select select-bordered select-sm w-full"
+                        value={editing.transaction_type || ''}
+                        onChange={(e) =>
+                          setEditing((s) => ({
+                            ...s,
+                            transaction_type: (e.target.value || null) as EditingState['transaction_type'],
+                          }))
+                        }
+                      >
+                        <option value="">All</option>
+                        <option value="CREDIT">Credit only</option>
+                        <option value="DEBIT">Debit only</option>
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Priority */}
+                  <div className="form-control">
+                    <label className="label py-1">
+                      <span className="label-text text-xs">Priority (0-100)</span>
+                    </label>
+                    <input
+                      type="number"
+                      className="input input-bordered input-sm w-full"
+                      min={0}
+                      max={100}
+                      value={editing.priority}
+                      onChange={(e) =>
+                        setEditing((s) => ({ ...s, priority: parseInt(e.target.value) || 0 }))
+                      }
+                    />
+                  </div>
+
+                  {/* Test Preview */}
+                  {testResult && (
+                    <div className="p-2 bg-base-200 rounded-lg text-xs">
+                      <div className="font-semibold mb-1">
+                        Preview: {testResult.match_count} matches
+                      </div>
+                      {testResult.sample_transactions.length > 0 ? (
+                        <ul className="space-y-0.5 max-h-20 overflow-y-auto">
+                          {testResult.sample_transactions.slice(0, 5).map((txn) => (
+                            <li key={txn.id} className="font-mono truncate text-base-content/70">
+                              {txn.description}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-base-content/50">No matches</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex flex-col gap-2 pt-2">
+                    <button
+                      className="btn btn-outline btn-sm w-full"
+                      onClick={testPattern}
+                      disabled={testing || !editing.pattern}
+                    >
+                      {testing ? (
+                        <>
+                          <span className="loading loading-spinner loading-xs"></span>
+                          Testing...
+                        </>
+                      ) : (
+                        'Test Pattern'
+                      )}
+                    </button>
+                    <button
+                      className="btn btn-success btn-sm w-full"
+                      onClick={saveRule}
+                      disabled={saving || !editing.pattern || !editing.category}
+                    >
+                      {saving ? (
+                        <>
+                          <span className="loading loading-spinner loading-xs"></span>
+                          Saving...
+                        </>
+                      ) : (
+                        'Save Rule'
+                      )}
+                    </button>
+                    <button className="btn btn-ghost btn-sm w-full" onClick={cancelEditing}>
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Rules list */}
@@ -653,241 +942,6 @@ export default function RulesTab() {
           </div>
         </div>
       </div>
-
-      {/* Rule Editor Panel */}
-      {editing.mode !== 'none' && (
-        <div className="card bg-base-100 border border-base-300 shadow-sm">
-          <div className="card-body">
-            <h3 className="card-title text-base">
-              {editing.id ? 'Edit' : 'New'}{' '}
-              {editing.mode === 'category' ? 'Category Rule' : 'Merchant Rule'}
-            </h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-              {/* Rule Name (category only) */}
-              {editing.mode === 'category' && (
-                <div className="form-control">
-                  <label className="label">
-                    <span className="label-text text-sm">Rule Name</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="input input-bordered input-sm"
-                    value={editing.rule_name}
-                    onChange={(e) => setEditing((s) => ({ ...s, rule_name: e.target.value }))}
-                    placeholder="e.g., Grocery Stores"
-                  />
-                </div>
-              )}
-
-              {/* Pattern */}
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text text-sm">Pattern</span>
-                  <span
-                    className="label-text-alt text-xs cursor-help"
-                    title="Use starts:, contains:, exact:, or regex: prefix"
-                  >
-                    ?
-                  </span>
-                </label>
-                <input
-                  type="text"
-                  className="input input-bordered input-sm"
-                  value={editing.pattern}
-                  onChange={(e) => setEditing((s) => ({ ...s, pattern: e.target.value }))}
-                  placeholder="e.g., TESCO or starts:AMAZON"
-                />
-              </div>
-
-              {/* Pattern Type */}
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text text-sm">Match Type</span>
-                </label>
-                <select
-                  className="select select-bordered select-sm"
-                  value={editing.pattern_type}
-                  onChange={(e) =>
-                    setEditing((s) => ({
-                      ...s,
-                      pattern_type: e.target.value as EditingState['pattern_type'],
-                    }))
-                  }
-                >
-                  <option value="contains">Contains</option>
-                  <option value="starts_with">Starts With</option>
-                  <option value="exact">Exact Match</option>
-                  <option value="regex">Regex</option>
-                </select>
-              </div>
-
-              {/* Category */}
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text text-sm">Category</span>
-                </label>
-                <select
-                  className="select select-bordered select-sm"
-                  value={editing.category}
-                  onChange={(e) => setEditing((s) => ({ ...s, category: e.target.value }))}
-                >
-                  <option value="">Select category...</option>
-                  {categories.map((cat) => (
-                    <option key={cat.id} value={cat.name}>
-                      {cat.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Subcategory (category rules) */}
-              {editing.mode === 'category' && (
-                <div className="form-control">
-                  <label className="label">
-                    <span className="label-text text-sm">Subcategory</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="input input-bordered input-sm"
-                    value={editing.subcategory}
-                    onChange={(e) => setEditing((s) => ({ ...s, subcategory: e.target.value }))}
-                    placeholder="Optional"
-                  />
-                </div>
-              )}
-
-              {/* Normalized Name (merchant rules) */}
-              {editing.mode === 'merchant' && (
-                <div className="form-control">
-                  <label className="label">
-                    <span className="label-text text-sm">Merchant Name</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="input input-bordered input-sm"
-                    value={editing.normalized_name}
-                    onChange={(e) => setEditing((s) => ({ ...s, normalized_name: e.target.value }))}
-                    placeholder="Clean merchant name"
-                  />
-                </div>
-              )}
-
-              {/* Merchant Type (merchant rules) */}
-              {editing.mode === 'merchant' && (
-                <div className="form-control">
-                  <label className="label">
-                    <span className="label-text text-sm">Merchant Type</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="input input-bordered input-sm"
-                    value={editing.merchant_type}
-                    onChange={(e) => setEditing((s) => ({ ...s, merchant_type: e.target.value }))}
-                    placeholder="e.g., supermarket, coffee_shop"
-                  />
-                </div>
-              )}
-
-              {/* Transaction Type (category rules) */}
-              {editing.mode === 'category' && (
-                <div className="form-control">
-                  <label className="label">
-                    <span className="label-text text-sm">Transaction Type</span>
-                  </label>
-                  <select
-                    className="select select-bordered select-sm"
-                    value={editing.transaction_type || ''}
-                    onChange={(e) =>
-                      setEditing((s) => ({
-                        ...s,
-                        transaction_type: (e.target.value || null) as EditingState['transaction_type'],
-                      }))
-                    }
-                  >
-                    <option value="">All</option>
-                    <option value="CREDIT">Credit only</option>
-                    <option value="DEBIT">Debit only</option>
-                  </select>
-                </div>
-              )}
-
-              {/* Priority */}
-              <div className="form-control">
-                <label className="label">
-                  <span className="label-text text-sm">Priority (0-100)</span>
-                </label>
-                <input
-                  type="number"
-                  className="input input-bordered input-sm"
-                  min={0}
-                  max={100}
-                  value={editing.priority}
-                  onChange={(e) =>
-                    setEditing((s) => ({ ...s, priority: parseInt(e.target.value) || 0 }))
-                  }
-                />
-              </div>
-            </div>
-
-            {/* Test Preview */}
-            {testResult && (
-              <div className="mt-4 p-3 bg-base-200 rounded-lg">
-                <div className="font-semibold text-sm mb-2">
-                  Test Preview: {testResult.match_count} transactions would match
-                </div>
-                {testResult.sample_transactions.length > 0 ? (
-                  <ul className="text-xs space-y-1 max-h-32 overflow-y-auto">
-                    {testResult.sample_transactions.map((txn) => (
-                      <li key={txn.id} className="font-mono truncate">
-                        {txn.description} - {txn.amount < 0 ? '-' : ''}£
-                        {Math.abs(txn.amount).toFixed(2)} - {txn.date}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-xs text-base-content/60">No transactions match this pattern.</p>
-                )}
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex gap-2 mt-4">
-              <button
-                className="btn btn-outline btn-sm"
-                onClick={testPattern}
-                disabled={testing || !editing.pattern}
-              >
-                {testing ? (
-                  <>
-                    <span className="loading loading-spinner loading-xs"></span>
-                    Testing...
-                  </>
-                ) : (
-                  'Test Pattern'
-                )}
-              </button>
-              <button
-                className="btn btn-success btn-sm"
-                onClick={saveRule}
-                disabled={saving || !editing.pattern || !editing.category}
-              >
-                {saving ? (
-                  <>
-                    <span className="loading loading-spinner loading-xs"></span>
-                    Saving...
-                  </>
-                ) : (
-                  'Save Rule'
-                )}
-              </button>
-              <button className="btn btn-ghost btn-sm" onClick={cancelEditing}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Test All Rules Report */}
       {showTestAllReport && testAllResult && (
