@@ -41,6 +41,7 @@ def import_amazon_orders(orders, source_file):
                 new_order = AmazonOrder(
                     order_id=order["order_id"],
                     order_date=order["order_date"],
+                    order_datetime=order.get("order_datetime"),
                     website=order["website"],
                     currency=order["currency"],
                     total_owed=order["total_owed"],
@@ -62,14 +63,34 @@ def import_amazon_orders(orders, source_file):
 
 
 def get_amazon_orders(date_from=None, date_to=None, website=None):
-    """Get Amazon orders with optional filters, including match status."""
+    """Get Amazon orders with optional filters, including match status.
+
+    Match status is determined by checking both:
+    1. Legacy truelayer_amazon_transaction_matches table (for single matches)
+    2. transaction_enrichment_sources table (for grouped matches)
+    """
     with get_session() as session:
+        # Subquery to get matched transaction from enrichment sources
+        # This catches grouped matches that aren't in the legacy table
+        enrichment_match = (
+            session.query(TransactionEnrichmentSource.truelayer_transaction_id)
+            .filter(
+                TransactionEnrichmentSource.source_type == "amazon",
+                TransactionEnrichmentSource.source_id == AmazonOrder.id,
+            )
+            .correlate(AmazonOrder)
+            .limit(1)
+            .scalar_subquery()
+        )
+
         # Left outer join to include match information
+        # Use COALESCE to prefer legacy match but fall back to enrichment source
         query = session.query(
             AmazonOrder,
-            TrueLayerAmazonTransactionMatch.truelayer_transaction_id.label(
-                "matched_transaction_id"
-            ),
+            func.coalesce(
+                TrueLayerAmazonTransactionMatch.truelayer_transaction_id,
+                enrichment_match,
+            ).label("matched_transaction_id"),
         ).outerjoin(
             TrueLayerAmazonTransactionMatch,
             AmazonOrder.id == TrueLayerAmazonTransactionMatch.amazon_order_id,
@@ -91,6 +112,7 @@ def get_amazon_orders(date_from=None, date_to=None, website=None):
                 "id": o.id,
                 "order_id": o.order_id,
                 "order_date": o.order_date,
+                "order_datetime": o.order_datetime,  # Full timestamp for grouped matching
                 "website": o.website,
                 "currency": o.currency,
                 "total_owed": float(o.total_owed),
@@ -170,7 +192,7 @@ def get_unmatched_truelayer_amazon_transactions():
                 "running_balance": float(t.running_balance)
                 if t.running_balance
                 else None,
-                "metadata": t.metadata,
+                "metadata": t.metadata_,
                 "created_at": t.created_at,
             }
             for t in transactions
@@ -200,7 +222,7 @@ def get_truelayer_transaction_for_matching(transaction_id):
             "running_balance": float(txn.running_balance)
             if txn.running_balance
             else None,
-            "metadata": txn.metadata,
+            "metadata": txn.metadata_,
             "created_at": txn.created_at,
         }
 
@@ -309,7 +331,7 @@ def get_unmatched_truelayer_apple_transactions():
                 "amount": float(t.amount),
                 "currency": t.currency,
                 "merchant": t.merchant_name,
-                "metadata": t.metadata,
+                "metadata": t.metadata_,
             }
             for t in transactions
         ]
